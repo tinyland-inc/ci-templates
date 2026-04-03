@@ -1,0 +1,48 @@
+name: "Nix Setup"
+description: "Configure Nix and cache endpoints. Auto-detects Attic and Bazel on self-hosted ARC runners."
+
+inputs:
+  attic-server:
+    description: "Attic server URL (auto-detected on self-hosted via cluster DNS)"
+    default: ""
+  attic-cache:
+    description: "Attic cache name"
+    default: "main"
+  bazel-cache:
+    description: "Bazel remote cache endpoint (auto-detected on self-hosted)"
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Detect environment and configure caches
+      shell: bash
+      run: |
+        if [ "${{ runner.environment }}" != "github-hosted" ]; then
+          # Self-hosted ARC runners have cluster DNS access
+          ATTIC="${{ inputs.attic-server }}"
+          ATTIC_URL="${ATTIC:-${ATTIC_SERVER:-http://attic.nix-cache.svc.cluster.local:8080}}"
+
+          ATTIC_HOST=$(echo "$ATTIC_URL" | sed 's|https\?://||;s|:.*||')
+          if getent hosts "$ATTIC_HOST" >/dev/null 2>&1; then
+            echo "ATTIC_SERVER=$ATTIC_URL" >> "$GITHUB_ENV"
+            echo "::notice::Attic cache reachable at $ATTIC_URL"
+          else
+            echo "::warning::Attic cache DNS unreachable ($ATTIC_HOST) — running without cache"
+          fi
+
+          BAZEL="${{ inputs.bazel-cache }}"
+          echo "BAZEL_REMOTE_CACHE=${BAZEL:-${BAZEL_REMOTE_CACHE:-grpc://bazel-cache.nix-cache.svc.cluster.local:9092}}" >> "$GITHUB_ENV"
+        elif [ -n "${{ inputs.attic-server }}" ]; then
+          echo "ATTIC_SERVER=${{ inputs.attic-server }}" >> "$GITHUB_ENV"
+        fi
+        echo "ATTIC_CACHE=${{ inputs.attic-cache }}" >> "$GITHUB_ENV"
+
+    - name: Add Nix to PATH
+      shell: bash
+      run: |
+        for nixbin in /nix/var/nix/profiles/default/bin "$HOME/.nix-profile/bin"; do
+          if [ -d "$nixbin" ]; then
+            echo "$nixbin" >> "$GITHUB_PATH"
+          fi
+        done

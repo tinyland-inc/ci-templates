@@ -1,0 +1,92 @@
+name: "Greedy Cache"
+description: "Start Attic watch-store daemon for concurrent binary cache push as derivations build"
+
+inputs:
+  attic-server:
+    description: "Attic server URL (auto-detected on self-hosted)"
+    default: ""
+  attic-cache:
+    description: "Attic cache name to push to"
+    default: "main"
+  watch-jobs:
+    description: "Number of parallel upload jobs"
+    default: "8"
+  compression:
+    description: "Compression algorithm (zstd, xz, none)"
+    default: "zstd"
+  shutdown-wait:
+    description: "Seconds to wait for pending pushes on graceful stop"
+    default: "15"
+
+outputs:
+  daemon-pid:
+    description: "PID of the watch-store daemon"
+    value: ${{ steps.start-daemon.outputs.pid }}
+  cache-healthy:
+    description: "Whether the Attic cache is reachable"
+    value: ${{ steps.health-check.outputs.healthy }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@main
+      with:
+        attic-server: ${{ inputs.attic-server }}
+        attic-cache: ${{ inputs.attic-cache }}
+
+    - name: Health check
+      id: health-check
+      shell: bash
+      run: |
+        if [ -z "${ATTIC_SERVER:-}" ] || [ -z "${ATTIC_TOKEN:-}" ]; then
+          echo "::warning::Attic not configured — greedy cache disabled"
+          echo "healthy=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Install attic CLI if not available
+        if ! command -v attic >/dev/null 2>&1; then
+          nix profile install github:zhaofengli/attic/main#attic-client 2>/dev/null || true
+        fi
+
+        if attic login greedy-cache "$ATTIC_SERVER" "$ATTIC_TOKEN" 2>/dev/null; then
+          echo "::notice::Attic cache healthy at $ATTIC_SERVER"
+          echo "healthy=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::Attic login failed — greedy cache disabled"
+          echo "healthy=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Configure substituters
+      if: steps.health-check.outputs.healthy == 'true'
+      shell: bash
+      run: |
+        # 3-tier substituter hierarchy:
+        # 1. Project-specific cache (fastest, arch-specific binaries)
+        # 2. Shared cache (architecture-independent sources, configs)
+        # 3. cache.nixos.org (upstream fallback, always available)
+        SUBS="${ATTIC_SERVER}/${{ inputs.attic-cache }}"
+        if [ "${{ inputs.attic-cache }}" != "main" ]; then
+          SUBS="${SUBS} ${ATTIC_SERVER}/main"
+        fi
+        SUBS="${SUBS} https://cache.nixos.org"
+
+        mkdir -p ~/.config/nix
+        cat >> ~/.config/nix/nix.conf << EOF
+        extra-substituters = ${SUBS}
+        extra-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+        EOF
+
+    - name: Start watch-store daemon
+      id: start-daemon
+      if: steps.health-check.outputs.healthy == 'true'
+      shell: bash
+      run: |
+        attic watch-store "${{ inputs.attic-cache }}" \
+          --jobs "${{ inputs.watch-jobs }}" \
+          --compression "${{ inputs.compression }}" \
+          > /tmp/attic-watch.log 2>&1 &
+        DAEMON_PID=$!
+        echo "pid=${DAEMON_PID}" >> "$GITHUB_OUTPUT"
+        echo "ATTIC_WATCH_PID=${DAEMON_PID}" >> "$GITHUB_ENV"
+        echo "::notice::Attic watch-store daemon started (PID ${DAEMON_PID}, ${{ inputs.watch-jobs }} jobs)"

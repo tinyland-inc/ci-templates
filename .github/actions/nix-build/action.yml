@@ -1,0 +1,46 @@
+name: "Nix Build"
+description: "Run Nix build with Attic binary cache integration on self-hosted runners"
+
+inputs:
+  command:
+    description: "Nix command to run"
+    default: "nix build"
+  push-cache:
+    description: "Push results to Attic cache after build"
+    default: "true"
+  attic-server:
+    description: "Attic server URL (auto-detected on self-hosted)"
+    default: ""
+  attic-cache:
+    description: "Attic cache name"
+    default: "main"
+  nix-channel:
+    description: "Nix channel for nixpkgs"
+    default: "nixpkgs=channel:nixos-24.11"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: cachix/install-nix-action@v30
+      with:
+        nix_path: ${{ inputs.nix-channel }}
+        extra_nix_config: |
+          accept-flake-config = true
+
+    - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@main
+      with:
+        attic-server: ${{ inputs.attic-server }}
+        attic-cache: ${{ inputs.attic-cache }}
+
+    - name: Configure Attic cache
+      if: env.ATTIC_SERVER != '' && env.ATTIC_TOKEN != ''
+      uses: ryanccn/attic-action@v0
+      with:
+        endpoint: ${{ env.ATTIC_SERVER }}
+        cache: ${{ env.ATTIC_CACHE }}
+        token: ${{ env.ATTIC_TOKEN }}
+        skip-push: ${{ inputs.push-cache == 'false' }}
+
+    - name: Run Nix command
+      shell: bash
+      run: ${{ inputs.command }}
