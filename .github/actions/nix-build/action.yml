@@ -34,7 +34,8 @@ runs:
 
     - name: Configure Attic cache
       if: env.ATTIC_SERVER != '' && env.ATTIC_TOKEN != ''
-      uses: ryanccn/attic-action@v0
+      continue-on-error: true
+      uses: ryanccn/attic-action@v0.5.0
       with:
         endpoint: ${{ env.ATTIC_SERVER }}
         cache: ${{ env.ATTIC_CACHE }}
