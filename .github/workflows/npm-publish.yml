@@ -52,15 +52,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
 
       - run: pnpm build
 
       - name: Run tests (non-blocking)
         run: |
-          if pnpm run --silent test --help >/dev/null 2>&1 || grep -q '\"test\"' package.json; then
+          if grep -q '"test"' package.json 2>/dev/null; then
             pnpm test || echo "::warning::Tests failed but continuing"
           else
             echo "No test script found, skipping"
@@ -89,10 +94,16 @@ jobs:
         with:
           node-version: ${{ inputs.publish-node-version || '22' }}
           registry-url: https://npm.pkg.github.com
-          cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      - name: Install and build
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+          pnpm build
+
       - run: pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,10 +126,16 @@ jobs:
         with:
           node-version: ${{ inputs.publish-node-version || '22' }}
           registry-url: ${{ inputs.registry-url || 'https://registry.npmjs.org' }}
-          cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      - name: Install and build
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+          pnpm build
+
       - run: pnpm publish --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
