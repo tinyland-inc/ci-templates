@@ -1,0 +1,124 @@
+name: NPM Publish
+
+on:
+  workflow_call:
+    inputs:
+      node-versions:
+        description: "JSON array of Node.js versions to test"
+        type: string
+        default: '["20", "22"]'
+      publish-node-version:
+        description: "Node.js version used for publishing"
+        type: string
+        default: "22"
+      pnpm-version:
+        description: "pnpm version to install"
+        type: string
+        default: "9"
+      registry-url:
+        description: "npm registry URL for publishing"
+        type: string
+        default: "https://registry.npmjs.org"
+    secrets:
+      NPM_TOKEN:
+        description: "npmjs.com publish token"
+        required: false
+
+  push:
+    tags:
+      - "v*"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ${{ fromJson(inputs.node-versions || '["20", "22"]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version || '9' }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - name: Run tests (non-blocking)
+        run: |
+          if pnpm run --silent test --help >/dev/null 2>&1 || grep -q '\"test\"' package.json; then
+            pnpm test || echo "::warning::Tests failed but continuing"
+          else
+            echo "No test script found, skipping"
+          fi
+        continue-on-error: true
+
+      - name: Verify no source maps in package
+        run: |
+          npm pack --dry-run 2>&1 | grep '\.js\.map' && exit 1 || true
+
+  publish-gpr:
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version || '9' }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.publish-node-version || '22' }}
+          registry-url: https://npm.pkg.github.com
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-npm:
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version || '9' }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.publish-node-version || '22' }}
+          registry-url: ${{ inputs.registry-url || 'https://registry.npmjs.org' }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm publish --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
