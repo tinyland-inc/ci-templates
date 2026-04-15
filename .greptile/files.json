@@ -1,0 +1,4 @@
+[
+  { "path": "CLAUDE.md", "description": "Project conventions and context", "scope": ["**"] },
+  { "path": "README.md", "description": "Workflow usage instructions and input docs", "scope": ["**"] }
+]
