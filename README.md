@@ -58,3 +58,5 @@ TruffleHog (verified secrets) + Gitleaks detection.
 - **Self-hosted runners:** Attic and Bazel cache auto-detected via cluster DNS
 - **GitHub-hosted runners:** Pass `attic-server` input explicitly
 - **Secrets:** `ATTIC_TOKEN` for cache push operations
+
+<!-- greptile canary test — safe to close -->
