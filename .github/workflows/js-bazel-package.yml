@@ -76,18 +76,6 @@ on:
         description: "npmjs.com publish token"
         required: false
 
-  push:
-    tags:
-      - "v*"
-
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "When true, publish jobs only perform dry-runs"
-        required: false
-        type: boolean
-        default: true
-
 permissions:
   contents: read
   packages: write
@@ -193,6 +181,7 @@ jobs:
 
   publish-npm:
     needs: validate
+    if: ${{ inputs.dry_run == false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -221,24 +210,11 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           PACKAGE_BASENAME=$(basename "${{ inputs.package_dir || './bazel-bin/pkg' }}")
-
-          if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            DRY_RUN=false
-          elif [ "${{ inputs.dry_run }}" = "false" ]; then
-            DRY_RUN=false
-          else
-            DRY_RUN=true
-          fi
-
-          if [ "$DRY_RUN" = "true" ]; then
-            npm publish "./$PACKAGE_BASENAME" --dry-run --ignore-scripts --access ${{ inputs.npm_access || 'public' }}
-          else
-            npm publish "./$PACKAGE_BASENAME" --ignore-scripts --access ${{ inputs.npm_access || 'public' }} --provenance
-          fi
+          npm publish "./$PACKAGE_BASENAME" --ignore-scripts --access ${{ inputs.npm_access || 'public' }} --provenance
 
   publish-github:
     needs: validate
-    if: ${{ inputs.github_package_name != '' }}
+    if: ${{ inputs.github_package_name != '' && inputs.dry_run == false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -277,17 +253,4 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            DRY_RUN=false
-          elif [ "${{ inputs.dry_run }}" = "false" ]; then
-            DRY_RUN=false
-          else
-            DRY_RUN=true
-          fi
-
-          if [ "$DRY_RUN" = "true" ]; then
-            npm publish ./pkg-github --dry-run --ignore-scripts
-          else
-            npm publish ./pkg-github --ignore-scripts
-          fi
+        run: npm publish ./pkg-github --ignore-scripts
