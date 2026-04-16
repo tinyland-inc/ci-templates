@@ -42,7 +42,9 @@ jobs:
       prepare_command: pnpm exec svelte-kit sync
       metadata_check_command: pnpm check:release-metadata
       lint_command: pnpm lint
+      lint_continue_on_error: false
       typecheck_command: pnpm check
+      typecheck_continue_on_error: false
       unit_test_command: pnpm test:unit
       integration_test_command: pnpm test:integration
       build_command: pnpm build
@@ -59,6 +61,7 @@ jobs:
 - `runner_labels_json` lets callers preserve self-hosted runner routing instead of hard-coding `ubuntu-latest` into each package repo.
 - `cleanup_paths` is useful on long-lived self-hosted runners where stale `dist/`, Bazel outputs, or old package artifacts can poison later runs.
 - `prepare_command` is where SvelteKit callers should run `pnpm exec svelte-kit sync` before typecheck or build.
+- `lint_continue_on_error` and `typecheck_continue_on_error` are there for transitional repos whose warning/debt lanes should stay visible without becoming blocking yet.
 - `bazel_targets` is space-delimited so callers can validate `//:pkg` alone or include extra targets like `//:typecheck` and `//:test`.
 - `package_dir` should point at the Bazel-built publishable package directory, not the workspace root.
 - `github_package_name` is optional. Leave it empty to skip GitHub Packages dry-runs and publish steps.

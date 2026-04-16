@@ -35,10 +35,18 @@ on:
         description: "Optional lint command"
         type: string
         default: ""
+      lint_continue_on_error:
+        description: "When true, lint failures are reported but do not fail validation"
+        type: boolean
+        default: false
       typecheck_command:
         description: "Optional typecheck command"
         type: string
         default: ""
+      typecheck_continue_on_error:
+        description: "When true, typecheck failures are reported but do not fail validation"
+        type: boolean
+        default: false
       unit_test_command:
         description: "Optional unit test command"
         type: string
@@ -148,10 +156,12 @@ jobs:
 
       - name: Lint
         if: ${{ inputs.lint_command != '' }}
+        continue-on-error: ${{ inputs.lint_continue_on_error }}
         run: ${{ inputs.lint_command }}
 
       - name: Typecheck
         if: ${{ inputs.typecheck_command != '' }}
+        continue-on-error: ${{ inputs.typecheck_continue_on_error }}
         run: ${{ inputs.typecheck_command }}
 
       - name: Unit tests
