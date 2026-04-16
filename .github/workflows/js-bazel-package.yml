@@ -3,6 +3,10 @@ name: JS Bazel Package
 on:
   workflow_call:
     inputs:
+      runner_labels_json:
+        description: "JSON array of runner labels to use for all jobs"
+        type: string
+        default: '["ubuntu-latest"]'
       node_versions:
         description: "JSON array of Node.js versions to validate"
         type: string
@@ -17,6 +21,14 @@ on:
         default: "9"
       metadata_check_command:
         description: "Optional release metadata parity command"
+        type: string
+        default: ""
+      cleanup_paths:
+        description: "Optional space-delimited paths to chmod/rm before install or publish extraction"
+        type: string
+        default: "dist node_modules bazel-bin bazel-out bazel-testlogs .pnpm-store pkg pkg-github bazel-pkg.tgz MODULE.bazel.lock"
+      prepare_command:
+        description: "Optional workspace preparation command after install"
         type: string
         default: ""
       lint_command:
@@ -55,6 +67,10 @@ on:
         description: "npm access mode"
         type: string
         default: "public"
+      npm_publish_provenance:
+        description: "When true, request npm provenance for npmjs publishes when supported"
+        type: boolean
+        default: true
       npm_registry_url:
         description: "npm registry URL for publication"
         type: string
@@ -83,19 +99,30 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
     strategy:
       fail-fast: false
       matrix:
         node-version: ${{ fromJson(inputs.node_versions || '["20", "22"]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+
+      - name: Clean stale workspace artifacts
+        if: ${{ inputs.cleanup_paths != '' }}
+        shell: bash
+        run: |
+          for path in ${{ inputs.cleanup_paths }}; do
+            chmod -R u+w "$path" 2>/dev/null || true
+          done
+          rm -rf ${{ inputs.cleanup_paths }}
 
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ inputs.pnpm_version || '9' }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -110,6 +137,10 @@ jobs:
           else
             pnpm install --no-frozen-lockfile
           fi
+
+      - name: Prepare workspace
+        if: ${{ inputs.prepare_command != '' }}
+        run: ${{ inputs.prepare_command }}
 
       - name: Verify release metadata
         if: ${{ inputs.metadata_check_command != '' }}
@@ -182,15 +213,24 @@ jobs:
   publish-npm:
     needs: validate
     if: ${{ inputs.dry_run == false }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.publish_node_version || '22' }}
           registry-url: ${{ inputs.npm_registry_url || 'https://registry.npmjs.org' }}
+
+      - name: Clean stale publish artifacts
+        if: ${{ inputs.cleanup_paths != '' }}
+        shell: bash
+        run: |
+          for path in ${{ inputs.cleanup_paths }}; do
+            chmod -R u+w "$path" 2>/dev/null || true
+          done
+          rm -rf ${{ inputs.cleanup_paths }}
 
       - name: Download Bazel package artifact
         uses: actions/download-artifact@v4
@@ -208,22 +248,36 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           PACKAGE_BASENAME=$(basename "${{ inputs.package_dir || './bazel-bin/pkg' }}")
-          npm publish "./$PACKAGE_BASENAME" --ignore-scripts --access ${{ inputs.npm_access || 'public' }} --provenance
+          PUBLISH_ARGS=("./$PACKAGE_BASENAME" --ignore-scripts --access "${{ inputs.npm_access || 'public' }}")
+          if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
+            PUBLISH_ARGS+=(--provenance)
+          fi
+          npm publish "${PUBLISH_ARGS[@]}"
 
   publish-github:
     needs: validate
     if: ${{ inputs.github_package_name != '' && inputs.dry_run == false }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.publish_node_version || '22' }}
           registry-url: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
+
+      - name: Clean stale publish artifacts
+        if: ${{ inputs.cleanup_paths != '' }}
+        shell: bash
+        run: |
+          for path in ${{ inputs.cleanup_paths }}; do
+            chmod -R u+w "$path" 2>/dev/null || true
+          done
+          rm -rf ${{ inputs.cleanup_paths }}
 
       - name: Download Bazel package artifact
         uses: actions/download-artifact@v4
@@ -253,4 +307,4 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm publish ./pkg-github --ignore-scripts
+        run: npm publish ./pkg-github --access ${{ inputs.npm_access || 'public' }} --ignore-scripts
