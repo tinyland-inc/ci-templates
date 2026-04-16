@@ -1,0 +1,269 @@
+name: Bazel JS Publish
+
+on:
+  workflow_call:
+    inputs:
+      runner_labels_json:
+        description: "JSON array of runner labels"
+        type: string
+        default: '["ubuntu-latest"]'
+      node_version:
+        description: "Node.js version used for packaging and publish"
+        type: string
+        default: "22"
+      pnpm_version:
+        description: "pnpm version to install"
+        type: string
+        default: "9.15.9"
+      checkout_clean:
+        description: "Whether actions/checkout should clean the workspace"
+        type: boolean
+        default: false
+      clean_command:
+        description: "Optional shell command to clean stale workspace artifacts"
+        type: string
+        default: ""
+      metadata_command:
+        description: "Optional command to verify metadata parity before install"
+        type: string
+        default: ""
+      sync_command:
+        description: "Optional framework sync command"
+        type: string
+        default: ""
+      install_command:
+        description: "Dependency installation command"
+        type: string
+        default: "pnpm install --frozen-lockfile"
+      test_command:
+        description: "Optional blocking test command that should run before packaging"
+        type: string
+        default: ""
+      build_command:
+        description: "Optional workspace build command that should run before packaging"
+        type: string
+        default: ""
+      package_check_command:
+        description: "Optional package surface validation command"
+        type: string
+        default: ""
+      bazel_build_command:
+        description: "Blocking Bazel packaging command"
+        type: string
+        default: "npx --yes @bazel/bazelisk build //:pkg //:typecheck //:test --verbose_failures"
+      bazel_package_path:
+        description: "Path to the Bazel-built npm package directory"
+        type: string
+        default: "./bazel-bin/pkg"
+      artifact_name:
+        description: "Uploaded artifact name for the packaged Bazel directory tarball"
+        type: string
+        default: "bazel-pkg"
+      publish_dry_run:
+        description: "If true, publish jobs run in dry-run mode"
+        type: boolean
+        default: true
+      npm_registry_url:
+        description: "Registry URL for npm publishing"
+        type: string
+        default: "https://registry.npmjs.org"
+      npm_access:
+        description: "npm access level"
+        type: string
+        default: "public"
+      publish_to_github_packages:
+        description: "Whether to publish a GitHub Packages variant"
+        type: boolean
+        default: false
+      github_package_name:
+        description: "Optional package name override for GitHub Packages publishing"
+        type: string
+        default: ""
+      github_registry_url:
+        description: "Registry URL for GitHub Packages publishing"
+        type: string
+        default: "https://npm.pkg.github.com"
+    secrets:
+      NPM_TOKEN:
+        description: "npmjs.com publish token"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build Bazel package artifact
+    runs-on: ${{ fromJson(inputs.runner_labels_json) }}
+    permissions:
+      contents: read
+    env:
+      PNPM_STORE_PATH: ${{ github.workspace }}/.pnpm-store
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: ${{ inputs.checkout_clean }}
+
+      - name: Clean stale workspace artifacts
+        if: ${{ inputs.clean_command != '' }}
+        run: ${{ inputs.clean_command }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm_version }}
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Configure workspace pnpm store
+        run: pnpm config set store-dir "$PNPM_STORE_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ runner.os }}-${{ runner.name }}-node-${{ inputs.node_version }}-pnpm-${{ inputs.pnpm_version }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.name }}-node-${{ inputs.node_version }}-pnpm-${{ inputs.pnpm_version }}-
+
+      - name: Verify release metadata
+        if: ${{ inputs.metadata_command != '' }}
+        run: ${{ inputs.metadata_command }}
+
+      - name: Install dependencies
+        run: ${{ inputs.install_command }}
+
+      - name: Sync framework
+        if: ${{ inputs.sync_command != '' }}
+        run: ${{ inputs.sync_command }}
+
+      - name: Run tests
+        if: ${{ inputs.test_command != '' }}
+        run: ${{ inputs.test_command }}
+
+      - name: Build workspace
+        if: ${{ inputs.build_command != '' }}
+        run: ${{ inputs.build_command }}
+
+      - name: Validate package surface
+        if: ${{ inputs.package_check_command != '' }}
+        run: ${{ inputs.package_check_command }}
+
+      - name: Build Bazel targets
+        run: ${{ inputs.bazel_build_command }}
+
+      - name: Validate Bazel npm package contents
+        run: npm pack --dry-run "${{ inputs.bazel_package_path }}"
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+
+      - name: Validate Bazel publish command
+        run: npm publish --dry-run --ignore-scripts --access "${{ inputs.npm_access }}" "${{ inputs.bazel_package_path }}"
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+
+      - name: Archive Bazel package artifact
+        run: |
+          package_dir="$(dirname "${{ inputs.bazel_package_path }}")"
+          package_name="$(basename "${{ inputs.bazel_package_path }}")"
+          tar -czf "${{ inputs.artifact_name }}.tgz" -C "$package_dir" "$package_name"
+
+      - name: Upload Bazel package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.artifact_name }}.tgz
+          if-no-files-found: error
+
+  publish_npm:
+    name: Publish to npm
+    needs: package
+    runs-on: ${{ fromJson(inputs.runner_labels_json) }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          registry-url: ${{ inputs.npm_registry_url }}
+
+      - name: Download Bazel package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+
+      - name: Extract Bazel package artifact
+        run: tar -xzf "${{ inputs.artifact_name }}.tgz"
+
+      - name: Normalize Bazel package permissions
+        run: chmod -R u+w "$(basename "${{ inputs.bazel_package_path }}")"
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          package_dir="$(basename "${{ inputs.bazel_package_path }}")"
+          if [ "${{ inputs.publish_dry_run }}" = "true" ]; then
+            npm publish "./$package_dir" --access "${{ inputs.npm_access }}" --dry-run --ignore-scripts
+          elif [ "$RUNNER_ENVIRONMENT" = "self-hosted" ]; then
+            npm publish "./$package_dir" --access "${{ inputs.npm_access }}" --ignore-scripts
+          else
+            npm publish "./$package_dir" --access "${{ inputs.npm_access }}" --ignore-scripts --provenance
+          fi
+
+  publish_github:
+    name: Publish to GitHub Packages
+    needs: package
+    if: ${{ inputs.publish_to_github_packages }}
+    runs-on: ${{ fromJson(inputs.runner_labels_json) }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          registry-url: ${{ inputs.github_registry_url }}
+
+      - name: Download Bazel package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+
+      - name: Extract Bazel package artifact
+        run: tar -xzf "${{ inputs.artifact_name }}.tgz"
+
+      - name: Normalize Bazel package permissions
+        run: chmod -R u+w "$(basename "${{ inputs.bazel_package_path }}")"
+
+      - name: Prepare GitHub Packages publish directory
+        run: |
+          package_dir="$(basename "${{ inputs.bazel_package_path }}")"
+          cp -R "$package_dir" pkg-github
+          chmod -R u+w pkg-github
+
+      - name: Rewrite package name for GitHub Packages
+        if: ${{ inputs.github_package_name != '' }}
+        run: |
+          node -e "
+            const fs = require('node:fs');
+            const pkg = JSON.parse(fs.readFileSync('./pkg-github/package.json', 'utf8'));
+            pkg.name = '${{ inputs.github_package_name }}';
+            pkg.publishConfig = { registry: '${{ inputs.github_registry_url }}' };
+            fs.writeFileSync('./pkg-github/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Publish to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ inputs.publish_dry_run }}" = "true" ]; then
+            npm publish ./pkg-github --registry "${{ inputs.github_registry_url }}" --dry-run --ignore-scripts
+          else
+            npm publish ./pkg-github --registry "${{ inputs.github_registry_url }}" --ignore-scripts
+          fi

@@ -1,0 +1,229 @@
+name: Bazel JS Verify
+
+on:
+  workflow_call:
+    inputs:
+      runner_labels_json:
+        description: "JSON array of runner labels"
+        type: string
+        default: '["ubuntu-latest"]'
+      node_versions:
+        description: "JSON array of Node.js versions for the workspace verification matrix"
+        type: string
+        default: '["20", "22"]'
+      primary_node_version:
+        description: "Node.js version used for the Bazel verification lane"
+        type: string
+        default: "22"
+      pnpm_version:
+        description: "pnpm version to install"
+        type: string
+        default: "9.15.9"
+      checkout_clean:
+        description: "Whether actions/checkout should clean the workspace"
+        type: boolean
+        default: false
+      clean_command:
+        description: "Optional shell command to clean stale workspace artifacts"
+        type: string
+        default: ""
+      metadata_command:
+        description: "Optional command to verify metadata parity before install"
+        type: string
+        default: ""
+      sync_command:
+        description: "Optional framework sync command"
+        type: string
+        default: ""
+      install_command:
+        description: "Dependency installation command"
+        type: string
+        default: "pnpm install --frozen-lockfile"
+      check_command:
+        description: "Optional blocking typecheck or check command"
+        type: string
+        default: ""
+      lint_command:
+        description: "Optional blocking lint command"
+        type: string
+        default: ""
+      unit_test_command:
+        description: "Optional blocking unit test command"
+        type: string
+        default: ""
+      integration_test_command:
+        description: "Optional blocking integration test command"
+        type: string
+        default: ""
+      build_command:
+        description: "Blocking workspace build command"
+        type: string
+        default: "pnpm build"
+      package_check_command:
+        description: "Optional package surface validation command"
+        type: string
+        default: ""
+      bazel_build_command:
+        description: "Blocking Bazel verification command"
+        type: string
+        default: "npx --yes @bazel/bazelisk build //:pkg //:typecheck //:test --verbose_failures"
+      bazel_package_path:
+        description: "Path to the Bazel-built npm package directory"
+        type: string
+        default: "./bazel-bin/pkg"
+      npm_pack_command:
+        description: "Optional override for the Bazel package dry-run pack command"
+        type: string
+        default: ""
+      npm_publish_dry_run_command:
+        description: "Optional dry-run publish command for the Bazel package artifact"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    name: Workspace checks (${{ matrix.node_version }})
+    runs-on: ${{ fromJson(inputs.runner_labels_json) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node_version: ${{ fromJson(inputs.node_versions) }}
+    env:
+      PNPM_STORE_PATH: ${{ github.workspace }}/.pnpm-store
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: ${{ inputs.checkout_clean }}
+
+      - name: Clean stale workspace artifacts
+        if: ${{ inputs.clean_command != '' }}
+        run: ${{ inputs.clean_command }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm_version }}
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node_version }}
+
+      - name: Configure workspace pnpm store
+        run: pnpm config set store-dir "$PNPM_STORE_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ runner.os }}-${{ runner.name }}-node-${{ matrix.node_version }}-pnpm-${{ inputs.pnpm_version }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.name }}-node-${{ matrix.node_version }}-pnpm-${{ inputs.pnpm_version }}-
+
+      - name: Verify release metadata
+        if: ${{ inputs.metadata_command != '' }}
+        run: ${{ inputs.metadata_command }}
+
+      - name: Install dependencies
+        run: ${{ inputs.install_command }}
+
+      - name: Sync framework
+        if: ${{ inputs.sync_command != '' }}
+        run: ${{ inputs.sync_command }}
+
+      - name: Run checks
+        if: ${{ inputs.check_command != '' }}
+        run: ${{ inputs.check_command }}
+
+      - name: Run lint
+        if: ${{ inputs.lint_command != '' }}
+        run: ${{ inputs.lint_command }}
+
+      - name: Run unit tests
+        if: ${{ inputs.unit_test_command != '' }}
+        run: ${{ inputs.unit_test_command }}
+
+      - name: Run integration tests
+        if: ${{ inputs.integration_test_command != '' }}
+        run: ${{ inputs.integration_test_command }}
+
+      - name: Build package
+        run: ${{ inputs.build_command }}
+
+      - name: Validate package surface
+        if: ${{ inputs.package_check_command != '' }}
+        run: ${{ inputs.package_check_command }}
+
+  bazel:
+    name: Bazel package checks
+    runs-on: ${{ fromJson(inputs.runner_labels_json) }}
+    env:
+      PNPM_STORE_PATH: ${{ github.workspace }}/.pnpm-store
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: ${{ inputs.checkout_clean }}
+
+      - name: Clean stale workspace artifacts
+        if: ${{ inputs.clean_command != '' }}
+        run: ${{ inputs.clean_command }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm_version }}
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.primary_node_version }}
+
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Configure workspace pnpm store
+        run: pnpm config set store-dir "$PNPM_STORE_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ runner.os }}-${{ runner.name }}-node-${{ inputs.primary_node_version }}-pnpm-${{ inputs.pnpm_version }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.name }}-node-${{ inputs.primary_node_version }}-pnpm-${{ inputs.pnpm_version }}-
+
+      - name: Verify release metadata
+        if: ${{ inputs.metadata_command != '' }}
+        run: ${{ inputs.metadata_command }}
+
+      - name: Install dependencies
+        run: ${{ inputs.install_command }}
+
+      - name: Sync framework
+        if: ${{ inputs.sync_command != '' }}
+        run: ${{ inputs.sync_command }}
+
+      - name: Build Bazel targets
+        run: ${{ inputs.bazel_build_command }}
+
+      - name: Validate Bazel npm package contents
+        if: ${{ inputs.npm_pack_command == '' }}
+        run: npm pack --dry-run "${{ inputs.bazel_package_path }}"
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+
+      - name: Validate Bazel npm package contents
+        if: ${{ inputs.npm_pack_command != '' }}
+        run: ${{ inputs.npm_pack_command }}
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+
+      - name: Dry-run publish Bazel package
+        if: ${{ inputs.npm_publish_dry_run_command == '' }}
+        run: npm publish --dry-run --ignore-scripts --access public "${{ inputs.bazel_package_path }}"
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+
+      - name: Dry-run publish Bazel package
+        if: ${{ inputs.npm_publish_dry_run_command != '' }}
+        run: ${{ inputs.npm_publish_dry_run_command }}
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache

@@ -53,6 +53,52 @@ TruffleHog (verified secrets) + Gitleaks detection.
 - uses: tinyland-inc/ci-templates/.github/actions/secrets-scan@main
 ```
 
+## Reusable Workflows
+
+### `bazel-js-verify`
+
+Blocking workspace + Bazel verification for JS packages that treat `//:pkg` as package truth.
+
+```yaml
+jobs:
+  verify:
+    uses: tinyland-inc/ci-templates/.github/workflows/bazel-js-verify.yml@main
+    with:
+      metadata_command: "node scripts/check-release-metadata.mjs"
+      check_command: "pnpm check"
+      lint_command: "pnpm lint"
+      unit_test_command: "pnpm test:unit"
+      integration_test_command: "pnpm test:integration"
+      build_command: "pnpm build"
+      package_check_command: "pnpm exec publint"
+      bazel_build_command: "npx --yes @bazel/bazelisk build //:pkg //:typecheck //:test --verbose_failures"
+      bazel_package_path: "./bazel-bin/pkg"
+```
+
+### `bazel-js-publish`
+
+Builds the Bazel package artifact once, uploads it, and publishes that exact artifact to npm and optionally GitHub Packages.
+
+```yaml
+jobs:
+  publish:
+    uses: tinyland-inc/ci-templates/.github/workflows/bazel-js-publish.yml@main
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    with:
+      metadata_command: "node scripts/check-release-metadata.mjs"
+      test_command: "pnpm test:unit"
+      build_command: "pnpm build"
+      package_check_command: "pnpm exec publint"
+      bazel_build_command: "npx --yes @bazel/bazelisk build //:pkg //:typecheck //:test --verbose_failures"
+      bazel_package_path: "./bazel-bin/pkg"
+      publish_dry_run: false
+      publish_to_github_packages: true
+      github_package_name: "@jesssullivan/scheduling-kit"
+```
+
+`bazel-js-publish` always validates the Bazel-built package with `npm pack --dry-run` and `npm publish --dry-run --ignore-scripts` before any real publish step. Real publish also uses `--ignore-scripts` because the scripts have already been exercised before the artifact is archived.
+
 ## Requirements
 
 - **Self-hosted runners:** Attic and Bazel cache auto-detected via cluster DNS
