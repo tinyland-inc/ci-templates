@@ -198,7 +198,9 @@ jobs:
 
       - name: Validate Bazel targets
         shell: bash
-        run: npx --yes @bazel/bazelisk build ${{ inputs.bazel_targets || '//:pkg' }} --verbose_failures
+        env:
+          BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
+        run: npx --yes @bazel/bazelisk build $BAZEL_TARGETS --verbose_failures
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
@@ -384,4 +386,5 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm publish ./pkg-github --access ${{ inputs.npm_access || 'public' }} --ignore-scripts
+          NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
+        run: npm publish ./pkg-github --access "$NPM_ACCESS" --ignore-scripts
