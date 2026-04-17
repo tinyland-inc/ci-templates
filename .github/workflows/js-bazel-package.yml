@@ -2,6 +2,7 @@ name: JS Bazel Package
 
 on:
   workflow_call:
+    outputs: {}
     inputs:
       runner_labels_json:
         description: "JSON array of runner labels to use for all jobs"
@@ -100,12 +101,12 @@ on:
         description: "npmjs.com publish token"
         required: false
 
-permissions:
-  contents: read
-
 jobs:
   validate:
     runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -141,10 +142,13 @@ jobs:
           cache: pnpm
 
       - name: Enable Corepack
+        shell: bash
         run: corepack enable
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           if [ -f pnpm-lock.yaml ]; then
             pnpm install --frozen-lockfile
           else
@@ -153,44 +157,55 @@ jobs:
 
       - name: Prepare workspace
         if: ${{ inputs.prepare_command != '' }}
+        shell: bash
         run: ${{ inputs.prepare_command }}
 
       - name: Verify release metadata
         if: ${{ inputs.metadata_check_command != '' }}
+        shell: bash
         run: ${{ inputs.metadata_check_command }}
 
       - name: Lint
         if: ${{ inputs.lint_command != '' }}
         continue-on-error: ${{ inputs.lint_continue_on_error }}
+        shell: bash
         run: ${{ inputs.lint_command }}
 
       - name: Typecheck
         if: ${{ inputs.typecheck_command != '' }}
         continue-on-error: ${{ inputs.typecheck_continue_on_error }}
+        shell: bash
         run: ${{ inputs.typecheck_command }}
 
       - name: Unit tests
         if: ${{ inputs.unit_test_command != '' }}
+        shell: bash
         run: ${{ inputs.unit_test_command }}
 
       - name: Integration tests
         if: ${{ inputs.integration_test_command != '' }}
+        shell: bash
         run: ${{ inputs.integration_test_command }}
 
       - name: Build workspace artifact
+        shell: bash
         run: ${{ inputs.build_command || 'pnpm build' }}
 
       - name: Validate package surface
         if: ${{ inputs.package_check_command != '' }}
+        shell: bash
         run: ${{ inputs.package_check_command }}
 
       - name: Validate Bazel targets
+        shell: bash
         run: npx --yes @bazel/bazelisk build ${{ inputs.bazel_targets || '//:pkg' }} --verbose_failures
 
       - name: Validate npm tarball from Bazel artifact
+        shell: bash
         run: npm pack --dry-run ${{ inputs.package_dir || './bazel-bin/pkg' }}
 
       - name: Validate npm publish dry-run from Bazel artifact
+        shell: bash
         run: npm publish --dry-run --ignore-scripts --access ${{ inputs.npm_access || 'public' }} ${{ inputs.package_dir || './bazel-bin/pkg' }}
 
       - name: Validate GitHub Packages dry-run from Bazel artifact
@@ -220,6 +235,7 @@ jobs:
       - name: Archive Bazel package artifact
         shell: bash
         run: |
+          set -euo pipefail
           PACKAGE_DIR="${{ inputs.package_dir || './bazel-bin/pkg' }}"
           PACKAGE_PARENT=$(dirname "$PACKAGE_DIR")
           PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
@@ -237,6 +253,7 @@ jobs:
     needs: validate
     if: ${{ inputs.dry_run == false }}
     runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
@@ -268,6 +285,7 @@ jobs:
           name: bazel-pkg
 
       - name: Extract Bazel package artifact
+        shell: bash
         run: tar -xzf bazel-pkg.tgz
 
       - name: Normalize Bazel package permissions
@@ -280,6 +298,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
+          set -euo pipefail
           PACKAGE_BASENAME=$(basename "${{ inputs.package_dir || './bazel-bin/pkg' }}")
           PUBLISH_ARGS=("./$PACKAGE_BASENAME" --ignore-scripts --access "${{ inputs.npm_access || 'public' }}")
           if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
@@ -291,6 +310,7 @@ jobs:
     needs: validate
     if: ${{ inputs.github_package_name != '' && inputs.dry_run == false }}
     runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -322,6 +342,7 @@ jobs:
           name: bazel-pkg
 
       - name: Extract Bazel package artifact
+        shell: bash
         run: tar -xzf bazel-pkg.tgz
 
       - name: Prepare GitHub Packages publish directory
