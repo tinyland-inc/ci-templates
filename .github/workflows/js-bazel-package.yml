@@ -202,11 +202,16 @@ jobs:
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
-        run: npm pack --dry-run ${{ inputs.package_dir || './bazel-bin/pkg' }}
+        env:
+          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
+        run: npm pack --dry-run "$PACKAGE_DIR"
 
       - name: Validate npm publish dry-run from Bazel artifact
         shell: bash
-        run: npm publish --dry-run --ignore-scripts --access ${{ inputs.npm_access || 'public' }} ${{ inputs.package_dir || './bazel-bin/pkg' }}
+        env:
+          NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
+          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
+        run: npm publish --dry-run --ignore-scripts --access "$NPM_ACCESS" "$PACKAGE_DIR"
 
       - name: Validate GitHub Packages dry-run from Bazel artifact
         if: ${{ inputs.github_package_name != '' }}
@@ -214,10 +219,11 @@ jobs:
         env:
           GITHUB_PACKAGE_NAME: ${{ inputs.github_package_name }}
           GITHUB_PACKAGE_REGISTRY: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
+          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
         run: |
           set -euo pipefail
           rm -rf pkg-github
-          cp -R "${{ inputs.package_dir || './bazel-bin/pkg' }}" pkg-github
+          cp -R "$PACKAGE_DIR" pkg-github
           chmod -R u+w pkg-github
           node - <<'NODE'
           const fs = require('fs');
@@ -234,9 +240,10 @@ jobs:
 
       - name: Archive Bazel package artifact
         shell: bash
+        env:
+          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
         run: |
           set -euo pipefail
-          PACKAGE_DIR="${{ inputs.package_dir || './bazel-bin/pkg' }}"
           PACKAGE_PARENT=$(dirname "$PACKAGE_DIR")
           PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
           tar -czf bazel-pkg.tgz -C "$PACKAGE_PARENT" "$PACKAGE_BASENAME"
@@ -290,17 +297,21 @@ jobs:
 
       - name: Normalize Bazel package permissions
         shell: bash
-        run: chmod -R u+w "./$(basename "${{ inputs.package_dir || './bazel-bin/pkg' }}")"
+        env:
+          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
+        run: chmod -R u+w "./$(basename "$PACKAGE_DIR")"
 
       - name: Publish or dry-run npm artifact
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
+          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           set -euo pipefail
-          PACKAGE_BASENAME=$(basename "${{ inputs.package_dir || './bazel-bin/pkg' }}")
-          PUBLISH_ARGS=("./$PACKAGE_BASENAME" --ignore-scripts --access "${{ inputs.npm_access || 'public' }}")
+          PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
+          PUBLISH_ARGS=("./$PACKAGE_BASENAME" --ignore-scripts --access "$NPM_ACCESS")
           if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
             PUBLISH_ARGS+=(--provenance)
           fi
@@ -350,9 +361,10 @@ jobs:
         env:
           GITHUB_PACKAGE_NAME: ${{ inputs.github_package_name }}
           GITHUB_PACKAGE_REGISTRY: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
+          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
         run: |
           set -euo pipefail
-          PACKAGE_BASENAME=$(basename "${{ inputs.package_dir || './bazel-bin/pkg' }}")
+          PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
           rm -rf pkg-github
           cp -R "./$PACKAGE_BASENAME" pkg-github
           chmod -R u+w pkg-github
