@@ -102,8 +102,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 jobs:
   validate:
@@ -113,7 +111,7 @@ jobs:
       matrix:
         node-version: ${{ fromJson(inputs.node_versions || '["20", "22"]') }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           clean: false
 
@@ -121,16 +119,23 @@ jobs:
         if: ${{ inputs.cleanup_paths != '' }}
         shell: bash
         run: |
+          set -euo pipefail
           for path in ${{ inputs.cleanup_paths }}; do
-            chmod -R u+w "$path" 2>/dev/null || true
+            case "$path" in
+              ""|/*|*..*|-*)
+                echo "Refusing unsafe cleanup path: $path" >&2
+                exit 1
+                ;;
+            esac
+            chmod -R u+w -- "$path" 2>/dev/null || true
+            rm -rf -- "$path"
           done
-          rm -rf ${{ inputs.cleanup_paths }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: ${{ inputs.pnpm_version || '9' }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -191,18 +196,25 @@ jobs:
       - name: Validate GitHub Packages dry-run from Bazel artifact
         if: ${{ inputs.github_package_name != '' }}
         shell: bash
+        env:
+          GITHUB_PACKAGE_NAME: ${{ inputs.github_package_name }}
+          GITHUB_PACKAGE_REGISTRY: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
         run: |
+          set -euo pipefail
           rm -rf pkg-github
           cp -R "${{ inputs.package_dir || './bazel-bin/pkg' }}" pkg-github
           chmod -R u+w pkg-github
-          node -e "
-            const fs = require('fs');
-            const path = './pkg-github/package.json';
-            const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
-            pkg.name = '${{ inputs.github_package_name }}';
-            pkg.publishConfig = { ...(pkg.publishConfig || {}), registry: '${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}' };
-            fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
-          "
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = './pkg-github/package.json';
+          const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+          pkg.name = process.env.GITHUB_PACKAGE_NAME;
+          pkg.publishConfig = {
+            ...(pkg.publishConfig || {}),
+            registry: process.env.GITHUB_PACKAGE_REGISTRY
+          };
+          fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
           npm publish ./pkg-github --dry-run --ignore-scripts
 
       - name: Archive Bazel package artifact
@@ -214,7 +226,7 @@ jobs:
           tar -czf bazel-pkg.tgz -C "$PACKAGE_PARENT" "$PACKAGE_BASENAME"
 
       - name: Upload Bazel package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bazel-pkg
           path: bazel-pkg.tgz
@@ -228,7 +240,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: ${{ inputs.publish_node_version || '22' }}
           registry-url: ${{ inputs.npm_registry_url || 'https://registry.npmjs.org' }}
@@ -237,13 +249,20 @@ jobs:
         if: ${{ inputs.cleanup_paths != '' }}
         shell: bash
         run: |
+          set -euo pipefail
           for path in ${{ inputs.cleanup_paths }}; do
-            chmod -R u+w "$path" 2>/dev/null || true
+            case "$path" in
+              ""|/*|*..*|-*)
+                echo "Refusing unsafe cleanup path: $path" >&2
+                exit 1
+                ;;
+            esac
+            chmod -R u+w -- "$path" 2>/dev/null || true
+            rm -rf -- "$path"
           done
-          rm -rf ${{ inputs.cleanup_paths }}
 
       - name: Download Bazel package artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: bazel-pkg
 
@@ -275,7 +294,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: ${{ inputs.publish_node_version || '22' }}
           registry-url: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
@@ -284,13 +303,20 @@ jobs:
         if: ${{ inputs.cleanup_paths != '' }}
         shell: bash
         run: |
+          set -euo pipefail
           for path in ${{ inputs.cleanup_paths }}; do
-            chmod -R u+w "$path" 2>/dev/null || true
+            case "$path" in
+              ""|/*|*..*|-*)
+                echo "Refusing unsafe cleanup path: $path" >&2
+                exit 1
+                ;;
+            esac
+            chmod -R u+w -- "$path" 2>/dev/null || true
+            rm -rf -- "$path"
           done
-          rm -rf ${{ inputs.cleanup_paths }}
 
       - name: Download Bazel package artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: bazel-pkg
 
@@ -299,19 +325,26 @@ jobs:
 
       - name: Prepare GitHub Packages publish directory
         shell: bash
+        env:
+          GITHUB_PACKAGE_NAME: ${{ inputs.github_package_name }}
+          GITHUB_PACKAGE_REGISTRY: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
         run: |
+          set -euo pipefail
           PACKAGE_BASENAME=$(basename "${{ inputs.package_dir || './bazel-bin/pkg' }}")
           rm -rf pkg-github
           cp -R "./$PACKAGE_BASENAME" pkg-github
           chmod -R u+w pkg-github
-          node -e "
-            const fs = require('fs');
-            const path = './pkg-github/package.json';
-            const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
-            pkg.name = '${{ inputs.github_package_name }}';
-            pkg.publishConfig = { ...(pkg.publishConfig || {}), registry: '${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}' };
-            fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
-          "
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = './pkg-github/package.json';
+          const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+          pkg.name = process.env.GITHUB_PACKAGE_NAME;
+          pkg.publishConfig = {
+            ...(pkg.publishConfig || {}),
+            registry: process.env.GITHUB_PACKAGE_REGISTRY
+          };
+          fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
 
       - name: Publish or dry-run GitHub Packages artifact
         shell: bash
