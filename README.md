@@ -53,6 +53,16 @@ TruffleHog (verified secrets) + Gitleaks detection.
 - uses: tinyland-inc/ci-templates/.github/actions/secrets-scan@main
 ```
 
+## Reusable Workflows
+
+### `js-bazel-package`
+
+Reusable workflow for JS/TS packages whose release artifact is built by Bazel and then published to npm or GitHub Packages.
+
+Supports self-hosted runner labels, stale workspace cleanup, optional prepare steps like `svelte-kit sync`, optional advisory lint/typecheck lanes, Bazel-artifact dry-runs, and npm/GitHub Packages publication from the extracted Bazel package.
+
+See [docs/js-bazel-package.md](./docs/js-bazel-package.md) for usage and inputs.
+
 ## Requirements
 
 - **Self-hosted runners:** Attic and Bazel cache auto-detected via cluster DNS
