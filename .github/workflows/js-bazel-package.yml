@@ -4,10 +4,26 @@ on:
   workflow_call:
     outputs: {}
     inputs:
+      runner_mode:
+        description: "Runner policy for validate and same-runner publish jobs: compat, hosted, shared, or repo_owned"
+        type: string
+        default: "compat"
+      shared_runner_labels_json:
+        description: "JSON array of shared GloriousFlywheel runner labels used when runner_mode=shared"
+        type: string
+        default: '["tinyland-docker"]'
       runner_labels_json:
-        description: "JSON array of runner labels to use for all jobs"
+        description: "JSON array of runner labels used by compat mode and required when runner_mode=repo_owned"
         type: string
         default: '["ubuntu-latest"]'
+      workspace_mode:
+        description: "Workspace policy for validation: isolated or persistent_compat"
+        type: string
+        default: "persistent_compat"
+      publish_mode:
+        description: "Publish policy: same_runner or hosted_exception"
+        type: string
+        default: "same_runner"
       node_versions:
         description: "JSON array of Node.js versions to validate"
         type: string
@@ -25,7 +41,7 @@ on:
         type: string
         default: ""
       cleanup_paths:
-        description: "Optional space-delimited paths to chmod/rm before install or publish extraction"
+        description: "Optional space-delimited paths to chmod/rm before install when workspace_mode=persistent_compat"
         type: string
         default: "dist node_modules bazel-bin bazel-out bazel-testlogs .pnpm-store pkg pkg-github bazel-pkg.tgz MODULE.bazel.lock"
       prepare_command:
@@ -103,7 +119,7 @@ on:
 
 jobs:
   validate:
-    runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJson(inputs.runner_mode == 'repo_owned' && inputs.runner_labels_json || inputs.runner_mode == 'shared' && inputs.shared_runner_labels_json || inputs.runner_mode == 'hosted' && '["ubuntu-latest"]' || inputs.runner_labels_json || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -112,15 +128,63 @@ jobs:
       matrix:
         node-version: ${{ fromJson(inputs.node_versions || '["20", "22"]') }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          clean: false
-
-      - name: Clean stale workspace artifacts
-        if: ${{ inputs.cleanup_paths != '' }}
+      - name: Validate workflow contract
         shell: bash
         run: |
           set -euo pipefail
+          case "${{ inputs.runner_mode }}" in
+            compat|hosted|shared|repo_owned) ;;
+            *)
+              echo "Unsupported runner_mode: ${{ inputs.runner_mode }}" >&2
+              exit 1
+              ;;
+          esac
+          case "${{ inputs.workspace_mode }}" in
+            isolated|persistent_compat) ;;
+            *)
+              echo "Unsupported workspace_mode: ${{ inputs.workspace_mode }}" >&2
+              exit 1
+              ;;
+          esac
+          case "${{ inputs.publish_mode }}" in
+            same_runner|hosted_exception) ;;
+            *)
+              echo "Unsupported publish_mode: ${{ inputs.publish_mode }}" >&2
+              exit 1
+              ;;
+          esac
+          if [ "${{ inputs.runner_mode }}" = "repo_owned" ] && [ "${{ inputs.runner_labels_json }}" = '["ubuntu-latest"]' ]; then
+            echo "runner_mode=repo_owned requires explicit runner_labels_json" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          clean: ${{ inputs.workspace_mode != 'persistent_compat' }}
+
+      - name: Configure self-hosted cache contract
+        if: ${{ runner.environment != 'github-hosted' }}
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@main
+
+      - name: Resolve working directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKSPACE_DIR="$GITHUB_WORKSPACE"
+          if [ "${{ inputs.workspace_mode }}" = "isolated" ]; then
+            WORKSPACE_DIR="$RUNNER_TEMP/js-bazel-package-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.node-version }}"
+            rm -rf "$WORKSPACE_DIR"
+            mkdir -p "$WORKSPACE_DIR"
+            cp -a "$GITHUB_WORKSPACE"/. "$WORKSPACE_DIR"
+          fi
+          echo "WORKSPACE_DIR=$WORKSPACE_DIR" >> "$GITHUB_ENV"
+
+      - name: Clean stale workspace artifacts
+        if: ${{ inputs.workspace_mode == 'persistent_compat' && inputs.cleanup_paths != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
           for path in ${{ inputs.cleanup_paths }}; do
             case "$path" in
               ""|/*|*..*|-*)
@@ -140,6 +204,9 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            **/pnpm-lock.yaml
 
       - name: Enable Corepack
         shell: bash
@@ -149,6 +216,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd "$WORKSPACE_DIR"
           if [ -f pnpm-lock.yaml ]; then
             pnpm install --frozen-lockfile
           else
@@ -158,62 +226,95 @@ jobs:
       - name: Prepare workspace
         if: ${{ inputs.prepare_command != '' }}
         shell: bash
-        run: ${{ inputs.prepare_command }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          ${{ inputs.prepare_command }}
 
       - name: Verify release metadata
         if: ${{ inputs.metadata_check_command != '' }}
         shell: bash
-        run: ${{ inputs.metadata_check_command }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          ${{ inputs.metadata_check_command }}
 
       - name: Lint
         if: ${{ inputs.lint_command != '' }}
         continue-on-error: ${{ inputs.lint_continue_on_error }}
         shell: bash
-        run: ${{ inputs.lint_command }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          ${{ inputs.lint_command }}
 
       - name: Typecheck
         if: ${{ inputs.typecheck_command != '' }}
         continue-on-error: ${{ inputs.typecheck_continue_on_error }}
         shell: bash
-        run: ${{ inputs.typecheck_command }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          ${{ inputs.typecheck_command }}
 
       - name: Unit tests
         if: ${{ inputs.unit_test_command != '' }}
         shell: bash
-        run: ${{ inputs.unit_test_command }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          ${{ inputs.unit_test_command }}
 
       - name: Integration tests
         if: ${{ inputs.integration_test_command != '' }}
         shell: bash
-        run: ${{ inputs.integration_test_command }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          ${{ inputs.integration_test_command }}
 
       - name: Build workspace artifact
         shell: bash
-        run: ${{ inputs.build_command || 'pnpm build' }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          ${{ inputs.build_command || 'pnpm build' }}
 
       - name: Validate package surface
         if: ${{ inputs.package_check_command != '' }}
         shell: bash
-        run: ${{ inputs.package_check_command }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          ${{ inputs.package_check_command }}
 
       - name: Validate Bazel targets
         shell: bash
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
-        run: npx --yes @bazel/bazelisk build $BAZEL_TARGETS --verbose_failures
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          npx --yes @bazel/bazelisk build $BAZEL_TARGETS --verbose_failures
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
         env:
           PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
-        run: npm pack --dry-run "$PACKAGE_DIR"
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          npm pack --dry-run "$PACKAGE_DIR"
 
       - name: Validate npm publish dry-run from Bazel artifact
         shell: bash
         env:
           NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
           PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
-        run: npm publish --dry-run --ignore-scripts --access "$NPM_ACCESS" "$PACKAGE_DIR"
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          npm publish --dry-run --ignore-scripts --access "$NPM_ACCESS" "$PACKAGE_DIR"
 
       - name: Validate GitHub Packages dry-run from Bazel artifact
         if: ${{ inputs.github_package_name != '' }}
@@ -224,6 +325,7 @@ jobs:
           PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
         run: |
           set -euo pipefail
+          cd "$WORKSPACE_DIR"
           rm -rf pkg-github
           cp -R "$PACKAGE_DIR" pkg-github
           chmod -R u+w pkg-github
@@ -246,6 +348,7 @@ jobs:
           PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
         run: |
           set -euo pipefail
+          cd "$WORKSPACE_DIR"
           PACKAGE_PARENT=$(dirname "$PACKAGE_DIR")
           PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
           tar -czf bazel-pkg.tgz -C "$PACKAGE_PARENT" "$PACKAGE_BASENAME"
@@ -255,55 +358,55 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bazel-pkg
-          path: bazel-pkg.tgz
+          path: ${{ env.WORKSPACE_DIR }}/bazel-pkg.tgz
           if-no-files-found: error
 
   publish-npm:
     needs: validate
     if: ${{ inputs.dry_run == false }}
-    runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_mode == 'repo_owned' && inputs.runner_labels_json || inputs.runner_mode == 'shared' && inputs.shared_runner_labels_json || inputs.runner_mode == 'hosted' && '["ubuntu-latest"]' || inputs.runner_labels_json || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
     steps:
+      - name: Validate publish contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.publish_mode }}" in
+            same_runner|hosted_exception) ;;
+            *)
+              echo "Unsupported publish_mode: ${{ inputs.publish_mode }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Configure self-hosted cache contract
+        if: ${{ runner.environment != 'github-hosted' }}
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@main
+
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: ${{ inputs.publish_node_version || '22' }}
           registry-url: ${{ inputs.npm_registry_url || 'https://registry.npmjs.org' }}
-
-      - name: Clean stale publish artifacts
-        if: ${{ inputs.cleanup_paths != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for path in ${{ inputs.cleanup_paths }}; do
-            case "$path" in
-              ""|/*|*..*|-*)
-                echo "Refusing unsafe cleanup path: $path" >&2
-                exit 1
-                ;;
-            esac
-            chmod -R u+w -- "$path" 2>/dev/null || true
-            rm -rf -- "$path"
-          done
 
       - name: Download Bazel package artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: bazel-pkg
 
-      - name: Extract Bazel package artifact
+      - name: Extract Bazel package artifact into isolated publish workspace
         shell: bash
-        run: tar -xzf bazel-pkg.tgz
+        run: |
+          set -euo pipefail
+          PUBLISH_ROOT="$RUNNER_TEMP/js-bazel-package-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}"
+          rm -rf "$PUBLISH_ROOT"
+          mkdir -p "$PUBLISH_ROOT"
+          tar -xzf bazel-pkg.tgz -C "$PUBLISH_ROOT"
+          echo "PUBLISH_ROOT=$PUBLISH_ROOT" >> "$GITHUB_ENV"
 
-      - name: Normalize Bazel package permissions
-        shell: bash
-        env:
-          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
-        run: chmod -R u+w "./$(basename "$PACKAGE_DIR")"
-
-      - name: Publish or dry-run npm artifact
+      - name: Publish npm artifact
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -313,7 +416,7 @@ jobs:
         run: |
           set -euo pipefail
           PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
-          PUBLISH_ARGS=("./$PACKAGE_BASENAME" --ignore-scripts --access "$NPM_ACCESS")
+          PUBLISH_ARGS=("$PUBLISH_ROOT/$PACKAGE_BASENAME" --ignore-scripts --access "$NPM_ACCESS")
           if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
             PUBLISH_ARGS+=(--provenance)
           fi
@@ -322,41 +425,47 @@ jobs:
   publish-github:
     needs: validate
     if: ${{ inputs.github_package_name != '' && inputs.dry_run == false }}
-    runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_mode == 'repo_owned' && inputs.runner_labels_json || inputs.runner_mode == 'shared' && inputs.shared_runner_labels_json || inputs.runner_mode == 'hosted' && '["ubuntu-latest"]' || inputs.runner_labels_json || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     permissions:
       contents: read
       packages: write
     steps:
+      - name: Validate publish contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.publish_mode }}" in
+            same_runner|hosted_exception) ;;
+            *)
+              echo "Unsupported publish_mode: ${{ inputs.publish_mode }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Configure self-hosted cache contract
+        if: ${{ runner.environment != 'github-hosted' }}
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@main
+
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: ${{ inputs.publish_node_version || '22' }}
           registry-url: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
-
-      - name: Clean stale publish artifacts
-        if: ${{ inputs.cleanup_paths != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for path in ${{ inputs.cleanup_paths }}; do
-            case "$path" in
-              ""|/*|*..*|-*)
-                echo "Refusing unsafe cleanup path: $path" >&2
-                exit 1
-                ;;
-            esac
-            chmod -R u+w -- "$path" 2>/dev/null || true
-            rm -rf -- "$path"
-          done
 
       - name: Download Bazel package artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: bazel-pkg
 
-      - name: Extract Bazel package artifact
+      - name: Extract Bazel package artifact into isolated publish workspace
         shell: bash
-        run: tar -xzf bazel-pkg.tgz
+        run: |
+          set -euo pipefail
+          PUBLISH_ROOT="$RUNNER_TEMP/js-bazel-package-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}"
+          rm -rf "$PUBLISH_ROOT"
+          mkdir -p "$PUBLISH_ROOT"
+          tar -xzf bazel-pkg.tgz -C "$PUBLISH_ROOT"
+          echo "PUBLISH_ROOT=$PUBLISH_ROOT" >> "$GITHUB_ENV"
 
       - name: Prepare GitHub Packages publish directory
         shell: bash
@@ -367,12 +476,12 @@ jobs:
         run: |
           set -euo pipefail
           PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
-          rm -rf pkg-github
-          cp -R "./$PACKAGE_BASENAME" pkg-github
-          chmod -R u+w pkg-github
+          rm -rf "$PUBLISH_ROOT/pkg-github"
+          cp -R "$PUBLISH_ROOT/$PACKAGE_BASENAME" "$PUBLISH_ROOT/pkg-github"
+          chmod -R u+w "$PUBLISH_ROOT/pkg-github"
           node - <<'NODE'
           const fs = require('fs');
-          const path = './pkg-github/package.json';
+          const path = process.env.PUBLISH_ROOT + '/pkg-github/package.json';
           const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
           pkg.name = process.env.GITHUB_PACKAGE_NAME;
           pkg.publishConfig = {
@@ -382,9 +491,9 @@ jobs:
           fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
           NODE
 
-      - name: Publish or dry-run GitHub Packages artifact
+      - name: Publish GitHub Packages artifact
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ github.token }}
           NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
-        run: npm publish ./pkg-github --access "$NPM_ACCESS" --ignore-scripts
+        run: npm publish "$PUBLISH_ROOT/pkg-github" --access "$NPM_ACCESS" --ignore-scripts
