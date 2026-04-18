@@ -1,0 +1,27 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax", "style"],
+  "triggerOnUpdates": true,
+  "triggerOnDrafts": false,
+  "ignorePatterns": ".github/dependabot.yml",
+  "statusCheck": true,
+  "fixWithAI": true,
+  "shouldUpdateDescription": true,
+  "summarySection": { "included": true, "collapsible": false, "defaultOpen": true },
+  "issuesTableSection": { "included": true, "collapsible": true, "defaultOpen": true },
+  "sequenceDiagramSection": { "included": false, "collapsible": true, "defaultOpen": false },
+  "instructions": "This repo contains reusable GitHub Actions workflow templates consumed by other tinyland repos. Changes here have blast radius across the org. Review for: correct input/output definitions, pinned action versions (full SHA), no secrets leaking in logs, proper permissions blocks.",
+  "patternRepositories": [],
+  "customContext": {
+    "rules": [
+      "All third-party actions must be pinned to full commit SHA, not tags",
+      "Workflow inputs must have descriptions and type constraints",
+      "Secrets must never be echoed or logged, even in debug mode",
+      "Permissions must follow least-privilege (no contents: write unless justified)",
+      "Reusable workflows must define outputs explicitly"
+    ],
+    "files": [
+      { "path": "CLAUDE.md", "description": "Project conventions and context", "scope": ["**"] }
+    ]
+  }
+}
