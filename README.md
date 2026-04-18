@@ -63,6 +63,19 @@ Supports explicit runner policy (`compat`, `hosted`, `shared`, `repo_owned`), ex
 
 See [docs/js-bazel-package.md](./docs/js-bazel-package.md) for usage and inputs.
 
+### `npm-publish`
+
+Reusable workflow for straightforward Node package build, test, and publish
+flows that publish directly from the workspace tree.
+
+Current behavior:
+
+- hosted-only on `ubuntu-latest`
+- build and advisory test on a Node version matrix
+- publish to GitHub Packages and npmjs on tags
+
+See [docs/npm-publish.md](./docs/npm-publish.md) for usage and inputs.
+
 ## Requirements
 
 - **Self-hosted runners:** Attic and Bazel cache auto-detected via cluster DNS
