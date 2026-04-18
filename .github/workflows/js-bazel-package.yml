@@ -121,8 +121,6 @@ jobs:
   validate:
     runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
     timeout-minutes: 30
-    permissions:
-      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -366,9 +364,6 @@ jobs:
     if: ${{ inputs.dry_run == false }}
     runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_labels_json || '["ubuntu-latest"]') }}
     timeout-minutes: 20
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - name: Validate publish contract
         shell: bash
@@ -427,9 +422,6 @@ jobs:
     if: ${{ inputs.github_package_name != '' && inputs.dry_run == false }}
     runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_labels_json || '["ubuntu-latest"]') }}
     timeout-minutes: 20
-    permissions:
-      contents: read
-      packages: write
     steps:
       - name: Validate publish contract
         shell: bash
