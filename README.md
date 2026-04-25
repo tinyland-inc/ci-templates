@@ -61,9 +61,9 @@ Reusable workflow for JS/TS packages whose release artifact is built by Bazel an
 
 Supports explicit runner policy (`compat`, `hosted`, `shared`, `repo_owned`), explicit workspace policy (`isolated`, `persistent_compat`), explicit publish policy (`same_runner`, `hosted_exception`), self-hosted cache contract wiring, optional advisory lint/typecheck lanes, Bazel-artifact dry-runs, and npm/GitHub Packages publication from the extracted Bazel package.
 
-The Bazel validation step includes bounded retries for transient external
-archive fetch failures, so package repos do not each vendor ad hoc GitHub
-release-download retry logic.
+Consumer-supplied validation commands and the explicit Bazel validation step
+include bounded retries for transient Bazel external archive fetch failures, so
+package repos do not each vendor ad hoc GitHub release-download retry logic.
 
 See [docs/js-bazel-package.md](./docs/js-bazel-package.md) for usage and inputs.
 
