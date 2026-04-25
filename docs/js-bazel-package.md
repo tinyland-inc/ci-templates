@@ -142,6 +142,8 @@ jobs:
 - `runner_mode=repo_owned` should always pass explicit `runner_labels_json`.
 - `runner_mode=shared` uses `shared_runner_labels_json`, which defaults to
   `["tinyland-docker"]`.
+- `publish_mode=hosted_exception` intentionally overrides the selected runner
+  lane for publish jobs and uses `ubuntu-latest`.
 - self-hosted jobs now call `nix-setup`, so Attic and Bazel cache hints are
   explicit instead of incidental runner state.
 - `workspace_mode=isolated` is the preferred contract for downstream pilots.
