@@ -84,6 +84,10 @@ on:
         description: "Space-delimited Bazel targets to validate"
         type: string
         default: "//:pkg"
+      bazel_fetch_retry_attempts:
+        description: "Bazel validation attempts for transient external archive fetch failures"
+        type: string
+        default: "3"
       package_dir:
         description: "Directory containing the Bazel-built publishable package"
         type: string
@@ -209,30 +213,46 @@ jobs:
     steps:
       - name: Validate workflow contract
         shell: bash
+        env:
+          RUNNER_MODE: ${{ inputs.runner_mode }}
+          RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
+          WORKSPACE_MODE: ${{ inputs.workspace_mode }}
+          PUBLISH_MODE: ${{ inputs.publish_mode }}
+          BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts }}
         run: |
           set -euo pipefail
-          case "${{ inputs.runner_mode }}" in
+          case "$RUNNER_MODE" in
             compat|hosted|shared|repo_owned) ;;
             *)
-              echo "Unsupported runner_mode: ${{ inputs.runner_mode }}" >&2
+              echo "Unsupported runner_mode: $RUNNER_MODE" >&2
               exit 1
               ;;
           esac
-          case "${{ inputs.workspace_mode }}" in
+          case "$WORKSPACE_MODE" in
             isolated|persistent_compat) ;;
             *)
-              echo "Unsupported workspace_mode: ${{ inputs.workspace_mode }}" >&2
+              echo "Unsupported workspace_mode: $WORKSPACE_MODE" >&2
               exit 1
               ;;
           esac
-          case "${{ inputs.publish_mode }}" in
+          case "$PUBLISH_MODE" in
             same_runner|hosted_exception) ;;
             *)
-              echo "Unsupported publish_mode: ${{ inputs.publish_mode }}" >&2
+              echo "Unsupported publish_mode: $PUBLISH_MODE" >&2
               exit 1
               ;;
           esac
-          if [ "${{ inputs.runner_mode }}" = "repo_owned" ] && [ "${{ inputs.runner_labels_json }}" = '["ubuntu-latest"]' ]; then
+          case "$BAZEL_FETCH_RETRY_ATTEMPTS" in
+            ""|*[!0-9]*)
+              echo "bazel_fetch_retry_attempts must be a positive integer" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$BAZEL_FETCH_RETRY_ATTEMPTS" -lt 1 ] || [ "$BAZEL_FETCH_RETRY_ATTEMPTS" -gt 5 ]; then
+            echo "bazel_fetch_retry_attempts must be between 1 and 5" >&2
+            exit 1
+          fi
+          if [ "$RUNNER_MODE" = "repo_owned" ] && [ "$RUNNER_LABELS_JSON" = '["ubuntu-latest"]' ]; then
             echo "runner_mode=repo_owned requires explicit runner_labels_json" >&2
             exit 1
           fi
@@ -371,12 +391,41 @@ jobs:
         shell: bash
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
+          BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
           # shellcheck disable=SC2153
           read -r -a bazel_targets <<< "$BAZEL_TARGETS"
-          npx --yes @bazel/bazelisk build "${bazel_targets[@]}" --verbose_failures
+
+          attempts="$BAZEL_FETCH_RETRY_ATTEMPTS"
+          attempt=1
+          while [ "$attempt" -le "$attempts" ]; do
+            log_path="$RUNNER_TEMP/js-bazel-package-bazel-attempt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${NODE_VERSION}-${attempt}.log"
+            set +e
+            npx --yes @bazel/bazelisk build "${bazel_targets[@]}" --verbose_failures 2>&1 | tee "$log_path"
+            status="${PIPESTATUS[0]}"
+            set -e
+
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq "$attempts" ]; then
+              echo "::error::Bazel validation failed after $attempts attempt(s)."
+              exit "$status"
+            fi
+
+            if ! grep -Eiq "(Error downloading|GET returned 5[0-9][0-9]|Bad Gateway|Proxy Error|connection reset|Connection timed out|TLS handshake timeout|Temporary failure)" "$log_path"; then
+              echo "::error::Bazel validation failed with a non-fetch error; not retrying."
+              exit "$status"
+            fi
+
+            echo "::warning::Bazel validation hit a transient external fetch/download failure on attempt $attempt/$attempts; retrying."
+            npx --yes @bazel/bazelisk shutdown >/dev/null 2>&1 || true
+            sleep 10
+            attempt=$((attempt + 1))
+          done
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
