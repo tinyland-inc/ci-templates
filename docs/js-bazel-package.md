@@ -140,8 +140,10 @@ jobs:
 - `compat` exists only to let existing consumers adopt the new template without
   breaking in one PR.
 - `runner_mode=repo_owned` should always pass explicit `runner_labels_json`.
-- `runner_mode=shared` uses `shared_runner_labels_json`, which defaults to
-  `["tinyland-docker"]`.
+- `runner_mode=shared` should currently pass the selected shared runner lane
+  through `runner_labels_json`; keep `shared_runner_labels_json` populated as
+  metadata for the future resolver, but avoid complex `runs-on` expressions
+  because they cause GitHub Actions startup failures before jobs are created.
 - `publish_mode=hosted_exception` intentionally overrides the selected runner
   lane for publish jobs and uses `ubuntu-latest`.
 - self-hosted jobs now call `nix-setup`, so Attic and Bazel cache hints are
