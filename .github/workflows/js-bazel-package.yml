@@ -119,7 +119,7 @@ on:
 
 jobs:
   validate:
-    runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJson(inputs.runner_mode == 'shared' && inputs.shared_runner_labels_json || inputs.runner_labels_json || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -362,7 +362,7 @@ jobs:
   publish-npm:
     needs: validate
     if: ${{ inputs.dry_run == false }}
-    runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_mode == 'shared' && inputs.shared_runner_labels_json || inputs.runner_labels_json || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     steps:
       - name: Validate publish contract
@@ -420,7 +420,7 @@ jobs:
   publish-github:
     needs: validate
     if: ${{ inputs.github_package_name != '' && inputs.dry_run == false }}
-    runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_mode == 'shared' && inputs.shared_runner_labels_json || inputs.runner_labels_json || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     steps:
       - name: Validate publish contract
