@@ -487,7 +487,8 @@ jobs:
 
           # shellcheck source=/dev/null
           source "$BAZEL_FETCH_RETRY_HELPER"
-          run_with_bazel_fetch_retry "Validate Bazel targets" "npx --yes @bazel/bazelisk build ${bazel_targets[*]} --verbose_failures"
+          targets_quoted="$(printf '%q ' "${bazel_targets[@]}")"
+          run_with_bazel_fetch_retry "Validate Bazel targets" "npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
