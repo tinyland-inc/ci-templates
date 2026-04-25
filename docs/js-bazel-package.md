@@ -144,6 +144,10 @@ jobs:
   the selected labels in a small hosted setup job, then passes simple JSON
   outputs into `runs-on` to avoid the complex inline expressions that previously
   caused GitHub Actions startup failures before jobs were created.
+- `bazel_fetch_retry_attempts` defaults to `3` and only retries Bazel target
+  validation when the build log matches transient external archive fetch
+  failures, such as upstream GitHub release `502` responses. Deterministic
+  compile/test failures are not retried.
 - `publish_mode=hosted_exception` intentionally overrides the selected runner
   lane for publish jobs and uses `ubuntu-latest`.
 - self-hosted jobs now call `nix-setup`, so Attic and Bazel cache hints are

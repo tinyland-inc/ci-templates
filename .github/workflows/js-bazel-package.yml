@@ -84,6 +84,10 @@ on:
         description: "Space-delimited Bazel targets to validate"
         type: string
         default: "//:pkg"
+      bazel_fetch_retry_attempts:
+        description: "Bazel validation attempts for transient external archive fetch failures"
+        type: string
+        default: "3"
       package_dir:
         description: "Directory containing the Bazel-built publishable package"
         type: string
@@ -232,6 +236,17 @@ jobs:
               exit 1
               ;;
           esac
+          bazel_fetch_retry_attempts="${{ inputs.bazel_fetch_retry_attempts }}"
+          case "$bazel_fetch_retry_attempts" in
+            ""|*[!0-9]*)
+              echo "bazel_fetch_retry_attempts must be a positive integer" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$bazel_fetch_retry_attempts" -lt 1 ] || [ "$bazel_fetch_retry_attempts" -gt 5 ]; then
+            echo "bazel_fetch_retry_attempts must be between 1 and 5" >&2
+            exit 1
+          fi
           if [ "${{ inputs.runner_mode }}" = "repo_owned" ] && [ "${{ inputs.runner_labels_json }}" = '["ubuntu-latest"]' ]; then
             echo "runner_mode=repo_owned requires explicit runner_labels_json" >&2
             exit 1
@@ -371,12 +386,40 @@ jobs:
         shell: bash
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
+          BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
           # shellcheck disable=SC2153
           read -r -a bazel_targets <<< "$BAZEL_TARGETS"
-          npx --yes @bazel/bazelisk build "${bazel_targets[@]}" --verbose_failures
+
+          attempts="$BAZEL_FETCH_RETRY_ATTEMPTS"
+          attempt=1
+          while [ "$attempt" -le "$attempts" ]; do
+            log_path="$RUNNER_TEMP/js-bazel-package-bazel-attempt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.node-version }}-${attempt}.log"
+            set +e
+            npx --yes @bazel/bazelisk build "${bazel_targets[@]}" --verbose_failures 2>&1 | tee "$log_path"
+            status="${PIPESTATUS[0]}"
+            set -e
+
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq "$attempts" ]; then
+              echo "::error::Bazel validation failed after $attempts attempt(s)."
+              exit "$status"
+            fi
+
+            if ! grep -Eiq "(Error downloading|GET returned 5[0-9][0-9]|Bad Gateway|Proxy Error|connection reset|Connection timed out|TLS handshake timeout|Temporary failure)" "$log_path"; then
+              echo "::error::Bazel validation failed with a non-fetch error; not retrying."
+              exit "$status"
+            fi
+
+            echo "::warning::Bazel validation hit a transient external fetch/download failure on attempt $attempt/$attempts; retrying."
+            npx --yes @bazel/bazelisk shutdown >/dev/null 2>&1 || true
+            attempt=$((attempt + 1))
+          done
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
