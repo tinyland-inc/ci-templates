@@ -218,7 +218,7 @@ jobs:
           RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
           WORKSPACE_MODE: ${{ inputs.workspace_mode }}
           PUBLISH_MODE: ${{ inputs.publish_mode }}
-          BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts }}
+          BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
         run: |
           set -euo pipefail
           case "$RUNNER_MODE" in
@@ -392,6 +392,7 @@ jobs:
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
           BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
+          NODE_VERSION: ${{ matrix.node-version }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
