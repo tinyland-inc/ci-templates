@@ -118,8 +118,89 @@ on:
         required: false
 
 jobs:
+  resolve-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      validate_runner_labels_json: ${{ steps.resolve.outputs.validate_runner_labels_json }}
+      publish_runner_labels_json: ${{ steps.resolve.outputs.publish_runner_labels_json }}
+    steps:
+      - name: Resolve runner labels
+        id: resolve
+        shell: bash
+        env:
+          RUNNER_MODE: ${{ inputs.runner_mode }}
+          RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
+          SHARED_RUNNER_LABELS_JSON: ${{ inputs.shared_runner_labels_json }}
+          PUBLISH_MODE: ${{ inputs.publish_mode }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+
+          runner_mode = os.environ.get("RUNNER_MODE") or "compat"
+          publish_mode = os.environ.get("PUBLISH_MODE") or "same_runner"
+
+          if runner_mode not in {"compat", "hosted", "shared", "repo_owned"}:
+              raise SystemExit(f"Unsupported runner_mode: {runner_mode}")
+
+          if publish_mode not in {"same_runner", "hosted_exception"}:
+              raise SystemExit(f"Unsupported publish_mode: {publish_mode}")
+
+          def parse_labels(name: str, fallback: str) -> list[str]:
+              raw = os.environ.get(name) or fallback
+              try:
+                  labels = json.loads(raw)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f"{name} must be a JSON array: {exc}") from exc
+
+              if (
+                  not isinstance(labels, list)
+                  or not labels
+                  or not all(isinstance(label, str) and label for label in labels)
+              ):
+                  raise SystemExit(f"{name} must be a non-empty JSON array of strings")
+
+              return labels
+
+          runner_labels = parse_labels("RUNNER_LABELS_JSON", '["ubuntu-latest"]')
+          shared_runner_labels = parse_labels(
+              "SHARED_RUNNER_LABELS_JSON",
+              '["tinyland-docker"]',
+          )
+
+          if runner_mode == "hosted":
+              validate_runner_labels = ["ubuntu-latest"]
+          elif runner_mode == "shared":
+              validate_runner_labels = shared_runner_labels
+          else:
+              validate_runner_labels = runner_labels
+
+          if runner_mode == "repo_owned" and validate_runner_labels == ["ubuntu-latest"]:
+              raise SystemExit("runner_mode=repo_owned requires explicit runner_labels_json")
+
+          if publish_mode == "hosted_exception":
+              publish_runner_labels = ["ubuntu-latest"]
+          else:
+              publish_runner_labels = validate_runner_labels
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(
+                  "validate_runner_labels_json="
+                  + json.dumps(validate_runner_labels, separators=(",", ":")),
+                  file=output,
+              )
+              print(
+                  "publish_runner_labels_json="
+                  + json.dumps(publish_runner_labels, separators=(",", ":")),
+                  file=output,
+              )
+          PY
+
   validate:
-    runs-on: ${{ fromJson(inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    needs: resolve-runner
+    runs-on: ${{ fromJson(needs.resolve-runner.outputs.validate_runner_labels_json) }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -293,7 +374,9 @@ jobs:
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          npx --yes @bazel/bazelisk build $BAZEL_TARGETS --verbose_failures
+          # shellcheck disable=SC2153
+          read -r -a bazel_targets <<< "$BAZEL_TARGETS"
+          npx --yes @bazel/bazelisk build "${bazel_targets[@]}" --verbose_failures
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
@@ -360,9 +443,11 @@ jobs:
           if-no-files-found: error
 
   publish-npm:
-    needs: validate
+    needs:
+      - resolve-runner
+      - validate
     if: ${{ inputs.dry_run == false }}
-    runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJson(needs.resolve-runner.outputs.publish_runner_labels_json) }}
     timeout-minutes: 20
     steps:
       - name: Validate publish contract
@@ -418,9 +503,11 @@ jobs:
           npm publish "${PUBLISH_ARGS[@]}"
 
   publish-github:
-    needs: validate
+    needs:
+      - resolve-runner
+      - validate
     if: ${{ inputs.github_package_name != '' && inputs.dry_run == false }}
-    runs-on: ${{ fromJson(inputs.publish_mode == 'hosted_exception' && '["ubuntu-latest"]' || inputs.runner_labels_json || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJson(needs.resolve-runner.outputs.publish_runner_labels_json) }}
     timeout-minutes: 20
     steps:
       - name: Validate publish contract

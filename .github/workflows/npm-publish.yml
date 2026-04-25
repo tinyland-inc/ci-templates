@@ -74,7 +74,9 @@ jobs:
 
       - name: Verify no source maps in package
         run: |
-          npm pack --dry-run 2>&1 | grep '\.js\.map' && exit 1 || true
+          if npm pack --dry-run 2>&1 | grep '\.js\.map'; then
+            exit 1
+          fi
 
   publish-gpr:
     needs: build-and-test
