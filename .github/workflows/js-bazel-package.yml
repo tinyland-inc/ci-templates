@@ -401,7 +401,7 @@ jobs:
           attempts="$BAZEL_FETCH_RETRY_ATTEMPTS"
           attempt=1
           while [ "$attempt" -le "$attempts" ]; do
-            log_path="$RUNNER_TEMP/js-bazel-package-bazel-attempt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.node-version }}-${attempt}.log"
+            log_path="$RUNNER_TEMP/js-bazel-package-bazel-attempt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${NODE_VERSION}-${attempt}.log"
             set +e
             npx --yes @bazel/bazelisk build "${bazel_targets[@]}" --verbose_failures 2>&1 | tee "$log_path"
             status="${PIPESTATUS[0]}"
