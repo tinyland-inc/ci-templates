@@ -206,6 +206,9 @@ jobs:
     needs: resolve-runner
     runs-on: ${{ fromJson(needs.resolve-runner.outputs.validate_runner_labels_json) }}
     timeout-minutes: 30
+    env:
+      BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
+      NODE_VERSION: ${{ matrix.node-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -322,111 +325,170 @@ jobs:
             pnpm install --no-frozen-lockfile
           fi
 
-      - name: Prepare workspace
-        if: ${{ inputs.prepare_command != '' }}
+      - name: Install Bazel fetch retry helper
         shell: bash
         run: |
           set -euo pipefail
+          helper_path="$RUNNER_TEMP/js-bazel-package-bazel-fetch-retry.sh"
+          cat > "$helper_path" <<'BASH'
+          is_transient_bazel_fetch_failure() {
+            local log_path="$1"
+            grep -Eiq "(Error downloading|GET returned 5[0-9][0-9]|Bad Gateway|Proxy Error|connection reset|Connection timed out|TLS handshake timeout|Temporary failure)" "$log_path"
+          }
+
+          run_with_bazel_fetch_retry() {
+            local label="$1"
+            local command="$2"
+            local attempts="${BAZEL_FETCH_RETRY_ATTEMPTS:-3}"
+            local attempt=1
+            local slug
+
+            slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed -E 's/^-+//; s/-+$//')"
+            if [ -z "$slug" ]; then
+              slug="command"
+            fi
+
+            while [ "$attempt" -le "$attempts" ]; do
+              local log_path="$RUNNER_TEMP/js-bazel-package-${slug}-attempt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${NODE_VERSION:-unknown}-${attempt}.log"
+              set +e
+              bash -e -u -o pipefail -c "$command" 2>&1 | tee "$log_path"
+              local status="${PIPESTATUS[0]}"
+              set -e
+
+              if [ "$status" -eq 0 ]; then
+                return 0
+              fi
+
+              if [ "$attempt" -eq "$attempts" ]; then
+                echo "::error::$label failed after $attempts attempt(s)."
+                return "$status"
+              fi
+
+              if ! is_transient_bazel_fetch_failure "$log_path"; then
+                echo "::error::$label failed with a non-fetch error; not retrying."
+                return "$status"
+              fi
+
+              echo "::warning::$label hit a transient Bazel external fetch/download failure on attempt $attempt/$attempts; retrying."
+              npx --yes @bazel/bazelisk shutdown >/dev/null 2>&1 || true
+              sleep 10
+              attempt=$((attempt + 1))
+            done
+          }
+          BASH
+          echo "BAZEL_FETCH_RETRY_HELPER=$helper_path" >> "$GITHUB_ENV"
+
+      - name: Prepare workspace
+        if: ${{ inputs.prepare_command != '' }}
+        shell: bash
+        env:
+          COMMAND: ${{ inputs.prepare_command }}
+        run: |
+          set -euo pipefail
           cd "$WORKSPACE_DIR"
-          ${{ inputs.prepare_command }}
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          run_with_bazel_fetch_retry "Prepare workspace" "$COMMAND"
 
       - name: Verify release metadata
         if: ${{ inputs.metadata_check_command != '' }}
         shell: bash
+        env:
+          COMMAND: ${{ inputs.metadata_check_command }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          ${{ inputs.metadata_check_command }}
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          run_with_bazel_fetch_retry "Verify release metadata" "$COMMAND"
 
       - name: Lint
         if: ${{ inputs.lint_command != '' }}
         continue-on-error: ${{ inputs.lint_continue_on_error }}
         shell: bash
+        env:
+          COMMAND: ${{ inputs.lint_command }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          ${{ inputs.lint_command }}
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          run_with_bazel_fetch_retry "Lint" "$COMMAND"
 
       - name: Typecheck
         if: ${{ inputs.typecheck_command != '' }}
         continue-on-error: ${{ inputs.typecheck_continue_on_error }}
         shell: bash
+        env:
+          COMMAND: ${{ inputs.typecheck_command }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          ${{ inputs.typecheck_command }}
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          run_with_bazel_fetch_retry "Typecheck" "$COMMAND"
 
       - name: Unit tests
         if: ${{ inputs.unit_test_command != '' }}
         shell: bash
+        env:
+          COMMAND: ${{ inputs.unit_test_command }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          ${{ inputs.unit_test_command }}
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          run_with_bazel_fetch_retry "Unit tests" "$COMMAND"
 
       - name: Integration tests
         if: ${{ inputs.integration_test_command != '' }}
         shell: bash
+        env:
+          COMMAND: ${{ inputs.integration_test_command }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          ${{ inputs.integration_test_command }}
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          run_with_bazel_fetch_retry "Integration tests" "$COMMAND"
 
       - name: Build workspace artifact
         shell: bash
+        env:
+          COMMAND: ${{ inputs.build_command || 'pnpm build' }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          ${{ inputs.build_command || 'pnpm build' }}
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          run_with_bazel_fetch_retry "Build workspace artifact" "$COMMAND"
 
       - name: Validate package surface
         if: ${{ inputs.package_check_command != '' }}
         shell: bash
+        env:
+          COMMAND: ${{ inputs.package_check_command }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          ${{ inputs.package_check_command }}
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          run_with_bazel_fetch_retry "Validate package surface" "$COMMAND"
 
       - name: Validate Bazel targets
         shell: bash
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
-          BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
-          NODE_VERSION: ${{ matrix.node-version }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
           # shellcheck disable=SC2153
           read -r -a bazel_targets <<< "$BAZEL_TARGETS"
 
-          attempts="$BAZEL_FETCH_RETRY_ATTEMPTS"
-          attempt=1
-          while [ "$attempt" -le "$attempts" ]; do
-            log_path="$RUNNER_TEMP/js-bazel-package-bazel-attempt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${NODE_VERSION}-${attempt}.log"
-            set +e
-            npx --yes @bazel/bazelisk build "${bazel_targets[@]}" --verbose_failures 2>&1 | tee "$log_path"
-            status="${PIPESTATUS[0]}"
-            set -e
-
-            if [ "$status" -eq 0 ]; then
-              exit 0
-            fi
-
-            if [ "$attempt" -eq "$attempts" ]; then
-              echo "::error::Bazel validation failed after $attempts attempt(s)."
-              exit "$status"
-            fi
-
-            if ! grep -Eiq "(Error downloading|GET returned 5[0-9][0-9]|Bad Gateway|Proxy Error|connection reset|Connection timed out|TLS handshake timeout|Temporary failure)" "$log_path"; then
-              echo "::error::Bazel validation failed with a non-fetch error; not retrying."
-              exit "$status"
-            fi
-
-            echo "::warning::Bazel validation hit a transient external fetch/download failure on attempt $attempt/$attempts; retrying."
-            npx --yes @bazel/bazelisk shutdown >/dev/null 2>&1 || true
-            sleep 10
-            attempt=$((attempt + 1))
-          done
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          targets_quoted="$(printf '%q ' "${bazel_targets[@]}")"
+          run_with_bazel_fetch_retry "Validate Bazel targets" "npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
