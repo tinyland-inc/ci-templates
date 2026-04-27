@@ -120,6 +120,15 @@ on:
       NPM_TOKEN:
         description: "npmjs.com publish token"
         required: false
+      TINYLAND_REGISTRY_GITHUB_TOKEN:
+        description: "GitHub token with read access to private tinyland-inc Bazel module tarballs"
+        required: false
+      SYNC_PAT:
+        description: "Fallback GitHub token with read access to sibling tinyland-inc repositories"
+        required: false
+      GH_TOKEN:
+        description: "Fallback GitHub CLI token with read access to sibling tinyland-inc repositories"
+        required: false
 
 jobs:
   resolve-runner:
@@ -377,6 +386,67 @@ jobs:
           }
           BASH
           echo "BAZEL_FETCH_RETRY_HELPER=$helper_path" >> "$GITHUB_ENV"
+
+      - name: Install Bazel GitHub credential helper
+        shell: bash
+        env:
+          TINYLAND_REGISTRY_GITHUB_TOKEN: ${{ secrets.TINYLAND_REGISTRY_GITHUB_TOKEN || secrets.SYNC_PAT || secrets.GH_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+
+          helper_path="$RUNNER_TEMP/js-bazel-package-github-credential-helper"
+          cat > "$helper_path" <<'BASH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          if [ "${1:-}" != "get" ]; then
+            echo "unsupported credential helper command: ${1:-<missing>}" >&2
+            exit 1
+          fi
+
+          request_json="$(cat)"
+          REQUEST_JSON="$request_json" python3 - <<'PY'
+          import json
+          import os
+
+          try:
+              request = json.loads(os.environ.get("REQUEST_JSON") or "{}")
+          except json.JSONDecodeError:
+              request = {}
+
+          uri = str(request.get("uri") or "")
+          token = (
+              os.environ.get("TINYLAND_REGISTRY_GITHUB_TOKEN")
+              or os.environ.get("GH_TOKEN")
+              or os.environ.get("GITHUB_TOKEN")
+              or ""
+          )
+
+          if token and (
+              uri.startswith("https://github.com/tinyland-inc/")
+              or uri.startswith("https://raw.githubusercontent.com/tinyland-inc/")
+          ):
+              print(json.dumps({"headers": {"Authorization": [f"Bearer {token}"]}}))
+          else:
+              print(json.dumps({"headers": {}}))
+          PY
+          BASH
+          chmod +x "$helper_path"
+
+          {
+            echo "common --credential_helper=github.com=$helper_path"
+            echo "common --credential_helper=raw.githubusercontent.com=$helper_path"
+          } >> user.bazelrc
+
+          if [ -n "${TINYLAND_REGISTRY_GITHUB_TOKEN:-}" ]; then
+            {
+              printf 'TINYLAND_REGISTRY_GITHUB_TOKEN=%s\n' "$TINYLAND_REGISTRY_GITHUB_TOKEN"
+              printf 'BAZEL_GITHUB_CREDENTIAL_HELPER=%s\n' "$helper_path"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::warning::No GitHub token is available for private Bazel module tarball fetches."
+          fi
 
       - name: Prepare workspace
         if: ${{ inputs.prepare_command != '' }}
