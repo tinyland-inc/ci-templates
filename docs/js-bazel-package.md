@@ -89,6 +89,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -113,12 +114,20 @@ jobs:
       package_dir: ./bazel-bin/pkg
       github_package_name: "@jesssullivan/scheduling-kit"
       dry_run: true
+      publish_on_tag: true
     secrets: inherit
 ```
 
 ## Example: hosted template consumer
 
 ```yaml
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
 jobs:
   package:
     uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@main
@@ -133,6 +142,7 @@ jobs:
       bazel_targets: "//:pkg"
       package_dir: ./bazel-bin/pkg
       dry_run: true
+      publish_on_tag: true
 ```
 
 ## Notes
@@ -151,6 +161,11 @@ jobs:
   failures are not retried.
 - `publish_mode=hosted_exception` intentionally overrides the selected runner
   lane for publish jobs and uses `ubuntu-latest`.
+- `dry_run: true` keeps pull requests and branch pushes in validation-only mode.
+  Set `publish_on_tag: true` in package repositories that should publish the
+  Bazel artifact when the caller workflow is triggered by a `push` to `refs/tags/v*`.
+  The caller workflow must include an `on.push.tags` trigger, and npmjs
+  publication still requires `secrets.NPM_TOKEN`.
 - self-hosted jobs now call `nix-setup`, so Attic and Bazel cache hints are
   explicit instead of incidental runner state.
 - `workspace_mode=isolated` is the preferred contract for downstream pilots.
