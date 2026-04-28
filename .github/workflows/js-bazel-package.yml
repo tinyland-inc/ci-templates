@@ -105,7 +105,7 @@ on:
         type: string
         default: "https://registry.npmjs.org"
       github_package_name:
-        description: "Optional full package name to use for GitHub Packages dry-runs/publication"
+        description: "Optional GitHub Packages package name; scope must match the GitHub owner, not necessarily the npmjs scope"
         type: string
         default: ""
       github_package_registry:

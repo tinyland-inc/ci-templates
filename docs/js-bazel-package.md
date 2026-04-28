@@ -81,6 +81,16 @@ Meaning:
   - validate on the chosen runner class
   - publish from `ubuntu-latest` intentionally after artifact handoff
 
+### `github_package_name`
+
+`github_package_name` is the package coordinate used only for the GitHub
+Packages artifact. It may intentionally differ from the npmjs package name.
+
+GitHub Packages npm scopes are owner-bound, so the scope must match the GitHub
+account or organization that owns the package. For a `tinyland-inc/*` repository
+whose public npm package is `@tummycrypt/tinyland-auth`, use a GitHub Packages
+mirror name such as `@tinyland-inc/tinyland-auth`.
+
 ## Example: repo-owned self-hosted package path
 
 ```yaml
