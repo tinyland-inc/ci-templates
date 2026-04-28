@@ -124,7 +124,7 @@ on:
       NPM_TOKEN:
         description: "npmjs.com publish token"
         required: false
-      GITHUB_PACKAGES_TOKEN:
+      TINYLAND_GITHUB_PACKAGES_TOKEN:
         description: "Optional GitHub Packages token with write:packages for existing granular packages that do not grant GITHUB_TOKEN workflow access"
         required: false
       TINYLAND_REGISTRY_GITHUB_TOKEN:
@@ -708,7 +708,7 @@ jobs:
       - name: Validate publish contract
         shell: bash
         env:
-          GITHUB_PACKAGES_TOKEN_PRESENT: ${{ secrets.GITHUB_PACKAGES_TOKEN != '' }}
+          TINYLAND_GITHUB_PACKAGES_TOKEN_PRESENT: ${{ secrets.TINYLAND_GITHUB_PACKAGES_TOKEN != '' }}
         run: |
           set -euo pipefail
           case "${{ inputs.publish_mode }}" in
@@ -718,8 +718,8 @@ jobs:
               exit 1
               ;;
           esac
-          if [ "$GITHUB_PACKAGES_TOKEN_PRESENT" = "true" ]; then
-            echo "Using GITHUB_PACKAGES_TOKEN for GitHub Packages publication."
+          if [ "$TINYLAND_GITHUB_PACKAGES_TOKEN_PRESENT" = "true" ]; then
+            echo "Using TINYLAND_GITHUB_PACKAGES_TOKEN for GitHub Packages publication."
           else
             echo "Using workflow GITHUB_TOKEN for GitHub Packages publication."
           fi
@@ -775,6 +775,6 @@ jobs:
       - name: Publish GitHub Packages artifact
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_PACKAGES_TOKEN || github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.TINYLAND_GITHUB_PACKAGES_TOKEN || github.token }}
           NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
         run: npm publish "$PUBLISH_ROOT/pkg-github" --access "$NPM_ACCESS" --ignore-scripts
