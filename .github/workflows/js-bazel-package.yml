@@ -116,6 +116,10 @@ on:
         description: "When true, publish jobs only perform dry-runs"
         type: boolean
         default: true
+      publish_on_tag:
+        description: "When true, publish jobs run on push tag events even when dry_run remains true for PRs and branches"
+        type: boolean
+        default: false
     secrets:
       NPM_TOKEN:
         description: "npmjs.com publish token"
@@ -628,12 +632,14 @@ jobs:
     needs:
       - resolve-runner
       - validate
-    if: ${{ inputs.dry_run == false }}
+    if: ${{ inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) }}
     runs-on: ${{ fromJson(needs.resolve-runner.outputs.publish_runner_labels_json) }}
     timeout-minutes: 20
     steps:
       - name: Validate publish contract
         shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           case "${{ inputs.publish_mode }}" in
@@ -643,6 +649,10 @@ jobs:
               exit 1
               ;;
           esac
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is required for npmjs publication." >&2
+            exit 1
+          fi
 
       - name: Configure self-hosted cache contract
         if: ${{ runner.environment != 'github-hosted' }}
@@ -688,7 +698,7 @@ jobs:
     needs:
       - resolve-runner
       - validate
-    if: ${{ inputs.github_package_name != '' && inputs.dry_run == false }}
+    if: ${{ inputs.github_package_name != '' && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
     runs-on: ${{ fromJson(needs.resolve-runner.outputs.publish_runner_labels_json) }}
     timeout-minutes: 20
     steps:
