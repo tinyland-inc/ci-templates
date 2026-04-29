@@ -686,12 +686,24 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
+          NPM_REGISTRY_URL: ${{ inputs.npm_registry_url || 'https://registry.npmjs.org' }}
           PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           set -euo pipefail
           PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
-          PUBLISH_ARGS=("$PUBLISH_ROOT/$PACKAGE_BASENAME" --ignore-scripts --access "$NPM_ACCESS")
+          PACKAGE_PATH="$PUBLISH_ROOT/$PACKAGE_BASENAME"
+          PACKAGE_JSON="$PACKAGE_PATH/package.json"
+          PACKAGE_NAME=$(node -e "const pkg=require(process.argv[1]); if (!pkg.name) process.exit(1); console.log(pkg.name)" "$PACKAGE_JSON")
+          PACKAGE_VERSION=$(node -e "const pkg=require(process.argv[1]); if (!pkg.version) process.exit(1); console.log(pkg.version)" "$PACKAGE_JSON")
+          PACKAGE_ID="${PACKAGE_NAME}@${PACKAGE_VERSION}"
+          if existing_version=$(npm view "$PACKAGE_ID" version --registry "$NPM_REGISTRY_URL" 2>/dev/null); then
+            if [ "$existing_version" = "$PACKAGE_VERSION" ]; then
+              echo "::notice::Skipping npmjs publish because $PACKAGE_ID already exists in $NPM_REGISTRY_URL."
+              exit 0
+            fi
+          fi
+          PUBLISH_ARGS=("$PACKAGE_PATH" --ignore-scripts --access "$NPM_ACCESS")
           if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
             PUBLISH_ARGS+=(--provenance)
           fi
@@ -776,5 +788,19 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.TINYLAND_GITHUB_PACKAGES_TOKEN || github.token }}
+          GITHUB_PACKAGE_REGISTRY: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
           NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
-        run: npm publish "$PUBLISH_ROOT/pkg-github" --access "$NPM_ACCESS" --ignore-scripts
+        run: |
+          set -euo pipefail
+          PACKAGE_PATH="$PUBLISH_ROOT/pkg-github"
+          PACKAGE_JSON="$PACKAGE_PATH/package.json"
+          PACKAGE_NAME=$(node -e "const pkg=require(process.argv[1]); if (!pkg.name) process.exit(1); console.log(pkg.name)" "$PACKAGE_JSON")
+          PACKAGE_VERSION=$(node -e "const pkg=require(process.argv[1]); if (!pkg.version) process.exit(1); console.log(pkg.version)" "$PACKAGE_JSON")
+          PACKAGE_ID="${PACKAGE_NAME}@${PACKAGE_VERSION}"
+          if existing_version=$(npm view "$PACKAGE_ID" version --registry "$GITHUB_PACKAGE_REGISTRY" 2>/dev/null); then
+            if [ "$existing_version" = "$PACKAGE_VERSION" ]; then
+              echo "::notice::Skipping GitHub Packages publish because $PACKAGE_ID already exists in $GITHUB_PACKAGE_REGISTRY."
+              exit 0
+            fi
+          fi
+          npm publish "$PACKAGE_PATH" --access "$NPM_ACCESS" --ignore-scripts

@@ -185,3 +185,9 @@ jobs:
   validation workspace stays in compatibility mode.
 - npmjs publication still requests provenance on hosted runners and skips it on
   self-hosted runners when needed.
+- real publish jobs are idempotent for already-published package versions. After
+  extracting the Bazel artifact, the npmjs and GitHub Packages jobs check
+  whether the exact `name@version` already exists in the target registry and
+  skip only that duplicate-version case. Registry lookup failures or absent
+  versions still fall through to `npm publish` so permission and package errors
+  remain visible.
