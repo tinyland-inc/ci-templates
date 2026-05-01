@@ -191,3 +191,7 @@ jobs:
   skip only that duplicate-version case. Registry lookup failures or absent
   versions still fall through to `npm publish` so permission and package errors
   remain visible.
+- npm publish dry-run validation also treats npm's duplicate-version rejection
+  as an idempotent pass. Newer npm versions may reject `npm publish --dry-run`
+  for an already-published version even though the preceding `npm pack`
+  validation proved the package artifact shape.

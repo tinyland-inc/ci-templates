@@ -584,7 +584,18 @@ jobs:
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          npm publish --dry-run --ignore-scripts --access "$NPM_ACCESS" "$PACKAGE_DIR"
+          set +e
+          dry_run_output="$(npm publish --dry-run --ignore-scripts --access "$NPM_ACCESS" "$PACKAGE_DIR" 2>&1)"
+          dry_run_status="$?"
+          set -e
+          printf '%s\n' "$dry_run_output"
+          if [ "$dry_run_status" -ne 0 ]; then
+            if grep -Fq "You cannot publish over the previously published versions" <<<"$dry_run_output"; then
+              echo "::notice::Skipping npm publish dry-run because this exact package version already exists in npm."
+            else
+              exit "$dry_run_status"
+            fi
+          fi
 
       - name: Validate GitHub Packages dry-run from Bazel artifact
         if: ${{ inputs.github_package_name != '' }}
@@ -691,6 +702,7 @@ jobs:
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           set -euo pipefail
+          : "${PACKAGE_DIR:?}"
           PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
           PACKAGE_PATH="$PUBLISH_ROOT/$PACKAGE_BASENAME"
           PACKAGE_JSON="$PACKAGE_PATH/package.json"
