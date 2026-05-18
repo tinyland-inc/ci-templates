@@ -158,7 +158,6 @@ jobs:
       matrix:
         lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
     runs-on: tinyland-nix-kvm
-    if-skip: ${{ !matrix.lane.e2e }}
     steps:
       - uses: actions/checkout@v6
       - if: matrix.lane.e2e

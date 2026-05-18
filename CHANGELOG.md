@@ -5,6 +5,27 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`spoke-ci.yml` — strip literal `${{ ... }}` expressions from
+  `inputs.runner_labels_json.description`** — GitHub evaluates
+  `${{...}}` inside workflow-level `description:` text at PARSE time
+  and rejects expressions that reference contexts not available there
+  (`vars`, `secrets`, etc.). v1.1.0 shipped two example expressions
+  inside the description, which caused every caller to fail in 0
+  seconds with no jobs created. Replaced the embedded expressions with
+  plain-text guidance pointing to the README / release notes.
+- **`spoke-lane-env.yml` — remove invalid `if-skip:` job key on
+  `tailnet-qa`** — `if-skip` is not a valid GitHub Actions keyword.
+  Workflow parser rejects with `unexpected key "if-skip" for "job"
+  section`. The step-level `if: matrix.lane.e2e` on line 164 already
+  handles per-lane gating.
+
+Both bugs surfaced during darkmap M3-completion PR #86 (TIN-1398).
+Together they made v1.1.0 unusable for any spoke that calls
+`spoke-ci.yml@v1.1.0` or `spoke-lane-env.yml@v1.1.0` directly. Ships
+as v1.1.1.
+
 ### Changed
 
 - **`spoke-lane-env.yml` — `BLAHAJ_DISPATCH_TOKEN: required: false`** —
