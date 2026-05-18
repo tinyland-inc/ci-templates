@@ -1,16 +1,28 @@
 name: "Setup Nix (detect-or-install)"
 description: >
-  Composite that adds /nix/var/nix/profiles/default/bin + $HOME/.nix-profile/bin
-  to PATH, then probes for an existing Nix installation. If present, ensures
-  feature flags (nix-command + flakes) and exits. If absent, falls through to
-  DeterminateSystems/determinate-nix-action@v3.
+  Composite that ensures Nix is installed AND reachable for the runner user.
+  Mirrors the working pattern from tinyland-inc/GloriousFlywheel/.github/actions/nix-job.
 
-  Replaces direct use of cachix/install-nix-action@vN, which aborts with
-  "Aborting: Nix is already installed" when run on self-hosted runners that
-  have Nix preinstalled at /nix/var/nix/profiles/default/bin/nix — then
-  subsequent `nix develop` fails with "Permission denied" on the daemon lock
-  because the cachix action's setup steps didn't run to put the runner user
-  in the right group. Surfaced by darkmap PR #86 / TIN-1402.
+  Steps in order:
+    1. Add /nix/var/nix/profiles/default/bin + $HOME/.nix-profile/bin to PATH.
+    2. Probe `command -v nix` to detect a preinstalled install.
+    3. If absent → DeterminateSystems/determinate-nix-action@v3 (installs single-user).
+    4. If present → write per-user ~/.config/nix/nix.conf with the requested
+       experimental-features (no sudo).
+    5. Ensure the `nixbld` group + nixbld1..nixbld32 build users exist —
+       multi-user Nix requires them, and self-hosted runner images often
+       have nix binaries without these prerequisites in place.
+    6. Probe `nix store ping`; if it fails, start the daemon
+       (`determinate-nixd daemon` or `nix-daemon --daemon`) and wait up to
+       15 s for the socket to come up. This is the missing piece that
+       caused "Permission denied: /nix/var/nix/db/big-lock" on the
+       Tinyland self-hosted runners — Nix was installed but the daemon
+       socket wasn't reachable, so `nix develop` fell back to direct
+       database access and the runner user couldn't get the lock.
+
+  Surfaced by darkmap PR #86 / TIN-1402 (v1.1.2 introduced steps 1-4 but
+  v1.1.2 still failed because the daemon was not running; v1.1.3 adds
+  steps 5 and 6).
 
 inputs:
   extra_nix_config:
@@ -63,9 +75,6 @@ runs:
         config_path="${HOME}/.config/nix/nix.conf"
         mkdir -p "$(dirname "$config_path")"
         touch "$config_path"
-        # Append each non-empty line from extra_nix_config that isn't already present.
-        # Per-user nix.conf is honored by single-user installs and by multi-user
-        # installs for the runner user. No sudo required.
         while IFS= read -r line; do
           [ -z "$line" ] && continue
           if ! grep -Fxq -- "$line" "$config_path"; then
@@ -74,3 +83,61 @@ runs:
         done <<< "$SETUP_NIX_EXTRA_CONFIG"
         echo "::notice::Wrote per-user nix.conf at $config_path"
         cat "$config_path"
+
+    - name: Ensure Nix build users exist
+      shell: bash
+      run: |
+        set -euo pipefail
+        LOGIN_SHELL="$(command -v nologin || echo /bin/false)"
+        if ! getent group nixbld >/dev/null 2>&1; then
+          sudo groupadd --system nixbld
+        fi
+        for i in $(seq 1 32); do
+          user="nixbld$i"
+          if ! id -u "$user" >/dev/null 2>&1; then
+            sudo useradd \
+              --system \
+              --gid nixbld \
+              --groups nixbld \
+              --home-dir /var/empty \
+              --no-create-home \
+              --shell "$LOGIN_SHELL" \
+              "$user"
+          fi
+        done
+
+    - name: Ensure Nix daemon is reachable
+      shell: bash
+      run: |
+        set -euo pipefail
+        export PATH="/nix/var/nix/profiles/default/bin:$HOME/.nix-profile/bin:$PATH"
+
+        if nix store ping >/dev/null 2>&1; then
+          echo "::notice::Nix daemon socket is reachable."
+          exit 0
+        fi
+
+        echo "::warning::Nix is installed but daemon socket unreachable; starting the daemon."
+        sudo rm -f /nix/var/nix/daemon-socket/socket || true
+
+        if command -v determinate-nixd >/dev/null 2>&1; then
+          sudo -b "$(command -v determinate-nixd)" daemon
+        else
+          NIX_DAEMON_BIN="$(command -v nix-daemon || true)"
+          if [ -z "$NIX_DAEMON_BIN" ]; then
+            echo "::error::nix-daemon is not on PATH, and nix store ping failed"
+            exit 1
+          fi
+          sudo -b "$NIX_DAEMON_BIN" --daemon
+        fi
+
+        for _ in $(seq 1 15); do
+          if nix store ping >/dev/null 2>&1; then
+            echo "::notice::Nix daemon came up."
+            exit 0
+          fi
+          sleep 1
+        done
+
+        echo "::error::nix-daemon did not become reachable after restart"
+        exit 1
