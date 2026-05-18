@@ -7,6 +7,46 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Changed
 
+- **`spoke-lane-env.yml` — `BLAHAJ_DISPATCH_TOKEN: required: false`** —
+  loosen the secret contract so spokes can keep the `pull_request:`
+  trigger enabled before Blahaj is installed on the repo. New
+  internal `check-blahaj-token` job runs first and gates every
+  downstream job's `if:` on token presence — empty token = whole
+  pipeline skips cleanly with a `::notice::`, NOT a workflow-file
+  parse failure.
+
+  Surfaced by darkmap M6 validation
+  ([test PR #82](https://github.com/Jesssullivan/darkmap.tinyland.dev/pull/82)):
+  GitHub resolves required secrets at workflow-call PARSE time,
+  before the job-level `if:` evaluates. So `required: true` +
+  empty caller secret = parse-time failure, and the gate never gets
+  a chance to short-circuit. Reversing to `required: false` lets the
+  job-level gate actually do its job. Backward-compatible: callers
+  that DO have the secret continue to work identically.
+
+### Added
+
+- **`spoke-ci.yml` — new `runner_labels_json` optional input** —
+  JSON-array expression evaluated via `fromJSON()` to set the
+  per-lane matrix jobs' `runs-on`. When set (non-empty), takes
+  precedence over `matrix.lane.runner_class` and
+  `default_runner_class`.
+
+  Enables spokes with dynamic runner-class fallback (e.g.
+  `runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}`)
+  to adopt the `spoke-ci.yml` wrapper without losing graceful
+  degradation when cluster labels aren't reachable.
+
+  Surfaced by darkmap M3 partial (TIN-1384). Without this input,
+  spokes with their own runner-routing logic (darkmap, MassageIthaca)
+  couldn't replace their hand-rolled `ci.yml` with the wrapper.
+  Now they can. Backward-compatible: existing callers that leave
+  this unset see no behavior change.
+
+## [1.0.1] — 2026-05-18
+
+### Changed
+
 - **`RELEASING.md` § Release flow** — documented the manual-tag
   fallback (step 3b) for environments where the workflow-driven
   release path (step 3a) doesn't hold. Specifically:

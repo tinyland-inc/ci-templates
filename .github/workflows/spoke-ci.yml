@@ -21,6 +21,24 @@ on:
       default_runner_class:
         type: string
         default: tinyland-nix
+        description: Single runner-class label for matrix jobs. Used when `runner_labels_json` is unset and lanes.json doesn't override per-lane.
+      runner_labels_json:
+        type: string
+        default: ""
+        description: |
+          Optional JSON-array expression evaluating to the runs-on labels
+          for matrix jobs. When set (non-empty), takes precedence over
+          `matrix.lane.runner_class` and `default_runner_class`. Enables
+          spokes with dynamic fallback patterns (e.g. graceful degradation
+          to `ubuntu-latest` when cluster labels aren't reachable) to
+          adopt the wrapper without losing their runner-routing logic.
+
+          Example value from the caller:
+            runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]' }}
+
+          The string must be a JSON array. The receiver runs
+          `${{ fromJSON(inputs.runner_labels_json) }}` when this input is
+          non-empty.
       gitleaks_config:
         type: string
         default: .gitleaks.toml
@@ -73,7 +91,7 @@ jobs:
       fail-fast: false
       matrix:
         lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
-    runs-on: ${{ matrix.lane.runner_class || inputs.default_runner_class }}
+    runs-on: ${{ inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
@@ -111,7 +129,7 @@ jobs:
       fail-fast: false
       matrix:
         lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
-    runs-on: ${{ matrix.lane.runner_class || inputs.default_runner_class }}
+    runs-on: ${{ inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
