@@ -1,0 +1,128 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/tinyland-inc/elders.tinyland.dev/main/docs/schemas/blahaj-dispatch.schema.json",
+	"title": "Tinyland Blahaj lane-env repository_dispatch payload",
+	"description": "Canonical payload shape for the `<spoke>-lane-env` repository_dispatch event sent from any spoke CI workflow to tinyland-inc/blahaj. One schema with an `operation` discriminator covers both provision and destroy. See docs/CI-SCHEMA.md §4.",
+	"type": "object",
+	"required": ["event_type", "client_payload"],
+	"additionalProperties": false,
+	"properties": {
+		"event_type": {
+			"type": "string",
+			"pattern": "^[a-z][a-z0-9-]+-lane-env$",
+			"description": "Form: `<spoke.name>-lane-env`. Example: `massageithaca-lane-env`. Blahaj routes on the spoke prefix."
+		},
+		"client_payload": {
+			"type": "object",
+			"required": [
+				"schema_version",
+				"operation",
+				"spoke",
+				"pr_number",
+				"commit_sha",
+				"source_ref",
+				"image_ref",
+				"ttl_hours",
+				"tofu_state_prefix",
+				"lanes"
+			],
+			"additionalProperties": false,
+			"properties": {
+				"schema_version": {
+					"const": 1,
+					"description": "Payload schema major version. Bumped with the lanes.json schema."
+				},
+				"operation": {
+					"enum": ["provision", "destroy"],
+					"description": "Discriminator. `destroy` is idempotent — Blahaj treats an absent env as success."
+				},
+				"spoke": {
+					"type": "string",
+					"pattern": "^[a-z][a-z0-9-]{1,62}$",
+					"description": "Spoke slug (matches lanes.json spoke.name)."
+				},
+				"domain": {
+					"type": "string",
+					"format": "hostname",
+					"description": "Spoke brand domain (matches lanes.json spoke.domain). Optional on destroy."
+				},
+				"pr_number": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"source_ref": {
+					"type": "string",
+					"description": "Git ref, typically `refs/pull/<N>/head`."
+				},
+				"commit_sha": {
+					"type": "string",
+					"pattern": "^[0-9a-f]{40}$",
+					"description": "Full commit SHA. Blahaj uses this to keep concurrent force-pushes correlated."
+				},
+				"image_ref": {
+					"type": "string",
+					"description": "Full GHCR image reference (e.g. `ghcr.io/owner/spoke:pr-N-sha-XXXX`). On destroy may be the literal string `expired-destroy`."
+				},
+				"ttl_hours": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 720,
+					"description": "Effective TTL after applying lanes.json defaults + per-lane overrides + per-PR label overrides. On destroy may be set to 1."
+				},
+				"tofu_state_prefix": {
+					"type": "string",
+					"pattern": "^[a-z][a-z0-9-]{0,62}/[1-9][0-9]*$",
+					"description": "S3 key prefix `<spoke>/<pr_number>`. Lane suffix is appended by Blahaj from lane.tofu_state_suffix (or lane.name). Hard invariant: state backend is env-owned S3-compatible, never rustfs."
+				},
+				"lanes": {
+					"type": "array",
+					"minItems": 1,
+					"items": {
+						"type": "object",
+						"required": ["name", "fqdn"],
+						"additionalProperties": false,
+						"properties": {
+							"name": {
+								"type": "string",
+								"pattern": "^[a-z][a-z0-9-]{0,30}$"
+							},
+							"fqdn": {
+								"type": "string",
+								"format": "hostname",
+								"description": "Computed: lane.domain || `pr-{PR_NUMBER}-{name}.<spoke.domain>`."
+							},
+							"theme": { "type": "string" },
+							"snapshot_source": { "type": "string" },
+							"tofu_state_suffix": {
+								"type": "string",
+								"pattern": "^[a-z0-9-]{1,32}$"
+							},
+							"ttl_hours": {
+								"type": "integer",
+								"minimum": 1,
+								"maximum": 720
+							},
+							"e2e": { "type": "boolean" },
+							"extra": {
+								"type": "object",
+								"additionalProperties": true
+							}
+						}
+					}
+				}
+			},
+			"allOf": [
+				{
+					"if": { "properties": { "operation": { "const": "provision" } } },
+					"then": {
+						"properties": {
+							"image_ref": {
+								"not": { "const": "expired-destroy" }
+							}
+						}
+					}
+				}
+			]
+		}
+	}
+}

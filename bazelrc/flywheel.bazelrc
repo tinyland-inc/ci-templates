@@ -1,0 +1,42 @@
+# .bazelrc.flywheel — GloriousFlywheel cache + REAPI binding for tinyland spokes
+#
+# Vendored from tinyland-inc/ci-templates@v1.0.0/bazelrc/flywheel.bazelrc.
+# Refresh via `just sync-flywheel-bazelrc` once the ci-templates v1.0.0
+# tag is published.
+#
+# See docs/CI-SCHEMA.md §5 for the contract:
+#   --config=flywheel           cache-only, safe from any cluster-reachable runner
+#   --config=flywheel-executor  cache + REAPI executor, proved target classes only,
+#                               cluster runners only (refused by ci-templates'
+#                               flywheel-bazel composite on ubuntu-latest)
+#
+# Hard invariants (do not violate):
+#   - Do not promote rustfs to RBE CAS / action-cache authority.
+#   - Do not add OpenTofu (opentofu-validate, opentofu-fmt) to executor mode.
+#   - Do not add developer-server targets (//app:dev) to executor mode.
+#   - Cache hits are not RBE.
+
+# ─────────────────────────────────────────────────────────────────────────
+# --config=flywheel : remote cache only
+# ─────────────────────────────────────────────────────────────────────────
+common:flywheel --remote_cache=grpc://bazel-cache.nix-cache.svc.cluster.local:9092
+common:flywheel --remote_upload_local_results=true
+common:flywheel --remote_local_fallback
+common:flywheel --remote_timeout=60
+
+# ─────────────────────────────────────────────────────────────────────────
+# --config=flywheel-executor : remote executor + remote cache
+# Inherits cache config; adds REAPI executor + worker platform pin.
+# Proved-class target tag filter ensures only allowlisted actions ship.
+# ─────────────────────────────────────────────────────────────────────────
+common:flywheel-executor --config=flywheel
+common:flywheel-executor --remote_executor=grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980
+common:flywheel-executor --remote_download_minimal
+common:flywheel-executor --jobs=200
+# Worker platform pin: only the gloriousflywheel-rbe-linux-x86_64 image is proved.
+# Spokes that need a different platform must promote via a GloriousFlywheel PR.
+common:flywheel-executor --extra_execution_platforms=@gloriousflywheel//platforms:linux-x86_64
+# Proved-class gating: only targets tagged `flywheel-eligible` may dispatch.
+# Spoke BUILD.bazel adds `tags = ["flywheel-eligible"]` per-target.
+common:flywheel-executor --build_tag_filters=flywheel-eligible
+common:flywheel-executor --test_tag_filters=flywheel-eligible
