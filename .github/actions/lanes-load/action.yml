@@ -1,0 +1,104 @@
+name: lanes-load
+description: |
+  Read and validate .github/lanes.json against schemas/lanes.schema.json.
+  Outputs the validated lanes array (for strategy.matrix.lane consumption)
+  plus derived helpers (styles_json, lane_count, schema_version).
+
+  Fixes the MassageIthaca duplication bug: lane names are derived ONCE
+  from lanes.json, not duplicated inline in workflow YAML.
+
+  Contract: tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §3.
+
+inputs:
+  path:
+    description: Path to lanes.json (relative to the consumer repo's checkout root).
+    required: false
+    default: .github/lanes.json
+  filter:
+    description: |
+      Comma-separated lane names to keep, or `all`. Used by downstream
+      lane-reap consumers that want to target a subset.
+    required: false
+    default: all
+
+outputs:
+  lanes_json:
+    description: Validated lanes array as a JSON string. Pass to `fromJson(...)` in strategy.matrix.
+    value: ${{ steps.load.outputs.lanes_json }}
+  styles_json:
+    description: '[lane.name for lane in lanes] — the legacy Blahaj field, derived not duplicated.'
+    value: ${{ steps.load.outputs.styles_json }}
+  lane_count:
+    description: Integer count of selected lanes.
+    value: ${{ steps.load.outputs.lane_count }}
+  schema_version:
+    description: lanes.json top-level schema_version value.
+    value: ${{ steps.load.outputs.schema_version }}
+  spoke_name:
+    description: lanes.json spoke.name.
+    value: ${{ steps.load.outputs.spoke_name }}
+  spoke_domain:
+    description: lanes.json spoke.domain.
+    value: ${{ steps.load.outputs.spoke_domain }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate lanes.json against schema
+      shell: bash
+      run: |
+        set -euo pipefail
+        schema="${{ github.action_path }}/../../../schemas/lanes.schema.json"
+        if [[ ! -f "$schema" ]]; then
+          echo "::error::ci-templates schema missing at $schema"
+          exit 1
+        fi
+        if [[ ! -f "${{ inputs.path }}" ]]; then
+          echo "::error::lanes.json not found at ${{ inputs.path }}"
+          exit 1
+        fi
+        python3 - <<PY
+        import json, sys
+        from jsonschema import Draft202012Validator
+        schema = json.load(open("$schema"))
+        inst   = json.load(open("${{ inputs.path }}"))
+        Draft202012Validator.check_schema(schema)
+        errors = sorted(Draft202012Validator(schema).iter_errors(inst), key=lambda e: list(e.absolute_path))
+        if errors:
+            for e in errors:
+                p = "/" + "/".join(str(x) for x in e.absolute_path)
+                print(f"::error file=${{ inputs.path }}::at {p}: {e.message}", file=sys.stderr)
+            sys.exit(1)
+        PY
+
+    - name: Load + filter lanes
+      id: load
+      shell: bash
+      run: |
+        set -euo pipefail
+        filter="${{ inputs.filter }}"
+        if [[ "$filter" == "all" || -z "$filter" ]]; then
+          lanes_json=$(jq -c '.lanes' "${{ inputs.path }}")
+        else
+          # comma-separated names
+          IFS=',' read -ra wanted <<< "$filter"
+          jq_filter=$(printf '%s\n' "${wanted[@]}" | jq -R . | jq -s .)
+          lanes_json=$(jq -c --argjson wanted "$jq_filter" '[.lanes[] | select(.name as $n | $wanted | index($n))]' "${{ inputs.path }}")
+        fi
+
+        styles_json=$(echo "$lanes_json" | jq -c '[.[].name]')
+        lane_count=$(echo "$lanes_json" | jq 'length')
+        schema_version=$(jq -r '.schema_version' "${{ inputs.path }}")
+        spoke_name=$(jq -r '.spoke.name' "${{ inputs.path }}")
+        spoke_domain=$(jq -r '.spoke.domain' "${{ inputs.path }}")
+
+        {
+          echo "lanes_json=$lanes_json"
+          echo "styles_json=$styles_json"
+          echo "lane_count=$lane_count"
+          echo "schema_version=$schema_version"
+          echo "spoke_name=$spoke_name"
+          echo "spoke_domain=$spoke_domain"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice::loaded $lane_count lane(s) from ${{ inputs.path }} (spoke=$spoke_name, schema_version=$schema_version)"

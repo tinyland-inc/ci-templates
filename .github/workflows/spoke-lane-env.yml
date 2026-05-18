@@ -1,0 +1,160 @@
+name: spoke-lane-env
+on:
+  workflow_call:
+    inputs:
+      spoke:
+        type: string
+        required: true
+      image_repository:
+        type: string
+        required: false
+        description: Defaults to ghcr.io/<repo-owner>/<spoke>.
+        default: ""
+      lanes_path:
+        type: string
+        default: .github/lanes.json
+      blahaj_repository:
+        type: string
+        default: tinyland-inc/blahaj
+      enable_tailnet_qa:
+        type: boolean
+        default: false
+      reap:
+        type: boolean
+        default: false
+      pr_number:
+        type: number
+        required: false
+        default: 0
+    secrets:
+      BLAHAJ_DISPATCH_TOKEN:
+        required: true
+      TAILSCALE_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+  statuses: write
+  deployments: write
+
+concurrency:
+  group: spoke-lane-env-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  lanes-load:
+    runs-on: ubuntu-latest
+    outputs:
+      lanes_json: ${{ steps.load.outputs.lanes_json }}
+      spoke_name: ${{ steps.load.outputs.spoke_name }}
+      spoke_domain: ${{ steps.load.outputs.spoke_domain }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - id: load
+        uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v1.0.0
+        with:
+          path: ${{ inputs.lanes_path }}
+
+  publish-image:
+    if: github.event.action != 'closed' && !inputs.reap
+    needs: [lanes-load]
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
+    runs-on: tinyland-dind
+    outputs:
+      image_ref: ${{ steps.build.outputs.image_ref }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve image ref
+        id: imgref
+        run: |
+          set -euo pipefail
+          repo="${{ inputs.image_repository }}"
+          if [[ -z "$repo" ]]; then
+            owner=$(echo "${{ github.repository }}" | cut -d/ -f1 | tr '[:upper:]' '[:lower:]')
+            repo="ghcr.io/$owner/${{ inputs.spoke }}"
+          fi
+          tag="pr-${{ github.event.pull_request.number }}-sha-${{ github.event.pull_request.head.sha }}"
+          echo "image_ref=${repo}:${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - id: build
+        name: Build + push image
+        run: |
+          set -euo pipefail
+          docker build -t "${{ steps.imgref.outputs.image_ref }}" .
+          docker push "${{ steps.imgref.outputs.image_ref }}"
+          echo "image_ref=${{ steps.imgref.outputs.image_ref }}" >> "$GITHUB_OUTPUT"
+
+  dispatch-apply:
+    if: github.event.action != 'closed' && !inputs.reap
+    needs: [lanes-load, publish-image]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - uses: tinyland-inc/ci-templates/.github/actions/lane-dispatch@v1.0.0
+        with:
+          pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
+          commit_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          spoke: ${{ needs.lanes-load.outputs.spoke_name }}
+          domain: ${{ needs.lanes-load.outputs.spoke_domain }}
+          image_ref: ${{ needs.publish-image.outputs.image_ref }}
+          lanes_json: ${{ needs.lanes-load.outputs.lanes_json }}
+          pr_labels_json: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          blahaj_repository: ${{ inputs.blahaj_repository }}
+          dispatch_token: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}
+
+  tailnet-qa:
+    if: github.event.action != 'closed' && !inputs.reap && inputs.enable_tailnet_qa
+    needs: [lanes-load, dispatch-apply]
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
+    runs-on: tinyland-nix-kvm
+    if-skip: ${{ !matrix.lane.e2e }}
+    steps:
+      - uses: actions/checkout@v6
+      - if: matrix.lane.e2e
+        name: E2E against lane env
+        run: |
+          set -euo pipefail
+          echo "running E2E against pr-${{ github.event.pull_request.number }}-${{ matrix.lane.name }}.${{ needs.lanes-load.outputs.spoke_domain }}"
+          # Spokes plug their own E2E command here via a follow-up workflow.
+          # This job exists to gate the per-lane `ci/lane/<name>` E2E status.
+
+  destroy-lanes:
+    if: github.event.action == 'closed' || inputs.reap
+    needs: [lanes-load]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - uses: tinyland-inc/ci-templates/.github/actions/lane-reap@v1.0.0
+        with:
+          pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
+          spoke: ${{ needs.lanes-load.outputs.spoke_name }}
+          domain: ${{ needs.lanes-load.outputs.spoke_domain }}
+          commit_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          lanes_json: ${{ needs.lanes-load.outputs.lanes_json }}
+          blahaj_repository: ${{ inputs.blahaj_repository }}
+          dispatch_token: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}

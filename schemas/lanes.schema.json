@@ -1,0 +1,168 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/tinyland-inc/elders.tinyland.dev/main/docs/schemas/lanes.schema.json",
+	"title": "Tinyland Spoke lanes.json",
+	"description": "Normative schema for .github/lanes.json in any repo spawned from tinyland-inc/elders.tinyland.dev. Source of truth for per-spoke CI lane matrix, Blahaj PR-env provisioning, and Flywheel RBE binding. See docs/CI-SCHEMA.md for the full contract.",
+	"type": "object",
+	"required": ["schema_version", "spoke", "lanes"],
+	"additionalProperties": false,
+	"properties": {
+		"$schema": {
+			"type": "string",
+			"description": "Editor support hint pointing at this schema. Tolerated; ignored by the validator."
+		},
+		"$comment": {
+			"type": "string",
+			"description": "Free-form comment. Tolerated; ignored by the validator."
+		},
+		"schema_version": {
+			"const": 1,
+			"description": "Schema major version. Bumped on breaking changes; migration notes in docs/CI-SCHEMA-CHANGELOG.md."
+		},
+		"spoke": {
+			"type": "object",
+			"required": ["name", "domain"],
+			"additionalProperties": false,
+			"properties": {
+				"name": {
+					"type": "string",
+					"pattern": "^[a-z][a-z0-9-]{1,62}$",
+					"description": "Spoke slug. Used in DNS, image tags, S3 state prefix, and Blahaj event_type."
+				},
+				"domain": {
+					"type": "string",
+					"format": "hostname",
+					"description": "Spoke brand domain. PR-env DNS is templated as pr-{PR_NUMBER}-{LANE}.<domain>."
+				},
+				"image_repository": {
+					"type": "string",
+					"pattern": "^ghcr\\.io/[a-z0-9._-]+/[a-z0-9._-]+$",
+					"description": "GHCR repository for per-PR images. Defaults to ghcr.io/<repo-owner>/<spoke.name> resolved at workflow time."
+				}
+			}
+		},
+		"defaults": {
+			"type": "object",
+			"additionalProperties": false,
+			"description": "Per-lane field defaults. Each lane may override.",
+			"properties": {
+				"runner_class": { "$ref": "#/$defs/runnerClass" },
+				"ttl_hours": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 720,
+					"default": 72,
+					"description": "Default PR-env TTL. Per-PR override via label `lane-ttl/<N>d` or `lane-ttl/keep` (capped at 720h)."
+				},
+				"image_tag_template": {
+					"type": "string",
+					"default": "pr-{PR_NUMBER}-sha-{COMMIT_SHA}",
+					"description": "Image tag template. Tokens: {PR_NUMBER}, {COMMIT_SHA}, {LANE}."
+				},
+				"flywheel_target_classes": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/provedTargetClass" },
+					"default": [],
+					"uniqueItems": true,
+					"description": "Proved REAPI target classes the spoke may invoke with --config=flywheel-executor. Must be a subset of the allowlist enum. See docs/CI-SCHEMA.md §5."
+				},
+				"trigger": {
+					"$ref": "#/$defs/laneTrigger",
+					"default": "pull_request"
+				},
+				"e2e": { "type": "boolean", "default": false }
+			}
+		},
+		"lanes": {
+			"type": "array",
+			"minItems": 1,
+			"maxItems": 8,
+			"items": { "$ref": "#/$defs/lane" }
+		}
+	},
+	"$defs": {
+		"runnerClass": {
+			"enum": [
+				"tinyland-nix",
+				"tinyland-nix-heavy",
+				"tinyland-nix-kvm",
+				"tinyland-nix-gpu",
+				"tinyland-docker",
+				"tinyland-dind",
+				"ubuntu-latest"
+			],
+			"description": "GitHub Actions runs-on label. Cluster classes require runner-pool ACL grant via tinyland-infra/modules/spoke/runner-binding. `ubuntu-latest` is permitted only for jobs whose entire purpose is a `gh api` call."
+		},
+		"laneTrigger": {
+			"enum": ["pull_request", "merge_main", "release_tag", "manual"],
+			"description": "When the lane provisions. `pull_request` is the canonical ephemeral-env trigger; `merge_main` and `release_tag` create longer-lived envs; `manual` requires workflow_dispatch."
+		},
+		"provedTargetClass": {
+			"enum": [
+				"sveltekit-app-build",
+				"sveltekit-unit-tests",
+				"deployment-bundle-packaging",
+				"docs-site-static-build",
+				"web-playwright-chromium-static-smoke"
+			],
+			"description": "Mirrors tinyland-inc/GloriousFlywheel/config/rbe-target-eligibility.json at the tag this schema was cut against. `web-playwright-chromium-static-smoke` is candidate-status and will be rejected at runtime until promoted in a future schema bump."
+		},
+		"lane": {
+			"type": "object",
+			"required": ["name", "theme", "snapshot_source"],
+			"additionalProperties": false,
+			"properties": {
+				"name": {
+					"type": "string",
+					"pattern": "^[a-z][a-z0-9-]{0,30}$",
+					"description": "Lane slug. Used in DNS (`pr-{PR_NUMBER}-{name}.<spoke.domain>`), in the GitHub status check name (`ci/lane/<name>`), and as the S3 state suffix when `tofu_state_suffix` is unset."
+				},
+				"trigger": { "$ref": "#/$defs/laneTrigger" },
+				"domain": {
+					"type": "string",
+					"format": "hostname",
+					"description": "Optional explicit FQDN. Defaults to `pr-{PR_NUMBER}-{name}.<spoke.domain>`."
+				},
+				"theme": {
+					"type": "string",
+					"description": "Brand theme key (typically under src/lib/styles/themes/) consumed by the runtime via the Blahaj dispatch payload's lane.theme field."
+				},
+				"snapshot_source": {
+					"type": "string",
+					"description": "Static projection snapshot identifier validated by `just validate-static-projection`. Examples: `tinyland://pulse/m1`, `checked-in`, or a full URL."
+				},
+				"runner_class": { "$ref": "#/$defs/runnerClass" },
+				"e2e": {
+					"type": "boolean",
+					"description": "If true, the lane is included in the tailnet-qa matrix. Fixes the MassageIthaca asymmetric-E2E pain point: E2E inclusion is per-lane data, not workflow-hardcoded."
+				},
+				"ttl_hours": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 720,
+					"description": "Per-lane TTL override. Per-PR label override (`lane-ttl/<N>d`) takes precedence."
+				},
+				"tofu_state_suffix": {
+					"type": "string",
+					"pattern": "^[a-z0-9-]{1,32}$",
+					"description": "Appended to S3 state key: `<spoke>/<pr_number>/<suffix>/`. Defaults to lane.name. Never references rustfs (hard invariant)."
+				},
+				"image_tag_template": {
+					"type": "string",
+					"description": "Per-lane image tag override. Tokens: {PR_NUMBER}, {COMMIT_SHA}, {LANE}."
+				},
+				"flywheel_target_classes": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/provedTargetClass" },
+					"uniqueItems": true,
+					"description": "Per-lane proved REAPI target class allowlist. Must be a subset of defaults.flywheel_target_classes if both are set."
+				},
+				"extra": {
+					"type": "object",
+					"additionalProperties": true,
+					"description": "Free-form lane-specific metadata propagated into the Blahaj dispatch payload's lane.extra. Must be JSON-serializable."
+				}
+			}
+		}
+	}
+}

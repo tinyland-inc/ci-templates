@@ -1,0 +1,71 @@
+name: lane-status-check
+description: |
+  Post a per-lane GitHub commit status named `ci/lane/<name>` so branch
+  protection can require per-lane checks. Fixes the MassageIthaca
+  "no per-lane gating" pain point.
+
+  Contract: tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §8.
+
+inputs:
+  commit_sha:
+    description: Commit SHA to post the status against.
+    required: true
+  lane_name:
+    description: Lane slug (matches lanes.json lanes[].name).
+    required: true
+  state:
+    description: One of pending | success | failure | error.
+    required: true
+  target_url:
+    description: URL to display in the status (e.g. the lane env URL).
+    required: false
+    default: ""
+  description:
+    description: Short status description.
+    required: false
+    default: ""
+  context_prefix:
+    description: Status context prefix. Default `ci/lane/`.
+    required: false
+    default: ci/lane/
+  github_token:
+    description: GH token with `repo:status` scope.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  context:
+    description: Full status context string written.
+    value: ${{ steps.post.outputs.context }}
+
+runs:
+  using: composite
+  steps:
+    - name: Post status
+      id: post
+      shell: bash
+      run: |
+        set -euo pipefail
+        context="${{ inputs.context_prefix }}${{ inputs.lane_name }}"
+        desc="${{ inputs.description }}"
+        [[ -z "$desc" ]] && desc="Lane: ${{ inputs.lane_name }}"
+
+        payload=$(jq -nc \
+          --arg state "${{ inputs.state }}" \
+          --arg context "$context" \
+          --arg description "$desc" \
+          --arg target_url "${{ inputs.target_url }}" \
+          '{state: $state, context: $context, description: $description}
+           + (if $target_url != "" then {target_url: $target_url} else {} end)')
+
+        echo "$payload" | jq .
+
+        gh api \
+          "/repos/${{ github.repository }}/statuses/${{ inputs.commit_sha }}" \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          --input <(echo "$payload")
+
+        echo "context=$context" >> "$GITHUB_OUTPUT"
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}

@@ -1,0 +1,136 @@
+name: lane-reap
+description: |
+  Construct + emit the Blahaj `<spoke>-lane-env` `repository_dispatch`
+  payload for destroy. Payload shape conforms to
+  schemas/blahaj-dispatch.schema.json (`operation: destroy`).
+
+  Idempotent. Blahaj treats "env does not exist" as success.
+
+  Contract: tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §4 + §7.
+
+inputs:
+  pr_number:
+    description: GitHub PR number.
+    required: true
+  spoke:
+    description: Spoke slug.
+    required: true
+  domain:
+    description: Spoke brand domain.
+    required: false
+    default: ""
+  commit_sha:
+    description: PR head commit SHA at close time.
+    required: true
+  lanes_json:
+    description: Lanes array from lanes-load (defaults to all lanes for reap).
+    required: true
+  blahaj_repository:
+    description: Target repo for the repository_dispatch.
+    required: false
+    default: tinyland-inc/blahaj
+  dispatch_token:
+    description: GitHub token with repo:dispatch scope on blahaj_repository.
+    required: false
+    default: ""
+  dry_run:
+    description: If true, build + print payload, do not POST.
+    required: false
+    default: "false"
+
+outputs:
+  dispatch_id:
+    description: Synthetic dispatch ID.
+    value: ${{ steps.build.outputs.dispatch_id }}
+  payload_path:
+    description: Path to the saved payload JSON file.
+    value: ${{ steps.build.outputs.payload_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build destroy payload
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+        lanes='${{ inputs.lanes_json }}'
+        payload_lanes=$(jq -c \
+          --arg pr "${{ inputs.pr_number }}" \
+          --arg domain "${{ inputs.domain }}" \
+          '[.[] | { name: .name, fqdn: (.domain // ("pr-" + $pr + "-" + .name + "." + $domain)) }]' <<< "$lanes")
+
+        payload=$(jq -nc \
+          --arg event_type "${{ inputs.spoke }}-lane-env" \
+          --arg spoke "${{ inputs.spoke }}" \
+          --arg domain "${{ inputs.domain }}" \
+          --argjson pr "${{ inputs.pr_number }}" \
+          --arg commit_sha "${{ inputs.commit_sha }}" \
+          --argjson lanes "$payload_lanes" \
+          '{
+            event_type: $event_type,
+            client_payload: ({
+              schema_version: 1,
+              operation: "destroy",
+              spoke: $spoke,
+              pr_number: $pr,
+              source_ref: ("refs/pull/" + ($pr | tostring) + "/head"),
+              commit_sha: $commit_sha,
+              image_ref: "expired-destroy",
+              ttl_hours: 1,
+              tofu_state_prefix: ($spoke + "/" + ($pr | tostring)),
+              lanes: $lanes
+            } + (if $domain != "" then {domain: $domain} else {} end))
+          }')
+
+        dispatch_id="${{ inputs.spoke }}-pr${{ inputs.pr_number }}-reap-${GITHUB_RUN_ID}"
+        payload_path="${RUNNER_TEMP}/blahaj-reap-${dispatch_id}.json"
+        echo "$payload" | jq . > "$payload_path"
+
+        {
+          echo "dispatch_id=$dispatch_id"
+          echo "payload_path=$payload_path"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::group::Blahaj reap payload ($dispatch_id)"
+        cat "$payload_path"
+        echo "::endgroup::"
+
+    - name: Validate against schema
+      shell: bash
+      run: |
+        set -euo pipefail
+        schema="${{ github.action_path }}/../../../schemas/blahaj-dispatch.schema.json"
+        python3 - <<PY
+        import json, sys
+        from jsonschema import Draft202012Validator
+        schema = json.load(open("$schema"))
+        payload = json.load(open("${{ steps.build.outputs.payload_path }}"))
+        errs = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda e: list(e.absolute_path))
+        if errs:
+            for e in errs:
+                p = "/" + "/".join(str(x) for x in e.absolute_path)
+                print(f"::error::payload at {p}: {e.message}", file=sys.stderr)
+            sys.exit(1)
+        PY
+
+    - name: Dispatch
+      if: inputs.dry_run != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${{ inputs.dispatch_token }}" ]]; then
+          echo "::error::dispatch_token is required when dry_run=false"
+          exit 1
+        fi
+        gh api "/repos/${{ inputs.blahaj_repository }}/dispatches" \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          --input "${{ steps.build.outputs.payload_path }}" \
+          || echo "::warning::Blahaj dispatch failed; reap is idempotent and the hourly TTL backstop will retry"
+
+    - name: Dry-run notice
+      if: inputs.dry_run == 'true'
+      shell: bash
+      run: |
+        echo "::notice::dry_run=true — reap payload built and validated, NOT dispatched"

@@ -1,0 +1,188 @@
+name: lane-dispatch
+description: |
+  Construct + emit the Blahaj `<spoke>-lane-env` `repository_dispatch`
+  payload for provision. Payload shape conforms to
+  schemas/blahaj-dispatch.schema.json.
+
+  Reads lanes_json from a prior `lanes-load` invocation (NOT from a
+  duplicated workflow YAML literal — MassageIthaca fix).
+
+  Supports `dry_run` for local testability without a Blahaj round-trip.
+
+  Contract: tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §4 + §7.
+
+inputs:
+  pr_number:
+    description: GitHub PR number.
+    required: true
+  commit_sha:
+    description: Full 40-char commit SHA.
+    required: true
+  spoke:
+    description: Spoke slug (matches lanes.json spoke.name).
+    required: true
+  domain:
+    description: Spoke brand domain (matches lanes.json spoke.domain).
+    required: true
+  image_ref:
+    description: Full GHCR image reference, e.g. ghcr.io/owner/spoke:pr-N-sha-XXXX.
+    required: true
+  lanes_json:
+    description: Validated lanes array (from lanes-load output).
+    required: true
+  ttl_label_prefix:
+    description: PR label prefix for per-PR TTL override (default `lane-ttl/`).
+    required: false
+    default: lane-ttl/
+  pr_labels_json:
+    description: JSON array of label names on the PR. Used to extract TTL override.
+    required: false
+    default: "[]"
+  blahaj_repository:
+    description: Target repo for the repository_dispatch.
+    required: false
+    default: tinyland-inc/blahaj
+  dispatch_token:
+    description: GitHub token with repo:dispatch scope on blahaj_repository. Required unless dry_run.
+    required: false
+    default: ""
+  dry_run:
+    description: If true, build + print payload, do not POST.
+    required: false
+    default: "false"
+
+outputs:
+  dispatch_id:
+    description: Synthetic dispatch ID (spoke-prN-sha7-runID) for log correlation.
+    value: ${{ steps.build.outputs.dispatch_id }}
+  payload_path:
+    description: Path to the saved payload JSON file.
+    value: ${{ steps.build.outputs.payload_path }}
+  ttl_hours:
+    description: Effective top-level TTL (after applying label override).
+    value: ${{ steps.build.outputs.ttl_hours }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build payload
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Parse PR labels for TTL override (lane-ttl/7d, lane-ttl/30d, lane-ttl/keep)
+        ttl_override=""
+        prefix="${{ inputs.ttl_label_prefix }}"
+        for label in $(echo '${{ inputs.pr_labels_json }}' | jq -r '.[]?'); do
+          if [[ "$label" == "${prefix}keep" ]]; then ttl_override=720; break
+          elif [[ "$label" =~ ^${prefix}([0-9]+)d$ ]]; then ttl_override=$(( ${BASH_REMATCH[1]} * 24 )); break
+          fi
+        done
+
+        # Aggregate lanes with effective TTL
+        lanes='${{ inputs.lanes_json }}'
+        payload_lanes=$(jq -c \
+          --arg pr "${{ inputs.pr_number }}" \
+          --arg domain "${{ inputs.domain }}" \
+          --arg ttl_override "${ttl_override:-0}" \
+          --arg default_ttl "72" \
+          '[.[] | {
+             name: .name,
+             fqdn: (.domain // ("pr-" + $pr + "-" + .name + "." + $domain)),
+             theme: .theme,
+             snapshot_source: .snapshot_source,
+             tofu_state_suffix: (.tofu_state_suffix // .name),
+             e2e: (.e2e // false),
+             ttl_hours: (
+               (($ttl_override | tonumber) as $o |
+                if $o > 0 then ($o | if . > 720 then 720 else . end)
+                else (.ttl_hours // ($default_ttl | tonumber))
+                end)
+             )
+           } + (if .extra then {extra: .extra} else {} end)]' <<< "$lanes")
+
+        top_ttl=$(echo "$payload_lanes" | jq '[.[].ttl_hours] | max')
+
+        payload=$(jq -nc \
+          --arg event_type "${{ inputs.spoke }}-lane-env" \
+          --arg spoke "${{ inputs.spoke }}" \
+          --arg domain "${{ inputs.domain }}" \
+          --argjson pr "${{ inputs.pr_number }}" \
+          --arg commit_sha "${{ inputs.commit_sha }}" \
+          --arg image_ref "${{ inputs.image_ref }}" \
+          --argjson ttl "$top_ttl" \
+          --argjson lanes "$payload_lanes" \
+          '{
+            event_type: $event_type,
+            client_payload: {
+              schema_version: 1,
+              operation: "provision",
+              spoke: $spoke,
+              domain: $domain,
+              pr_number: $pr,
+              source_ref: ("refs/pull/" + ($pr | tostring) + "/head"),
+              commit_sha: $commit_sha,
+              image_ref: $image_ref,
+              ttl_hours: $ttl,
+              tofu_state_prefix: ($spoke + "/" + ($pr | tostring)),
+              lanes: $lanes
+            }
+          }')
+
+        dispatch_id="${{ inputs.spoke }}-pr${{ inputs.pr_number }}-${COMMIT_SHA:0:7}-${GITHUB_RUN_ID}"
+        payload_path="${RUNNER_TEMP}/blahaj-dispatch-${dispatch_id}.json"
+        echo "$payload" | jq . > "$payload_path"
+
+        {
+          echo "dispatch_id=$dispatch_id"
+          echo "payload_path=$payload_path"
+          echo "ttl_hours=$top_ttl"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::group::Blahaj dispatch payload ($dispatch_id)"
+        cat "$payload_path"
+        echo "::endgroup::"
+      env:
+        COMMIT_SHA: ${{ inputs.commit_sha }}
+
+    - name: Validate against schema
+      shell: bash
+      run: |
+        set -euo pipefail
+        schema="${{ github.action_path }}/../../../schemas/blahaj-dispatch.schema.json"
+        python3 - <<PY
+        import json, sys
+        from jsonschema import Draft202012Validator
+        schema = json.load(open("$schema"))
+        payload = json.load(open("${{ steps.build.outputs.payload_path }}"))
+        errs = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda e: list(e.absolute_path))
+        if errs:
+            for e in errs:
+                p = "/" + "/".join(str(x) for x in e.absolute_path)
+                print(f"::error::payload at {p}: {e.message}", file=sys.stderr)
+            sys.exit(1)
+        PY
+
+    - name: Dispatch
+      if: inputs.dry_run != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${{ inputs.dispatch_token }}" ]]; then
+          echo "::error::dispatch_token is required when dry_run=false"
+          exit 1
+        fi
+        gh api "/repos/${{ inputs.blahaj_repository }}/dispatches" \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          --input "${{ steps.build.outputs.payload_path }}"
+        echo "::notice::dispatched ${{ steps.build.outputs.dispatch_id }} → ${{ inputs.blahaj_repository }}"
+      env:
+        GH_TOKEN: ${{ inputs.dispatch_token }}
+
+    - name: Dry-run notice
+      if: inputs.dry_run == 'true'
+      shell: bash
+      run: |
+        echo "::notice::dry_run=true — payload built and validated, NOT dispatched"

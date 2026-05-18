@@ -1,0 +1,130 @@
+name: flywheel-bazel
+description: |
+  Run bazelisk with GloriousFlywheel cache (`--config=flywheel`) or
+  cache+executor (`--config=flywheel-executor`). Wraps the
+  `scripts/bazel-cache-backed.sh` attachment-contract logic so spokes
+  don't carry it. Refuses executor mode on non-cluster runners.
+
+  Contract: tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §5.
+
+inputs:
+  targets:
+    description: Space-separated Bazel targets (e.g. "//app:build //app:test").
+    required: true
+  command:
+    description: Bazel command. One of build | test | run | query.
+    required: false
+    default: build
+  config:
+    description: Flywheel config. One of flywheel | flywheel-executor | local.
+    required: false
+    default: flywheel
+  target_class:
+    description: |
+      Optional REAPI proved-target class (e.g. sveltekit-app-build) for
+      the per-lane matrix. Validated against the lanes.json allowlist by
+      the caller; this action only enforces the cluster-runner gate.
+    required: false
+    default: ""
+  extra_flags:
+    description: Additional flags appended verbatim after the config flag.
+    required: false
+    default: ""
+  bazel_remote_cache:
+    description: |
+      Optional override for BAZEL_REMOTE_CACHE env. Default: read from env
+      injected by setup-flywheel / nix-setup composite actions.
+    required: false
+    default: ""
+  bazel_remote_executor:
+    description: |
+      Optional override for BAZEL_REMOTE_EXECUTOR env. Default: read from
+      env injected by setup-flywheel / nix-setup.
+    required: false
+    default: ""
+  runner_class_override:
+    description: |
+      Override the runner class probe. Use only when wrapping this action
+      from a non-standard runner. By default reads `runner.labels` and
+      matches against the cluster-class set.
+    required: false
+    default: ""
+
+outputs:
+  executor_used:
+    description: "true if --config=flywheel-executor was applied; false otherwise."
+    value: ${{ steps.run.outputs.executor_used }}
+  config_applied:
+    description: Echo of the resolved --config= flag passed to bazelisk.
+    value: ${{ steps.run.outputs.config_applied }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve runner class
+      id: probe
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -n "${{ inputs.runner_class_override }}" ]]; then
+          rc="${{ inputs.runner_class_override }}"
+        else
+          rc=""
+          for label in ${RUNNER_LABELS//,/ }; do
+            case "$label" in
+              tinyland-nix|tinyland-nix-heavy|tinyland-nix-kvm|tinyland-nix-gpu|tinyland-docker|tinyland-dind)
+                rc="$label"; break ;;
+            esac
+          done
+        fi
+        echo "runner_class=$rc" >> "$GITHUB_OUTPUT"
+        echo "::notice::flywheel-bazel resolved runner_class=${rc:-<none>}"
+      env:
+        RUNNER_LABELS: ${{ join(runner.labels, ',') }}
+
+    - name: Refuse executor mode on non-cluster runners
+      if: inputs.config == 'flywheel-executor' && steps.probe.outputs.runner_class == ''
+      shell: bash
+      run: |
+        echo "::error::flywheel-executor requires a cluster runner (tinyland-nix*, tinyland-docker, tinyland-dind). Got runner.labels=${{ join(runner.labels, ',') }}"
+        exit 1
+
+    - name: Install vendored flywheel bazelrc
+      shell: bash
+      run: |
+        set -euo pipefail
+        action_dir=$(dirname "${{ github.action_path }}")
+        bazelrc_src="$action_dir/../../bazelrc/flywheel.bazelrc"
+        if [[ ! -f "$bazelrc_src" ]]; then
+          # Fall back to repo-root if ci-templates layout differs.
+          bazelrc_src="${{ github.action_path }}/../../bazelrc/flywheel.bazelrc"
+        fi
+        if [[ -f "$bazelrc_src" ]]; then
+          cp "$bazelrc_src" .bazelrc.flywheel
+        else
+          echo "::warning::flywheel.bazelrc not found in ci-templates; relying on spoke-vendored copy"
+        fi
+
+    - name: Run bazelisk
+      id: run
+      shell: bash
+      run: |
+        set -euo pipefail
+        config_flag=""
+        executor_used=false
+        case "${{ inputs.config }}" in
+          local)              config_flag="" ;;
+          flywheel)           config_flag="--config=flywheel" ;;
+          flywheel-executor)  config_flag="--config=flywheel-executor"; executor_used=true ;;
+          *) echo "::error::unknown config: ${{ inputs.config }}"; exit 64 ;;
+        esac
+
+        export BAZEL_REMOTE_CACHE="${{ inputs.bazel_remote_cache || env.BAZEL_REMOTE_CACHE }}"
+        export BAZEL_REMOTE_EXECUTOR="${{ inputs.bazel_remote_executor || env.BAZEL_REMOTE_EXECUTOR }}"
+
+        echo "::group::bazelisk ${{ inputs.command }} $config_flag ${{ inputs.extra_flags }} ${{ inputs.targets }}"
+        bazelisk ${{ inputs.command }} $config_flag ${{ inputs.extra_flags }} ${{ inputs.targets }}
+        echo "::endgroup::"
+
+        echo "executor_used=$executor_used" >> "$GITHUB_OUTPUT"
+        echo "config_applied=$config_flag" >> "$GITHUB_OUTPUT"

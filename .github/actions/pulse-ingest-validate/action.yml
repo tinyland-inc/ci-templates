@@ -1,0 +1,62 @@
+name: pulse-ingest-validate
+description: |
+  Validate a tinyland.dev Pulse / static projection snapshot. Wraps the
+  vendored `static-projection-snapshot.mts` script so spokes don't carry
+  a local copy.
+
+  Contract: tinyland-inc/site.scaffold/AGENTS.md "Static Projection" +
+  docs/CI-SCHEMA.md (out-of-scope: this action does NOT add auth,
+  mutation, or ActivityPub).
+
+inputs:
+  snapshot_path:
+    description: Path to the snapshot JSON to validate.
+    required: true
+  expected_source_authority:
+    description: Required source-authority claim. Default `tinyland.dev`.
+    required: false
+    default: tinyland.dev
+  expected_spoke:
+    description: Optional expected spoke slug.
+    required: false
+    default: ""
+  actor_url:
+    description: Optional ActivityPub actor URL for key-id assertions.
+    required: false
+    default: ""
+  actor_key_suffix:
+    description: Suffix appended to actor_url for the expected key-id.
+    required: false
+    default: "#main-key"
+
+outputs:
+  ok:
+    description: "true on success."
+    value: ${{ steps.validate.outputs.ok }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate snapshot
+      id: validate
+      shell: bash
+      run: |
+        set -euo pipefail
+        script="${{ github.action_path }}/static-projection-snapshot.mts"
+        if [[ ! -f "$script" ]]; then
+          echo "::error::vendored static-projection-snapshot.mts missing at $script"
+          exit 1
+        fi
+
+        args=(validate "${{ inputs.snapshot_path }}" --expected-source-authority "${{ inputs.expected_source_authority }}")
+        if [[ -n "${{ inputs.expected_spoke }}" ]]; then
+          args+=(--expected-spoke "${{ inputs.expected_spoke }}")
+        fi
+        if [[ -n "${{ inputs.actor_url }}" ]]; then
+          args+=(--actor-document "${{ inputs.actor_url }}" \
+                 --expected-actor-id "${{ inputs.actor_url }}" \
+                 --expected-actor-key-id "${{ inputs.actor_url }}${{ inputs.actor_key_suffix }}")
+        fi
+
+        npx --yes tsx@latest "$script" "${args[@]}"
+        echo "ok=true" >> "$GITHUB_OUTPUT"

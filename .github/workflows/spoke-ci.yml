@@ -1,0 +1,155 @@
+name: spoke-ci
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        type: string
+        default: "22"
+      pnpm_version:
+        type: string
+        default: "10.13.1"
+      flywheel_config:
+        type: string
+        default: flywheel-executor
+        description: One of flywheel | flywheel-executor | local. Per-lane override via lanes.json.
+      playwright_enabled:
+        type: boolean
+        default: false
+      lanes_path:
+        type: string
+        default: .github/lanes.json
+      default_runner_class:
+        type: string
+        default: tinyland-nix
+      gitleaks_config:
+        type: string
+        default: .gitleaks.toml
+    secrets:
+      ATTIC_TOKEN:
+        required: false
+
+# Permissions: `statuses: write` for lane-status-check; `contents: read` is
+# enough for the rest. PRs from forks land with read-only token; status
+# posting will fail gracefully in those cases.
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: spoke-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - uses: tinyland-inc/ci-templates/.github/actions/secrets-scan@v1.0.0
+
+  lanes-load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      lanes_json: ${{ steps.load.outputs.lanes_json }}
+      lane_count: ${{ steps.load.outputs.lane_count }}
+      schema_version: ${{ steps.load.outputs.schema_version }}
+      spoke_name: ${{ steps.load.outputs.spoke_name }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - id: load
+        uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v1.0.0
+        with:
+          path: ${{ inputs.lanes_path }}
+
+  flywheel-build:
+    needs: [secrets-scan, lanes-load]
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
+    runs-on: ${{ matrix.lane.runner_class || inputs.default_runner_class }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Setup workspace
+        run: nix develop --command just setup
+
+      - name: Build (flywheel)
+        uses: tinyland-inc/ci-templates/.github/actions/flywheel-bazel@v1.0.0
+        with:
+          targets: "//:node_modules"
+          command: build
+          config: ${{ inputs.flywheel_config }}
+          target_class: sveltekit-app-build
+
+      - name: Static site build
+        run: nix develop --command just build
+
+      - name: Post lane build status
+        if: always()
+        uses: tinyland-inc/ci-templates/.github/actions/lane-status-check@v1.0.0
+        with:
+          commit_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          lane_name: ${{ matrix.lane.name }}
+          state: ${{ job.status == 'success' && 'success' || 'failure' }}
+          description: "build-and-test (${{ matrix.lane.name }})"
+
+  flywheel-test:
+    needs: [secrets-scan, lanes-load]
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
+    runs-on: ${{ matrix.lane.runner_class || inputs.default_runner_class }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - run: nix develop --command just setup
+      - run: nix develop --command just check
+
+  bazel-graph:
+    needs: [secrets-scan]
+    runs-on: tinyland-nix-heavy
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - run: nix develop --command bazelisk mod graph
+      - run: nix develop --command bazelisk build //:node_modules
+
+  playwright:
+    if: ${{ inputs.playwright_enabled }}
+    needs: [flywheel-build, lanes-load]
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
+    runs-on: tinyland-nix-kvm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - run: nix develop --command just setup
+      - run: nix develop --command just test-e2e
