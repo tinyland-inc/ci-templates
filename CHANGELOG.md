@@ -5,6 +5,22 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`RELEASING.md` § Release flow** — documented the manual-tag
+  fallback (step 3b) for environments where the workflow-driven
+  release path (step 3a) doesn't hold. Specifically:
+  - Local agent safety hooks blocking direct push to `main` and
+    `release/*` branch patterns.
+  - GitHub rebase-merge silently dropping empty commits — a
+    `release: vX.Y.Z` empty commit landed via rebase-merge leaves
+    `main` HEAD with a non-release subject, so `release.yml`'s
+    `tag-on-release-commit` job never fires.
+  Manual fallback cuts the immutable tag, moves the floating major
+  tag, and creates the GH Release with the same CHANGELOG-extracted
+  notes the automation would have produced. Surfaced during darkmap
+  M1-M6 pilot (`Jesssullivan/darkmap.tinyland.dev` TIN-1381).
+
 ### Added
 
 - **`docs/spec/dev-remote.md`** — full design spec for the v1.1+
