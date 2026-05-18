@@ -13,6 +13,12 @@ Versioning: [SemVer 2.0](https://semver.org/).
   `<spoke>-dev-env` event_type, the wire schema, lifecycle, auth
   model, and open questions to resolve before v1.1.0. Cross-linked
   from `docs/roadmap.md`. Doc-only — no behavior change.
+- **`docs/release-checklist-v1.0.0.md`** — operator-facing
+  step-by-step checklist for cutting the v1.0.0 release per
+  `RELEASING.md`. Documents the merge → `release: v1.0.0` commit →
+  `release.yml` auto-tag sequence, plus the companion-repo
+  coordination (site.scaffold, GloriousFlywheel scoped tag,
+  `.github` org ruleset application). Doc-only.
 
 ## [1.0.0] — 2026-05-17
 
