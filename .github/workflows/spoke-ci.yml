@@ -106,7 +106,7 @@ jobs:
 
       - name: Post lane build status
         if: always()
-        uses: tinyland-inc/ci-templates/.github/actions/lane-status-check@v1.0.0
+        uses: tinyland-inc/ci-templates/.github/actions/lane-status-check@v1.1.5
         with:
           commit_sha: ${{ github.event.pull_request.head.sha || github.sha }}
           lane_name: ${{ matrix.lane.name }}

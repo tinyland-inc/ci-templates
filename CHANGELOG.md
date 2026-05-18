@@ -5,6 +5,23 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (v1.1.5)
+
+- **`lane-status-check` composite — use `curl` instead of `gh api`** —
+  the action posted per-lane commit statuses via `gh api`, which
+  requires the GitHub CLI on the host PATH. On runners where `gh`
+  only lives inside the spoke flake's devShell, the call failed with
+  `gh: command not found` (exit 127) and turned successful builds
+  into fake job failures. Surfaced by darkmap PR #86 / TIN-1414 —
+  the `flywheel-build` step's underlying `bazelisk build` succeeded
+  (`state: "success"` payload was even emitted), but the `gh api`
+  POST that followed killed the job.
+  Fix: replaced `gh api` with `curl -X POST` calling the same
+  `/repos/{owner}/{repo}/statuses/{sha}` endpoint directly. `curl`
+  is ubiquitous on Linux runners and doesn't need a flake devShell.
+  Also bumped the `lane-status-check@v1.0.0` pin in `spoke-ci.yml`
+  to `@v1.1.5`.
+
 ### Fixed (v1.1.4)
 
 - **`flywheel-bazel` composite — route bazelisk through `nix develop`
