@@ -10,12 +10,21 @@ Dev-server-on-cluster for non-PR developer branches. Mirrors the
 `lane-dispatch` shape but provisions a single dev-only env with a
 Tailscale tunnel back to the developer's laptop.
 
-**Blocker**: REAPI explicitly forbids dev-server targets
-(`tinyland-inc/GloriousFlywheel/config/rbe-target-eligibility.json` —
-`developer-servers` is `status: blocked`). A separate
-not-via-REAPI pathway (kubernetes Job + tailscale sidecar) must be
-designed first. Likely depends on a Blahaj-side `dev-tunnel-env`
-event_type.
+**Design**: see [`spec/dev-remote.md`](./spec/dev-remote.md) for the
+full 12-section spec. New event_type `<spoke>-dev-env` (distinct from
+`<spoke>-lane-env`); keyed by `(dev_id, branch)` not `pr_number`; 8h
+default TTL with idle-reap; Tailscale `Service` for tunnel ingress
+(tailscale-operator already deployed on the cluster).
+
+**Why not REAPI**: `tinyland-inc/GloriousFlywheel/config/rbe-target-eligibility.json`
+explicitly forbids `developer-servers` — REAPI actions must be
+bounded, dev servers aren't. Pathway is Blahaj-side K8s Deployment +
+tailscale-operator Service, NOT REAPI.
+
+**Implementation status**: design only. Blocking on Blahaj-side
+handler (separate repo) + `schemas/blahaj-dev-dispatch.schema.json`
+in this repo + the composite + `spoke-dev-env.yml` reusable workflow.
+See spec §12 for the implementation order when v1.1 starts.
 
 ### Per-lane TTL ceiling overrides
 

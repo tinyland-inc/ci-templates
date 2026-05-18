@@ -5,6 +5,15 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/spec/dev-remote.md`** — full design spec for the v1.1+
+  `lane-preview-tunnel` composite. Codifies the non-REAPI pathway
+  (Blahaj K8s Deployment + tailscale-operator Service), the new
+  `<spoke>-dev-env` event_type, the wire schema, lifecycle, auth
+  model, and open questions to resolve before v1.1.0. Cross-linked
+  from `docs/roadmap.md`. Doc-only — no behavior change.
+
 ## [1.0.0] — 2026-05-17
 
 First versioned release. All prior consumers were on `@main` and are
