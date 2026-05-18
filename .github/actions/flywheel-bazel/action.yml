@@ -122,8 +122,23 @@ runs:
         export BAZEL_REMOTE_CACHE="${{ inputs.bazel_remote_cache || env.BAZEL_REMOTE_CACHE }}"
         export BAZEL_REMOTE_EXECUTOR="${{ inputs.bazel_remote_executor || env.BAZEL_REMOTE_EXECUTOR }}"
 
-        echo "::group::bazelisk ${{ inputs.command }} $config_flag ${{ inputs.extra_flags }} ${{ inputs.targets }}"
-        bazelisk ${{ inputs.command }} $config_flag ${{ inputs.extra_flags }} ${{ inputs.targets }}
+        # bazelisk dispatch: prefer host PATH (cluster runner images that
+        # preinstall bazelisk system-wide); fall back to `nix develop
+        # --command` for spokes whose bazelisk is declared in the flake
+        # devShell (Tinyland default). Surfaced by darkmap PR #86 / TIN-1407.
+        if command -v bazelisk >/dev/null 2>&1; then
+          runner=(bazelisk)
+          echo "::notice::Using host bazelisk at $(command -v bazelisk)"
+        elif command -v nix >/dev/null 2>&1 && [ -f flake.nix ]; then
+          runner=(nix develop --command bazelisk)
+          echo "::notice::bazelisk not on host PATH; routing via 'nix develop --command bazelisk'"
+        else
+          echo "::error::bazelisk not on PATH and no flake.nix devShell available to source it from"
+          exit 127
+        fi
+
+        echo "::group::${runner[*]} ${{ inputs.command }} $config_flag ${{ inputs.extra_flags }} ${{ inputs.targets }}"
+        "${runner[@]}" ${{ inputs.command }} $config_flag ${{ inputs.extra_flags }} ${{ inputs.targets }}
         echo "::endgroup::"
 
         echo "executor_used=$executor_used" >> "$GITHUB_OUTPUT"
