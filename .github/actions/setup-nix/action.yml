@@ -1,0 +1,76 @@
+name: "Setup Nix (detect-or-install)"
+description: >
+  Composite that adds /nix/var/nix/profiles/default/bin + $HOME/.nix-profile/bin
+  to PATH, then probes for an existing Nix installation. If present, ensures
+  feature flags (nix-command + flakes) and exits. If absent, falls through to
+  DeterminateSystems/determinate-nix-action@v3.
+
+  Replaces direct use of cachix/install-nix-action@vN, which aborts with
+  "Aborting: Nix is already installed" when run on self-hosted runners that
+  have Nix preinstalled at /nix/var/nix/profiles/default/bin/nix — then
+  subsequent `nix develop` fails with "Permission denied" on the daemon lock
+  because the cachix action's setup steps didn't run to put the runner user
+  in the right group. Surfaced by darkmap PR #86 / TIN-1402.
+
+inputs:
+  extra_nix_config:
+    description: >
+      Extra newline-separated lines to append to nix.conf. Defaults to the
+      experimental-features line spokes need for `nix develop` + flakes.
+    required: false
+    default: |
+      experimental-features = nix-command flakes
+
+runs:
+  using: "composite"
+  steps:
+    - name: Add Nix to PATH
+      shell: bash
+      run: |
+        for nixbin in /nix/var/nix/profiles/default/bin "$HOME/.nix-profile/bin"; do
+          if [ -d "$nixbin" ]; then
+            echo "$nixbin" >> "$GITHUB_PATH"
+          fi
+        done
+
+    - name: Detect existing Nix
+      id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+        export PATH="/nix/var/nix/profiles/default/bin:$HOME/.nix-profile/bin:$PATH"
+        if command -v nix >/dev/null 2>&1; then
+          echo "installed=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Using preinstalled Nix at $(command -v nix)"
+        else
+          echo "installed=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::No Nix on PATH; will install via DeterminateSystems/determinate-nix-action."
+        fi
+
+    - name: Install Determinate Nix (if not preinstalled)
+      if: steps.detect.outputs.installed != 'true'
+      uses: DeterminateSystems/determinate-nix-action@v3
+      with:
+        extra-conf: ${{ inputs.extra_nix_config }}
+
+    - name: Ensure feature flags (preinstalled path)
+      if: steps.detect.outputs.installed == 'true'
+      shell: bash
+      env:
+        SETUP_NIX_EXTRA_CONFIG: ${{ inputs.extra_nix_config }}
+      run: |
+        set -euo pipefail
+        config_path="${HOME}/.config/nix/nix.conf"
+        mkdir -p "$(dirname "$config_path")"
+        touch "$config_path"
+        # Append each non-empty line from extra_nix_config that isn't already present.
+        # Per-user nix.conf is honored by single-user installs and by multi-user
+        # installs for the runner user. No sudo required.
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          if ! grep -Fxq -- "$line" "$config_path"; then
+            printf '%s\n' "$line" >> "$config_path"
+          fi
+        done <<< "$SETUP_NIX_EXTRA_CONFIG"
+        echo "::notice::Wrote per-user nix.conf at $config_path"
+        cat "$config_path"

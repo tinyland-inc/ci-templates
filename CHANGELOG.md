@@ -5,6 +5,33 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`.github/actions/setup-nix/action.yml`** — new composite action that
+  detects an existing Nix installation (probes
+  `/nix/var/nix/profiles/default/bin` + `$HOME/.nix-profile/bin`,
+  then `command -v nix`). When Nix is preinstalled, adds it to PATH
+  and writes a per-user `~/.config/nix/nix.conf` with the requested
+  flags. When absent, falls through to
+  `DeterminateSystems/determinate-nix-action@v3`. Replaces all 8 use
+  sites of `cachix/install-nix-action@v31` in `spoke-ci.yml` (5) and
+  `spoke-lane-env.yml` (3).
+
+### Fixed
+
+- **All cachix/install-nix-action call sites** — the cachix action
+  aborts hard with `Aborting: Nix is already installed at /nix/var/nix/profiles/default/bin/nix`
+  on self-hosted runners that have Nix preinstalled (the case for
+  the Tinyland `tinyland-nix*` runner classes). Subsequent
+  `nix develop` then failed with `error: opening lock file "/nix/var/nix/db/big-lock": Permission denied`
+  because the runner user wasn't granted access to the daemon
+  database that the preinstalled multi-user nix relied on.
+  Surfaced by darkmap PR #86 / TIN-1402 (every flywheel-build and
+  flywheel-test matrix job failed in ~9 seconds).
+  Fix: route all callers through the new `setup-nix` composite,
+  which handles both the preinstalled-nix case and the
+  no-nix-installed case uniformly.
+
 ### Fixed
 
 - **`spoke-ci.yml` — strip literal `${{ ... }}` expressions from

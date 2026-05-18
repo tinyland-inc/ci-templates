@@ -82,10 +82,7 @@ jobs:
       spoke_domain: ${{ steps.load.outputs.spoke_domain }}
     steps:
       - uses: actions/checkout@v6
-      - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v1.1.2
       - id: load
         uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v1.0.0
         with:
@@ -134,10 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v1.1.2
       - uses: tinyland-inc/ci-templates/.github/actions/lane-dispatch@v1.0.0
         with:
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
@@ -174,10 +168,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v1.1.2
       - uses: tinyland-inc/ci-templates/.github/actions/lane-reap@v1.0.0
         with:
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
