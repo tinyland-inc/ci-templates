@@ -5,6 +5,23 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (v1.1.4)
+
+- **`flywheel-bazel` composite — route bazelisk through `nix develop`
+  when not on host PATH** — the action invoked `bazelisk` directly,
+  assuming it lives on the runner's system PATH. On runners that
+  declare bazelisk inside the spoke flake's devShell (the Tinyland
+  default — every spoke flake adds `bazelisk` to `buildInputs`), the
+  bare invocation failed with `bazelisk: command not found` in ~1
+  second. Surfaced by darkmap PR #86 / TIN-1407.
+  Fix: probe `command -v bazelisk`; if found, invoke directly
+  (backward-compatible for runner images that preinstall bazelisk
+  system-wide). If absent and `flake.nix` is present, route the call
+  via `nix develop --command bazelisk ...`. If neither path is
+  available, fail loudly with a clear error.
+  Also bumped the `flywheel-bazel@v1.0.0` pin in `spoke-ci.yml` to
+  `@v1.1.4` so the wrapper workflow picks up the new behavior.
+
 ### Fixed (v1.1.3)
 
 - **`setup-nix` composite — ensure `nixbld` group/users + start the
