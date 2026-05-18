@@ -28,7 +28,13 @@ on:
         default: 0
     secrets:
       BLAHAJ_DISPATCH_TOKEN:
-        required: true
+        # required: false so spokes can keep `on: pull_request` enabled
+        # before Blahaj is installed on the repo. Internal early-exit
+        # below (`check-blahaj-token` job) gates the dispatch on token
+        # presence — empty token = whole pipeline skips cleanly. See
+        # https://github.com/Jesssullivan/darkmap.tinyland.dev/pull/82
+        # for the finding that drove this change.
+        required: false
       TAILSCALE_API_KEY:
         required: false
 
@@ -44,7 +50,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Early-exit gate. If BLAHAJ_DISPATCH_TOKEN is empty (Blahaj not yet
+  # installed on the calling spoke), `enabled=false` is emitted and
+  # every downstream job's `if:` short-circuits. The workflow shows
+  # green with all jobs skipped, NOT a parse-time failure.
+  check-blahaj-token:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      enabled: ${{ steps.probe.outputs.enabled }}
+    steps:
+      - id: probe
+        env:
+          TOKEN: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::BLAHAJ_DISPATCH_TOKEN present; lane-env pipeline will run."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::BLAHAJ_DISPATCH_TOKEN empty; lane-env pipeline skipping cleanly (no Blahaj integration yet)."
+          fi
+
   lanes-load:
+    needs: [check-blahaj-token]
+    if: needs.check-blahaj-token.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     outputs:
       lanes_json: ${{ steps.load.outputs.lanes_json }}
@@ -62,8 +92,8 @@ jobs:
           path: ${{ inputs.lanes_path }}
 
   publish-image:
-    if: github.event.action != 'closed' && !inputs.reap
-    needs: [lanes-load]
+    if: needs.check-blahaj-token.outputs.enabled == 'true' && github.event.action != 'closed' && !inputs.reap
+    needs: [check-blahaj-token, lanes-load]
     strategy:
       fail-fast: false
       matrix:
@@ -99,8 +129,8 @@ jobs:
           echo "image_ref=${{ steps.imgref.outputs.image_ref }}" >> "$GITHUB_OUTPUT"
 
   dispatch-apply:
-    if: github.event.action != 'closed' && !inputs.reap
-    needs: [lanes-load, publish-image]
+    if: needs.check-blahaj-token.outputs.enabled == 'true' && github.event.action != 'closed' && !inputs.reap
+    needs: [check-blahaj-token, lanes-load, publish-image]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -121,8 +151,8 @@ jobs:
           dispatch_token: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}
 
   tailnet-qa:
-    if: github.event.action != 'closed' && !inputs.reap && inputs.enable_tailnet_qa
-    needs: [lanes-load, dispatch-apply]
+    if: needs.check-blahaj-token.outputs.enabled == 'true' && github.event.action != 'closed' && !inputs.reap && inputs.enable_tailnet_qa
+    needs: [check-blahaj-token, lanes-load, dispatch-apply]
     strategy:
       fail-fast: false
       matrix:
@@ -140,8 +170,8 @@ jobs:
           # This job exists to gate the per-lane `ci/lane/<name>` E2E status.
 
   destroy-lanes:
-    if: github.event.action == 'closed' || inputs.reap
-    needs: [lanes-load]
+    if: needs.check-blahaj-token.outputs.enabled == 'true' && (github.event.action == 'closed' || inputs.reap)
+    needs: [check-blahaj-token, lanes-load]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
