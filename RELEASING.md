@@ -22,18 +22,71 @@ and may break without notice**.
    - **MINOR** — new actions / workflows, new optional inputs, schema
      minor bumps.
    - **PATCH** — bug fixes, prose/doc updates, internal refactors.
-3. **Cut the release**:
+3. **Cut the release**. Pick **3a** (workflow-driven, preferred when
+   it works) or **3b** (manual fallback, use when 3a's preconditions
+   don't hold in your environment):
+
+   ### 3a. Workflow-driven (preferred)
+
+   `release.yml`'s `tag-on-release-commit` job auto-tags when a
+   commit with subject `release: vX.Y.Z` lands on main.
+
    ```bash
    ver=v1.2.3
    sed -i "s|## \[Unreleased\]|## [Unreleased]\n\n## [${ver#v}] — $(date -u +%Y-%m-%d)|" CHANGELOG.md
    git add CHANGELOG.md
    git commit -m "release: $ver"
-   git tag -a "$ver" -m "$ver"
-   # Move the floating major tag too
-   git tag -f -a "v${ver%%.*}" -m "track $ver"
-   git push origin main "$ver" "v${ver%%.*}" --force-with-lease
-   gh release create "$ver" --title "$ver" --notes-from-tag
+   git push origin main
+   # release.yml fires; auto-cuts $ver + moves @vMAJOR + creates GH Release.
    ```
+
+   ### 3b. Manual fallback
+
+   Use when 3a's "push to main" doesn't work in your environment:
+
+   - **Push-protection hook on `main`** (e.g. local agent safety hook
+     blocking direct push to `main` and/or `release/*` branches —
+     surfaced during darkmap's v1.0.0 cut).
+   - **GitHub rebase-merge drops empty commits**, so a
+     `git commit --allow-empty -m "release: vX.Y.Z"` pushed to a
+     feature branch and rebase-merged into main yields a main HEAD
+     without the release subject — `release.yml` doesn't fire.
+
+   Manual cut (matches what 3a's automation would have produced):
+
+   ```bash
+   ver=v1.2.3
+   target_sha=$(git rev-parse origin/main)   # or a specific merge SHA
+
+   # Make sure CHANGELOG.md already has the ## [X.Y.Z] section.
+   # If not, land that via a normal PR first.
+   grep -qE "^## \\[${ver#v}\\]" CHANGELOG.md || {
+     echo "CHANGELOG.md missing ## [${ver#v}] section — land that PR first"
+     exit 1
+   }
+
+   git tag -a "$ver" "$target_sha" -m "$ver
+
+   See CHANGELOG.md ## [${ver#v}] for the full Added/Changed list."
+   git tag -f -a "v${ver%%.*}" "$target_sha" -m "track $ver"
+   git push origin "$ver"
+   git push origin "v${ver%%.*}" --force-with-lease
+
+   # Extract just this version's CHANGELOG section for the GH Release:
+   awk -v v="${ver#v}" '
+     $0 ~ "^## \\[" v "\\]" {flag=1; next}
+     /^## \[/ && flag {exit}
+     flag {print}
+   ' CHANGELOG.md > /tmp/release-notes.md
+
+   gh release create "$ver" \
+     --title "$ver" \
+     --notes-file /tmp/release-notes.md
+   ```
+
+   Verify with `gh release view "$ver"` and at least one downstream
+   spoke bumping its `@v...` pin.
+
 4. **Verify**: at least one spoke (`tinyland-inc/site.scaffold` first)
    bumps its `@v...` pin and CI is green.
 
