@@ -28,17 +28,13 @@ on:
         description: |
           Optional JSON-array expression evaluating to the runs-on labels
           for matrix jobs. When set (non-empty), takes precedence over
-          `matrix.lane.runner_class` and `default_runner_class`. Enables
+          matrix.lane.runner_class and default_runner_class. Enables
           spokes with dynamic fallback patterns (e.g. graceful degradation
-          to `ubuntu-latest` when cluster labels aren't reachable) to
+          to ubuntu-latest when cluster labels are not reachable) to
           adopt the wrapper without losing their runner-routing logic.
-
-          Example value from the caller:
-            runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]' }}
-
-          The string must be a JSON array. The receiver runs
-          `${{ fromJSON(inputs.runner_labels_json) }}` when this input is
-          non-empty.
+          The string must be a JSON array. The receiver passes it
+          through fromJSON when non-empty. See README + the v1.1
+          release notes for an end-to-end caller example.
       gitleaks_config:
         type: string
         default: .gitleaks.toml
