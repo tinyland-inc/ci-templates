@@ -5,6 +5,25 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (v1.1.3)
+
+- **`setup-nix` composite — ensure `nixbld` group/users + start the
+  daemon if needed** — v1.1.2 introduced `setup-nix` but only handled
+  install/detect/feature-flags. On Tinyland self-hosted runners the
+  daemon socket wasn't reachable, so `nix develop` fell back to direct
+  DB access and the runner user got `error: opening lock file "/nix/var/nix/db/big-lock": Permission denied`.
+  Surfaced by darkmap PR #86 (the symptom that v1.1.2 was supposed to
+  fix re-appeared at the next step).
+  Fix: added the missing pair of steps from
+  `GloriousFlywheel/.github/actions/nix-job`:
+    1. Create the `nixbld` group and `nixbld1..nixbld32` build users if
+       absent (multi-user nix prerequisite).
+    2. `nix store ping`; if it fails, `sudo -b $(command -v determinate-nixd) daemon`
+       (or `nix-daemon --daemon` as fallback) and wait up to 15 s for
+       the socket to come up.
+  No behavior change for callers — same workflow inputs, same actions
+  block in spoke-ci.yml + spoke-lane-env.yml. Ships as v1.1.3.
+
 ### Added
 
 - **`.github/actions/setup-nix/action.yml`** — new composite action that
