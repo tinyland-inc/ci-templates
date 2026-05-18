@@ -12,6 +12,12 @@ treated as v0.x retroactively (see `v0.4.0` below).
 
 ### Added
 
+- **Workflow `release.yml`** — two-mode: on PR, assert `## [Unreleased]`
+  is non-empty (forces CHANGELOG discipline); on push to `main`, if the
+  head commit is `release: vX.Y.Z` then cut the immutable `vX.Y.Z` tag,
+  move the floating `@vX` major tag, and create a GitHub Release with
+  notes extracted from this CHANGELOG. Does NOT auto-tag arbitrary
+  merges — matches the RELEASING.md flow.
 - **Composite action `flywheel-bazel`** — wraps `bazelisk` with
   `--config=flywheel` (cache-only) or `--config=flywheel-executor`
   (cache + REAPI executor). Refuses executor mode on non-cluster runners.
@@ -55,11 +61,15 @@ treated as v0.x retroactively (see `v0.4.0` below).
 
 - **`nix-setup`** — added outputs `runner_class`, `attic_reachable`,
   `bazel_cache_reachable` consumed by `flywheel-bazel` for cluster
-  detection. Behavior-compatible with v0.x.
+  detection. Bazel-cache DNS probe added (matching the existing Attic
+  probe). Behavior-compatible with v0.x.
+- **`secrets-scan`** — added input `extra_paths` (default `""`) for
+  per-spoke `.gitleaks.toml` lookups outside the repo root; added
+  output `findings_count` parsed from the gitleaks JSON report;
+  added a `Secrets scan` block to `GITHUB_STEP_SUMMARY`. Behavior-
+  compatible.
 - **`nix-build`**, **`greedy-cache`** — internal `@main` self-references
   bumped to `@v1`.
-- **`secrets-scan`** — added inputs `extra_paths` (default `""`) and
-  output `findings_count`. Behavior-compatible.
 - **`README.md`** — rewritten with v1.0.0 quick-start + pin banner.
 
 ### Migration from `@main`

@@ -1,5 +1,5 @@
 name: "Nix Setup"
-description: "Configure Nix and cache endpoints. Auto-detects Attic and Bazel on self-hosted ARC runners."
+description: "Configure Nix and cache endpoints. Auto-detects Attic and Bazel on self-hosted ARC runners. Outputs cluster-reachability flags consumed by `flywheel-bazel`."
 
 inputs:
   attic-server:
@@ -12,12 +12,42 @@ inputs:
     description: "Bazel remote cache endpoint (auto-detected on self-hosted)"
     default: ""
 
+outputs:
+  runner_class:
+    description: |
+      First tinyland capability-class label found in `runner.labels`, or
+      empty string if none (e.g. github-hosted `ubuntu-latest`). Consumed
+      by `flywheel-bazel` to refuse executor mode off-cluster. See
+      tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §6.
+    value: ${{ steps.detect.outputs.runner_class }}
+  attic_reachable:
+    description: "`true` if the Attic cache DNS resolved, else `false`."
+    value: ${{ steps.detect.outputs.attic_reachable }}
+  bazel_cache_reachable:
+    description: "`true` if the Bazel remote cache DNS resolved, else `false`."
+    value: ${{ steps.detect.outputs.bazel_cache_reachable }}
+
 runs:
   using: "composite"
   steps:
     - name: Detect environment and configure caches
+      id: detect
       shell: bash
       run: |
+        set -euo pipefail
+
+        runner_class=""
+        attic_reachable=false
+        bazel_cache_reachable=false
+
+        # Resolve runner_class from runner.labels (passed via env)
+        for label in ${RUNNER_LABELS//,/ }; do
+          case "$label" in
+            tinyland-nix|tinyland-nix-heavy|tinyland-nix-kvm|tinyland-nix-gpu|tinyland-docker|tinyland-dind)
+              runner_class="$label"; break ;;
+          esac
+        done
+
         if [ "${{ runner.environment }}" != "github-hosted" ]; then
           # Self-hosted ARC runners have cluster DNS access
           ATTIC="${{ inputs.attic-server }}"
@@ -26,17 +56,35 @@ runs:
           ATTIC_HOST=$(echo "$ATTIC_URL" | sed 's|https\?://||;s|:.*||')
           if getent hosts "$ATTIC_HOST" >/dev/null 2>&1; then
             echo "ATTIC_SERVER=$ATTIC_URL" >> "$GITHUB_ENV"
+            attic_reachable=true
             echo "::notice::Attic cache reachable at $ATTIC_URL"
           else
             echo "::warning::Attic cache DNS unreachable ($ATTIC_HOST) — running without cache"
           fi
 
           BAZEL="${{ inputs.bazel-cache }}"
-          echo "BAZEL_REMOTE_CACHE=${BAZEL:-${BAZEL_REMOTE_CACHE:-grpc://bazel-cache.nix-cache.svc.cluster.local:9092}}" >> "$GITHUB_ENV"
+          BAZEL_URL="${BAZEL:-${BAZEL_REMOTE_CACHE:-grpc://bazel-cache.nix-cache.svc.cluster.local:9092}}"
+          BAZEL_HOST=$(echo "$BAZEL_URL" | sed 's|grpcs\?://||;s|:.*||')
+          if getent hosts "$BAZEL_HOST" >/dev/null 2>&1; then
+            echo "BAZEL_REMOTE_CACHE=$BAZEL_URL" >> "$GITHUB_ENV"
+            bazel_cache_reachable=true
+          else
+            echo "::warning::Bazel cache DNS unreachable ($BAZEL_HOST) — running without remote cache"
+          fi
         elif [ -n "${{ inputs.attic-server }}" ]; then
           echo "ATTIC_SERVER=${{ inputs.attic-server }}" >> "$GITHUB_ENV"
         fi
         echo "ATTIC_CACHE=${{ inputs.attic-cache }}" >> "$GITHUB_ENV"
+
+        {
+          echo "runner_class=$runner_class"
+          echo "attic_reachable=$attic_reachable"
+          echo "bazel_cache_reachable=$bazel_cache_reachable"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice::nix-setup runner_class=${runner_class:-<none>} attic=$attic_reachable bazel_cache=$bazel_cache_reachable"
+      env:
+        RUNNER_LABELS: ${{ join(runner.labels, ',') }}
 
     - name: Add Nix to PATH
       shell: bash

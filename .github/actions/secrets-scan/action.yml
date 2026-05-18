@@ -1,5 +1,5 @@
 name: "Secrets Scan"
-description: "Run TruffleHog and Gitleaks for verified secret detection"
+description: "Run TruffleHog and Gitleaks for verified secret detection. Surfaces a findings_count output and accepts extra_paths for per-spoke config layouts."
 
 inputs:
   trufflehog-args:
@@ -11,6 +11,17 @@ inputs:
   gitleaks-config:
     description: "Path to .gitleaks.toml config (skipped if not found)"
     default: ".gitleaks.toml"
+  extra_paths:
+    description: |
+      Extra paths to also scan for .gitleaks.toml, space-separated.
+      Useful for spokes that keep their gitleaks config under tools/,
+      config/, or similar. The first existing file wins.
+    default: ""
+
+outputs:
+  findings_count:
+    description: "Number of gitleaks findings (0 if clean). Available for downstream surfacing into GITHUB_STEP_SUMMARY."
+    value: ${{ steps.gitleaks.outputs.findings_count }}
 
 runs:
   using: "composite"
@@ -26,11 +37,58 @@ runs:
         curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${{ inputs.gitleaks-version }}/gitleaks_${{ inputs.gitleaks-version }}_linux_x64.tar.gz" \
           | tar xz -C /usr/local/bin gitleaks
 
-    - name: Run gitleaks
+    - name: Resolve gitleaks config
+      id: cfg
       shell: bash
       run: |
-        ARGS="detect --source . --verbose --exit-code 1"
+        set -euo pipefail
+        cfg=""
+        # Honor explicit config first.
         if [ -f "${{ inputs.gitleaks-config }}" ]; then
-          ARGS="$ARGS --config ${{ inputs.gitleaks-config }}"
+          cfg="${{ inputs.gitleaks-config }}"
+        else
+          for p in ${{ inputs.extra_paths }}; do
+            for candidate in "$p/.gitleaks.toml" "$p/gitleaks.toml"; do
+              if [ -f "$candidate" ]; then cfg="$candidate"; break 2; fi
+            done
+          done
         fi
-        gitleaks $ARGS
+        echo "config=$cfg" >> "$GITHUB_OUTPUT"
+        if [ -n "$cfg" ]; then
+          echo "::notice::gitleaks using config $cfg"
+        else
+          echo "::notice::gitleaks running without explicit config"
+        fi
+
+    - name: Run gitleaks
+      id: gitleaks
+      shell: bash
+      run: |
+        set +e
+        report="${RUNNER_TEMP:-/tmp}/gitleaks-report.json"
+        ARGS=(detect --source . --verbose --report-format json --report-path "$report" --exit-code 1)
+        if [ -n "${{ steps.cfg.outputs.config }}" ]; then
+          ARGS+=(--config "${{ steps.cfg.outputs.config }}")
+        fi
+        gitleaks "${ARGS[@]}"
+        rc=$?
+        set -e
+
+        # Findings count from JSON report (empty file = no findings).
+        if [ -s "$report" ]; then
+          count=$(jq 'length' "$report" 2>/dev/null || echo 0)
+        else
+          count=0
+        fi
+        echo "findings_count=$count" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "## Secrets scan"
+          echo ""
+          echo "- gitleaks findings: **$count**"
+          if [ -n "${{ steps.cfg.outputs.config }}" ]; then
+            echo "- config: \`${{ steps.cfg.outputs.config }}\`"
+          fi
+        } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+        exit $rc
