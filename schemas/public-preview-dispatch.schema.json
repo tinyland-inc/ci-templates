@@ -1,0 +1,123 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/schemas/public-preview-dispatch.schema.json",
+	"title": "Tinyland public preview repository_dispatch payload",
+	"description": "Canonical payload shape for explicit public/client review aliases. The spoke requests a preview; Blahaj owns Cloudflare DNS, Access, Tunnel ingress, and cleanup.",
+	"type": "object",
+	"required": ["event_type", "client_payload"],
+	"additionalProperties": false,
+	"properties": {
+		"event_type": {
+			"type": "string",
+			"pattern": "^[a-z][a-z0-9-]+-public-preview$"
+		},
+		"client_payload": {
+			"type": "object",
+			"required": [
+				"schema_version",
+				"operation",
+				"spoke",
+				"source_repository",
+				"source_pr",
+				"source_commit",
+				"lane",
+				"origin_fqdn",
+				"preview_hostname",
+				"ttl_hours",
+				"auth"
+			],
+			"additionalProperties": false,
+			"properties": {
+				"schema_version": { "const": 1 },
+				"operation": { "enum": ["provision", "destroy"] },
+				"spoke": {
+					"type": "string",
+					"pattern": "^[a-z][a-z0-9-]{1,62}$"
+				},
+				"source_repository": {
+					"type": "string",
+					"pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+				},
+				"source_pr": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"source_commit": {
+					"type": "string",
+					"pattern": "^[0-9a-f]{40}$"
+				},
+				"lane": {
+					"type": "string",
+					"pattern": "^[a-z][a-z0-9-]{0,63}$"
+				},
+				"origin_fqdn": {
+					"type": "string",
+					"format": "hostname"
+				},
+				"origin_service": {
+					"type": "string"
+				},
+				"origin_host_header": {
+					"type": "string",
+					"format": "hostname"
+				},
+				"preview_hostname": {
+					"type": "string",
+					"format": "hostname"
+				},
+				"ttl_hours": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 168,
+					"default": 72
+				},
+				"description": {
+					"type": "string",
+					"maxLength": 240
+				},
+				"auth": {
+					"type": "object",
+					"required": ["provider", "identity_provider", "session_duration"],
+					"additionalProperties": false,
+					"properties": {
+						"provider": { "const": "cloudflare-access" },
+						"identity_provider": { "const": "One-time PIN" },
+						"allow_emails": {
+							"type": "array",
+							"items": {
+								"type": "string",
+								"format": "email"
+							},
+							"uniqueItems": true,
+							"default": []
+						},
+						"allow_email_domains": {
+							"type": "array",
+							"items": {
+								"type": "string",
+								"format": "hostname"
+							},
+							"uniqueItems": true,
+							"default": []
+						},
+						"session_duration": {
+							"type": "string",
+							"pattern": "^[1-9][0-9]*h$",
+							"default": "24h"
+						}
+					},
+					"anyOf": [
+						{
+							"required": ["allow_emails"],
+							"properties": { "allow_emails": { "minItems": 1 } }
+						},
+						{
+							"required": ["allow_email_domains"],
+							"properties": { "allow_email_domains": { "minItems": 1 } }
+						}
+					]
+				}
+			}
+		}
+	}
+}

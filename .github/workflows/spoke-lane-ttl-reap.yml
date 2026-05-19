@@ -1,0 +1,41 @@
+name: spoke-lane-ttl-reap
+
+on:
+  workflow_call:
+    inputs:
+      spoke:
+        type: string
+        required: true
+      domain:
+        type: string
+        required: true
+      dry_run:
+        type: boolean
+        default: false
+      blahaj_repository:
+        type: string
+        default: tinyland-inc/blahaj
+      dry_run_only:
+        type: boolean
+        default: false
+    secrets:
+      BLAHAJ_DISPATCH_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch expired lane reap
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: tinyland-inc/ci-templates/.github/actions/lane-ttl-reap@v1
+        with:
+          spoke: ${{ inputs.spoke }}
+          domain: ${{ inputs.domain }}
+          dry_run: ${{ inputs.dry_run }}
+          blahaj_repository: ${{ inputs.blahaj_repository }}
+          dry_run_only: ${{ inputs.dry_run_only }}
+          dispatch_token: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}

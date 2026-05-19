@@ -1,0 +1,134 @@
+name: flywheel-reapi-proof
+description: |
+  Dispatch and optionally wait for a GloriousFlywheel executor-backed proof
+  workflow. This is a dispatcher only; the GF workflow remains the proof
+  authority and must publish artifact evidence with remote_processes > 0 and a
+  worker_image_digest before a target class is considered proved.
+
+inputs:
+  gf_repository:
+    description: GloriousFlywheel repository.
+    required: false
+    default: tinyland-inc/GloriousFlywheel
+  gf_workflow:
+    description: GloriousFlywheel proof workflow filename.
+    required: false
+    default: gf-reapi-cell-proof.yml
+  gf_ref:
+    description: GloriousFlywheel ref to run.
+    required: false
+    default: main
+  image_digest:
+    description: Digest-pinned REAPI worker image.
+    required: true
+  target:
+    description: Bazel target to prove.
+    required: true
+  bazel_command:
+    description: Bazel command, usually build or test.
+    required: false
+    default: test
+  consumer_repository:
+    description: Consumer repository being checked out by the proof workflow.
+    required: true
+  consumer_ref:
+    description: Consumer commit/ref to prove.
+    required: true
+  consumer_checkout_authority:
+    description: Checkout authority passed to the GF workflow.
+    required: false
+    default: repo-scoped-deploy-key
+  tinyland_schemas_private_handoff:
+    description: Whether the proof needs Tinyland private schema handoff.
+    required: false
+    default: "false"
+  apply:
+    description: Whether the GF workflow should execute rather than plan.
+    required: false
+    default: "true"
+  force_execution:
+    description: Force remote execution rather than accepting cache hits.
+    required: false
+    default: "true"
+  wait:
+    description: Wait for the GF workflow to finish.
+    required: false
+    default: "true"
+  dispatch_token:
+    description: GitHub token allowed to dispatch and watch the GF workflow.
+    required: true
+
+outputs:
+  run_id:
+    description: Dispatched GF run ID.
+    value: ${{ steps.resolve.outputs.run_id }}
+  run_url:
+    description: Dispatched GF run URL.
+    value: ${{ steps.resolve.outputs.run_url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Dispatch GloriousFlywheel REAPI proof
+      id: dispatch
+      shell: bash
+      run: |
+        set -euo pipefail
+        dispatch_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        gh workflow run "${{ inputs.gf_workflow }}" \
+          --repo "${{ inputs.gf_repository }}" \
+          --ref "${{ inputs.gf_ref }}" \
+          -f image_digest="${{ inputs.image_digest }}" \
+          -f target="${{ inputs.target }}" \
+          -f bazel_command="${{ inputs.bazel_command }}" \
+          -f consumer_repository="${{ inputs.consumer_repository }}" \
+          -f consumer_ref="${{ inputs.consumer_ref }}" \
+          -f consumer_checkout_authority="${{ inputs.consumer_checkout_authority }}" \
+          -f tinyland_schemas_private_handoff="${{ inputs.tinyland_schemas_private_handoff }}" \
+          -f apply="${{ inputs.apply }}" \
+          -f force_execution="${{ inputs.force_execution }}"
+        echo "dispatch_time=${dispatch_time}" >> "${GITHUB_OUTPUT}"
+      env:
+        GH_TOKEN: ${{ inputs.dispatch_token }}
+
+    - name: Resolve dispatched run
+      id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+        run_id=""
+        for _ in $(seq 1 60); do
+          run_id="$(
+            gh run list \
+              --repo "${{ inputs.gf_repository }}" \
+              --workflow "${{ inputs.gf_workflow }}" \
+              --event workflow_dispatch \
+              --branch "${{ inputs.gf_ref }}" \
+              --limit 20 \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"${{ steps.dispatch.outputs.dispatch_time }}\")] | sort_by(.createdAt, .databaseId) | last | .databaseId // \"\""
+          )"
+          if [ -n "${run_id}" ]; then
+            break
+          fi
+          sleep 5
+        done
+        if [ -z "${run_id}" ]; then
+          echo "::error::Could not resolve dispatched GloriousFlywheel proof run"
+          exit 1
+        fi
+        run_url="$(gh run view "${run_id}" --repo "${{ inputs.gf_repository }}" --json url --jq .url)"
+        {
+          echo "run_id=${run_id}"
+          echo "run_url=${run_url}"
+        } >> "${GITHUB_OUTPUT}"
+        echo "::notice::GloriousFlywheel proof run: ${run_url}"
+      env:
+        GH_TOKEN: ${{ inputs.dispatch_token }}
+
+    - name: Wait for GloriousFlywheel REAPI proof
+      if: inputs.wait == 'true'
+      shell: bash
+      run: gh run watch "${{ steps.resolve.outputs.run_id }}" --repo "${{ inputs.gf_repository }}" --exit-status
+      env:
+        GH_TOKEN: ${{ inputs.dispatch_token }}

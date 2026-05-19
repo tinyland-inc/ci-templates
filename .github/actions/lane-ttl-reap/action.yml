@@ -1,0 +1,125 @@
+name: lane-ttl-reap
+description: |
+  Construct + emit the Blahaj `<spoke>-lane-ttl-reap`
+  `repository_dispatch` payload for scheduled expired-lane cleanup.
+  Blahaj owns listing and idempotent destruction.
+
+inputs:
+  spoke:
+    description: Spoke slug.
+    required: true
+  domain:
+    description: Spoke brand domain.
+    required: true
+  dry_run:
+    description: Ask Blahaj to report expired lanes without deleting them.
+    required: false
+    default: "false"
+  blahaj_repository:
+    description: Target repository for the repository_dispatch.
+    required: false
+    default: tinyland-inc/blahaj
+  dispatch_token:
+    description: GitHub token with repo:dispatch scope on blahaj_repository. Required unless local dry_run_only is true.
+    required: false
+    default: ""
+  dry_run_only:
+    description: Build + validate the payload but do not POST.
+    required: false
+    default: "false"
+
+outputs:
+  payload_path:
+    description: Saved payload path.
+    value: ${{ steps.build.outputs.payload_path }}
+  dispatch_id:
+    description: Synthetic dispatch ID.
+    value: ${{ steps.build.outputs.dispatch_id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build TTL reap payload
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+        requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        case "${{ inputs.dry_run }}" in true|false) ;; *) echo "::error::dry_run must be true or false"; exit 64 ;; esac
+
+        payload="$(jq -nc \
+          --arg event_type "${{ inputs.spoke }}-lane-ttl-reap" \
+          --arg spoke "${{ inputs.spoke }}" \
+          --arg domain "${{ inputs.domain }}" \
+          --arg requested_at "${requested_at}" \
+          --argjson dry_run "${{ inputs.dry_run }}" \
+          '{
+            event_type: $event_type,
+            client_payload: {
+              schema_version: 1,
+              operation: "reap-expired",
+              spoke: $spoke,
+              domain: $domain,
+              requested_at: $requested_at,
+              dry_run: $dry_run
+            }
+          }')"
+
+        dispatch_id="${{ inputs.spoke }}-ttl-reap-${GITHUB_RUN_ID}"
+        payload_path="${RUNNER_TEMP}/lane-ttl-reap-${dispatch_id}.json"
+        echo "${payload}" | jq . > "${payload_path}"
+        {
+          echo "dispatch_id=${dispatch_id}"
+          echo "payload_path=${payload_path}"
+        } >> "${GITHUB_OUTPUT}"
+        cat "${payload_path}"
+
+    - name: Validate against schema
+      shell: bash
+      run: |
+        set -euo pipefail
+        schema="${{ github.action_path }}/../../../schemas/lane-ttl-reap-dispatch.schema.json"
+        python3 - <<PY
+        import json, re, sys
+        try:
+            from jsonschema import Draft202012Validator
+        except ImportError:
+            Draft202012Validator = None
+        schema = json.load(open("$schema"))
+        payload = json.load(open("${{ steps.build.outputs.payload_path }}"))
+        if Draft202012Validator is None:
+            cp = payload.get("client_payload", {})
+            ok = (
+                re.match(r"^[a-z][a-z0-9-]+-lane-ttl-reap$", payload.get("event_type", "")) and
+                cp.get("schema_version") == 1 and
+                cp.get("operation") == "reap-expired" and
+                isinstance(cp.get("dry_run"), bool)
+            )
+            if not ok:
+                print("::error::payload failed minimal lane-ttl-reap validation", file=sys.stderr)
+                sys.exit(1)
+            print("::warning::jsonschema unavailable; used minimal lane-ttl-reap validation")
+        else:
+            errs = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda e: list(e.absolute_path))
+            if errs:
+                for e in errs:
+                    p = "/" + "/".join(str(x) for x in e.absolute_path)
+                    print(f"::error::payload at {p}: {e.message}", file=sys.stderr)
+                sys.exit(1)
+        PY
+
+    - name: Dispatch
+      if: inputs.dry_run_only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${{ inputs.dispatch_token }}" ]]; then
+          echo "::error::dispatch_token is required when dry_run_only=false"
+          exit 1
+        fi
+        gh api "/repos/${{ inputs.blahaj_repository }}/dispatches" \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          --input "${{ steps.build.outputs.payload_path }}"
+      env:
+        GH_TOKEN: ${{ inputs.dispatch_token }}

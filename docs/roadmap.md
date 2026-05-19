@@ -34,9 +34,15 @@ Likely: org-level allowlist of repos that may set `lane-ttl/permanent`.
 
 ### `flywheel-reapi-proof` composite
 
-Extract MassageIthaca's bespoke `rbe-proof` job pattern into a reusable
-composite once a second spoke wants it. Currently spoke-local; promotion
-gated on demand.
+Implemented as a dispatcher-only composite. GloriousFlywheel remains the proof
+authority; consumers must cite the GF run/artifact evidence before calling a
+target class proved.
+
+### Public preview overlay
+
+Implemented as a reusable dispatch workflow and composite. Spokes request
+client-review aliases through Blahaj; Cloudflare DNS, Access, Tunnel ingress,
+and expiry cleanup stay out of spoke credentials.
 
 ### Renovate / Dependabot configs
 

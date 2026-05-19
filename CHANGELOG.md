@@ -5,6 +5,22 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`public-preview-dispatch` composite + `spoke-public-preview.yml`** —
+  reusable dispatch path for explicit public/client review aliases. The payload
+  is schema-validated and carries source repo, PR, commit, lane, origin host,
+  preview hostname, TTL, and Cloudflare Access allowlist. Spokes request the
+  alias; Blahaj owns DNS, Access, Tunnel ingress, and cleanup.
+- **`lane-ttl-reap` composite + `spoke-lane-ttl-reap.yml`** — reusable
+  scheduled TTL backstop dispatcher. Blahaj owns listing and idempotent
+  destruction of expired lane environments.
+- **`flywheel-reapi-proof` composite** — reusable dispatcher for
+  GloriousFlywheel executor-backed proof workflows. The composite does not
+  promote target classes by itself; GF proof artifacts remain authoritative.
+- **Public preview and TTL reap schemas** — vendored from the site.scaffold
+  contract alongside the existing lane schemas.
+
 ### Fixed (v1.1.5)
 
 - **`lane-status-check` composite — use `curl` instead of `gh api`** —
