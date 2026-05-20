@@ -106,7 +106,7 @@ on:
 
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@main
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v2.0.0
     with:
       runner_mode: repo_owned
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
@@ -140,7 +140,7 @@ on:
 
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@main
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v2.0.0
     with:
       runner_mode: hosted
       workspace_mode: isolated

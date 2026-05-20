@@ -57,7 +57,18 @@ runs:
           echo "::error::lanes.json not found at ${{ inputs.path }}"
           exit 1
         fi
-        python3 - <<PY
+
+        if python3 -c 'import jsonschema' >/dev/null 2>&1; then
+          validator=(python3)
+        elif command -v nix >/dev/null 2>&1 && [[ -f flake.nix ]]; then
+          validator=(nix develop --command python3)
+          echo "::notice::host python lacks jsonschema; validating via nix develop"
+        else
+          echo "::error::python jsonschema is unavailable and no flake.nix dev shell exists"
+          exit 2
+        fi
+
+        "${validator[@]}" - <<PY
         import json, sys
         from jsonschema import Draft202012Validator
         schema = json.load(open("$schema"))

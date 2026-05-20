@@ -1,5 +1,5 @@
 name: "Nix Setup"
-description: "Configure Nix and cache endpoints. Auto-detects Attic and Bazel on self-hosted ARC runners. Outputs cluster-reachability flags consumed by `flywheel-bazel`."
+description: "Configure Nix and cache hints. Attic may be auto-detected on self-hosted ARC runners; Bazel endpoints are runtime authority supplied by environment or inputs. Outputs cluster-reachability flags consumed by `flywheel-bazel`."
 
 inputs:
   attic-server:
@@ -9,7 +9,7 @@ inputs:
     description: "Attic cache name"
     default: "main"
   bazel-cache:
-    description: "Bazel remote cache endpoint (auto-detected on self-hosted)"
+    description: "Bazel remote cache endpoint. Optional override for BAZEL_REMOTE_CACHE; no endpoint is invented by this action."
     default: ""
 
 outputs:
@@ -62,14 +62,21 @@ runs:
             echo "::warning::Attic cache DNS unreachable ($ATTIC_HOST) — running without cache"
           fi
 
-          BAZEL="${{ inputs.bazel-cache }}"
-          BAZEL_URL="${BAZEL:-${BAZEL_REMOTE_CACHE:-grpc://bazel-cache.nix-cache.svc.cluster.local:9092}}"
-          BAZEL_HOST=$(echo "$BAZEL_URL" | sed 's|grpcs\?://||;s|:.*||')
-          if getent hosts "$BAZEL_HOST" >/dev/null 2>&1; then
-            echo "BAZEL_REMOTE_CACHE=$BAZEL_URL" >> "$GITHUB_ENV"
-            bazel_cache_reachable=true
+          BAZEL_URL="${{ inputs.bazel-cache }}"
+          if [ -z "$BAZEL_URL" ]; then
+            BAZEL_URL="${BAZEL_REMOTE_CACHE:-}"
+          fi
+
+          if [ -n "$BAZEL_URL" ]; then
+            BAZEL_HOST=$(echo "$BAZEL_URL" | sed 's|grpcs\?://||;s|:.*||')
+            if getent hosts "$BAZEL_HOST" >/dev/null 2>&1; then
+              echo "BAZEL_REMOTE_CACHE=$BAZEL_URL" >> "$GITHUB_ENV"
+              bazel_cache_reachable=true
+            else
+              echo "::warning::Configured Bazel cache DNS unreachable ($BAZEL_HOST) — Flywheel Bazel commands will fail fast unless another step supplies BAZEL_REMOTE_CACHE"
+            fi
           else
-            echo "::warning::Bazel cache DNS unreachable ($BAZEL_HOST) — running without remote cache"
+            echo "::notice::No BAZEL_REMOTE_CACHE configured by input or environment; Flywheel Bazel commands will fail fast if selected."
           fi
         elif [ -n "${{ inputs.attic-server }}" ]; then
           echo "ATTIC_SERVER=${{ inputs.attic-server }}" >> "$GITHUB_ENV"

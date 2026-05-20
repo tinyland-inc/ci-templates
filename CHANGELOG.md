@@ -7,6 +7,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Added
 
+- **`inherit-scaffold-skills` composite** — pulls
+  `plugins/scaffold-core` from `tinyland-inc/site.scaffold` at a pinned tag or
+  commit SHA, dereferences skill symlinks, and can materialize
+  `.agents/skills` plus `.claude/skills` in consumer spokes. Branch refs such
+  as `main` are rejected by default so inherited AX contracts do not drift
+  silently.
+- **v1 to v2 migration guide** — documents endpoint-free Flywheel behavior,
+  scaffold skills inheritance, v2 internal refs, and rollback posture.
 - **`public-preview-dispatch` composite + `spoke-public-preview.yml`** —
   reusable dispatch path for explicit public/client review aliases. The payload
   is schema-validated and carries source repo, PR, commit, lane, origin host,
@@ -20,6 +28,36 @@ Versioning: [SemVer 2.0](https://semver.org/).
   promote target classes by itself; GF proof artifacts remain authoritative.
 - **Public preview and TTL reap schemas** — vendored from the site.scaffold
   contract alongside the existing lane schemas.
+- **`repo-manifest-validate` composite + repo manifest schema** — reusable
+  validation for `tinyland.repo.json`, including optional role gating such as
+  `static-spoke,static-spoke-scaffold`.
+- **Repo-local validation contract** — adds `Justfile`, `flake.nix`, and
+  `tinyland.repo.json` so this template repo can validate itself the same way
+  consuming repos do. `just check` now parses workflow/action YAML, parses
+  vendored schemas, validates the repo manifest, checks v2 internal refs, and
+  enforces endpoint-free Flywheel defaults plus the canonical Tinyland gitleaks
+  working-tree scan.
+
+### Changed
+
+- **Flywheel Bazel binding is endpoint-free** — `bazelrc/flywheel.bazelrc`
+  no longer hard-codes `remote_cache`, `remote_executor`, or cache upload
+  authority. `flywheel-bazel` now passes `--remote_cache` and
+  `--remote_executor` from runtime env/action inputs and fails fast when the
+  required endpoint is absent.
+- **Reusable workflow internal refs target v2** — v2 workflows and nested
+  composites call sibling ci-templates actions through `@v2`, not `@v1`, so a
+  `spoke-ci.yml@v2.0.0` consumer receives the endpoint-free Flywheel and
+  manifest-validation behavior from the same major release.
+- **Internal action refs no longer use `@main`** — nested ci-templates action
+  calls now use the current floating major tag, and consumer docs point at
+  immutable release tags.
+- **Schema validators can fall back to the consumer Nix dev shell** —
+  `lanes-load` and `repo-manifest-validate` use host Python when `jsonschema`
+  is available and otherwise route through `nix develop --command python3`.
+- **`spoke-ci.yml` now validates repo manifests when present** — pre-manifest
+  consumers continue with a notice; repos that ship `tinyland.repo.json` must
+  declare `static-spoke` or `static-spoke-scaffold` for the spoke workflow.
 
 ### Fixed (v1.1.5)
 

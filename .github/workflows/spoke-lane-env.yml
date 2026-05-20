@@ -82,9 +82,9 @@ jobs:
       spoke_domain: ${{ steps.load.outputs.spoke_domain }}
     steps:
       - uses: actions/checkout@v6
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v1.1.3
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
       - id: load
-        uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v1.0.0
+        uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v2
         with:
           path: ${{ inputs.lanes_path }}
 
@@ -131,8 +131,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v1.1.3
-      - uses: tinyland-inc/ci-templates/.github/actions/lane-dispatch@v1.0.0
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      - uses: tinyland-inc/ci-templates/.github/actions/lane-dispatch@v2
         with:
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
           commit_sha: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -168,8 +168,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v1.1.3
-      - uses: tinyland-inc/ci-templates/.github/actions/lane-reap@v1.0.0
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      - uses: tinyland-inc/ci-templates/.github/actions/lane-reap@v2
         with:
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
           spoke: ${{ needs.lanes-load.outputs.spoke_name }}

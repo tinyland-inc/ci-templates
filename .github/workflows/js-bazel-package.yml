@@ -282,7 +282,7 @@ jobs:
 
       - name: Configure self-hosted cache contract
         if: ${{ runner.environment != 'github-hosted' }}
-        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@main
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
 
       - name: Resolve working directory
         shell: bash
@@ -670,7 +670,7 @@ jobs:
 
       - name: Configure self-hosted cache contract
         if: ${{ runner.environment != 'github-hosted' }}
-        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@main
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
@@ -750,7 +750,7 @@ jobs:
 
       - name: Configure self-hosted cache contract
         if: ${{ runner.environment != 'github-hosted' }}
-        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@main
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:

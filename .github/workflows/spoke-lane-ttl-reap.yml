@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: tinyland-inc/ci-templates/.github/actions/lane-ttl-reap@v1
+      - uses: tinyland-inc/ci-templates/.github/actions/lane-ttl-reap@v2
         with:
           spoke: ${{ inputs.spoke }}
           domain: ${{ inputs.domain }}

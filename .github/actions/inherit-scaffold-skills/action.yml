@@ -1,0 +1,236 @@
+name: inherit-scaffold-skills
+description: |
+  Pull the scaffold-core agent/AX plugin from tinyland-inc/site.scaffold at a
+  pinned ref, then materialize canonical `.agents/skills` and `.claude/skills`
+  surfaces for a spoke repo.
+
+inputs:
+  scaffold_repository:
+    description: Repository that owns the scaffold-core plugin.
+    required: false
+    default: tinyland-inc/site.scaffold
+  scaffold_ref:
+    description: |
+      Pinned scaffold ref to inherit from. Must be a semver tag, refs/tags/*
+      ref, or full 40-character commit SHA unless allow_unpinned_ref=true.
+    required: true
+  github_token:
+    description: Token used by actions/checkout for private scaffold refs.
+    required: false
+    default: ""
+  source_path:
+    description: Path to the plugin inside the scaffold checkout.
+    required: false
+    default: plugins/scaffold-core
+  target_path:
+    description: Path to write the inherited plugin in the consumer checkout.
+    required: false
+    default: plugins/scaffold-core
+  mode:
+    description: sync writes files; check only reports drift and fails if stale.
+    required: false
+    default: sync
+  install_agent_skills:
+    description: Copy plugin skills into `.agents/skills`.
+    required: false
+    default: "true"
+  agent_skills_path:
+    description: Consumer path for canonical Codex/OpenAI skill bodies.
+    required: false
+    default: .agents/skills
+  install_claude_symlinks:
+    description: Create `.claude/skills/<name>` symlinks to `.agents/skills/<name>`.
+    required: false
+    default: "true"
+  claude_skills_path:
+    description: Consumer path for Claude Code skill discovery links.
+    required: false
+    default: .claude/skills
+  allow_unpinned_ref:
+    description: |
+      Escape hatch for local testing only. Production spoke workflows should
+      keep this false so `main`/branch refs cannot silently drift.
+    required: false
+    default: "false"
+
+outputs:
+  plugin_path:
+    description: Consumer path containing the inherited scaffold-core plugin.
+    value: ${{ steps.inherit.outputs.plugin_path }}
+  skill_count:
+    description: Number of inherited skill directories.
+    value: ${{ steps.inherit.outputs.skill_count }}
+  scaffold_ref:
+    description: Scaffold ref used for inheritance.
+    value: ${{ steps.inherit.outputs.scaffold_ref }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate pinned scaffold ref
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        ref="${{ inputs.scaffold_ref }}"
+        allow_unpinned="${{ inputs.allow_unpinned_ref }}"
+        if [[ -z "$ref" ]]; then
+          echo "::error::scaffold_ref is required"
+          exit 1
+        fi
+
+        case "$ref" in
+          main|master|develop|trunk|HEAD|refs/heads/*)
+            if [[ "$allow_unpinned" != "true" ]]; then
+              echo "::error::scaffold_ref=$ref is not pinned. Use a semver tag, refs/tags/*, or a full commit SHA."
+              exit 1
+            fi
+            ;;
+          refs/tags/*)
+            ;;
+          *)
+            if [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?$ ]]; then
+              :
+            elif [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              :
+            elif [[ "$allow_unpinned" == "true" ]]; then
+              echo "::warning::allow_unpinned_ref=true permits scaffold_ref=$ref"
+            else
+              echo "::error::scaffold_ref=$ref is not an accepted pinned ref. Use vX.Y.Z, refs/tags/*, or a full commit SHA."
+              exit 1
+            fi
+            ;;
+        esac
+
+    - name: Checkout scaffold source
+      uses: actions/checkout@v6
+      with:
+        repository: ${{ inputs.scaffold_repository }}
+        ref: ${{ inputs.scaffold_ref }}
+        path: .ci-templates-scaffold-source
+        persist-credentials: false
+        token: ${{ inputs.github_token || github.token }}
+
+    - name: Inherit scaffold skills
+      id: inherit
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        source_path=".ci-templates-scaffold-source/${{ inputs.source_path }}"
+        target_path="${{ inputs.target_path }}"
+        mode="${{ inputs.mode }}"
+        install_agent_skills="${{ inputs.install_agent_skills }}"
+        install_claude_symlinks="${{ inputs.install_claude_symlinks }}"
+        agent_skills_path="${{ inputs.agent_skills_path }}"
+        claude_skills_path="${{ inputs.claude_skills_path }}"
+
+        case "$mode" in
+          sync|check) ;;
+          *)
+            echo "::error::mode must be sync or check; got $mode"
+            exit 1
+            ;;
+        esac
+
+        if [[ ! -d "$source_path" ]]; then
+          echo "::error::scaffold plugin not found at ${{ inputs.scaffold_repository }}@${{ inputs.scaffold_ref }}:${{ inputs.source_path }}"
+          exit 1
+        fi
+        if [[ ! -f "$source_path/plugin.json" ]]; then
+          echo "::error::scaffold plugin missing plugin.json at $source_path"
+          exit 1
+        fi
+        if [[ ! -d "$source_path/skills" ]]; then
+          echo "::error::scaffold plugin missing skills/ at $source_path"
+          exit 1
+        fi
+
+        python3 - <<PY
+        import json
+        from pathlib import Path
+        plugin = json.loads(Path("$source_path/plugin.json").read_text())
+        if not isinstance(plugin, dict):
+            raise SystemExit("::error::plugin.json must contain an object")
+        for key in ("name", "version"):
+            if not plugin.get(key):
+                raise SystemExit(f"::error::plugin.json missing required key: {key}")
+        PY
+
+        skill_count="$(
+          find -L "$source_path/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' '
+        )"
+        if [[ "$skill_count" -lt 1 ]]; then
+          echo "::error::scaffold plugin contains no skills"
+          exit 1
+        fi
+
+        tmp_path="${target_path}.tmp-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
+        rm -rf "$tmp_path"
+        mkdir -p "$(dirname "$tmp_path")"
+        cp -R -L "$source_path" "$tmp_path"
+
+        if [[ "$mode" == "check" ]]; then
+          if [[ ! -d "$target_path" ]]; then
+            echo "::error::$target_path is missing; run inherit-scaffold-skills in sync mode"
+            exit 1
+          fi
+          if ! diff -ruN "$tmp_path" "$target_path"; then
+            echo "::error::$target_path differs from ${{ inputs.scaffold_repository }}@${{ inputs.scaffold_ref }}:${{ inputs.source_path }}"
+            exit 1
+          fi
+          rm -rf "$tmp_path"
+        else
+          mkdir -p "$(dirname "$target_path")"
+          rm -rf "$target_path"
+          mv "$tmp_path" "$target_path"
+        fi
+
+        if [[ "$mode" == "sync" && "$install_agent_skills" == "true" ]]; then
+          mkdir -p "$agent_skills_path"
+          while IFS= read -r -d '' skill_dir; do
+            skill_name="$(basename "$skill_dir")"
+            rm -rf "$agent_skills_path/$skill_name"
+            cp -R -L "$skill_dir" "$agent_skills_path/$skill_name"
+          done < <(find "$target_path/skills" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+        elif [[ "$install_agent_skills" != "true" && "$install_agent_skills" != "false" ]]; then
+          echo "::error::install_agent_skills must be true or false"
+          exit 1
+        fi
+
+        if [[ "$mode" == "sync" && "$install_claude_symlinks" == "true" ]]; then
+          if [[ "$install_agent_skills" != "true" ]]; then
+            echo "::error::install_claude_symlinks=true requires install_agent_skills=true"
+            exit 1
+          fi
+          mkdir -p "$claude_skills_path"
+          while IFS= read -r -d '' skill_dir; do
+            skill_name="$(basename "$skill_dir")"
+            link_path="$claude_skills_path/$skill_name"
+            link_target="$(
+              python3 - <<PY
+        import os
+        print(os.path.relpath("$agent_skills_path/$skill_name", "$claude_skills_path"))
+        PY
+            )"
+            rm -rf "$link_path"
+            ln -s "$link_target" "$link_path"
+          done < <(find "$agent_skills_path" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+        elif [[ "$install_claude_symlinks" != "true" && "$install_claude_symlinks" != "false" ]]; then
+          echo "::error::install_claude_symlinks must be true or false"
+          exit 1
+        fi
+
+        {
+          echo "plugin_path=$target_path"
+          echo "skill_count=$skill_count"
+          echo "scaffold_ref=${{ inputs.scaffold_ref }}"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice::inherited $skill_count scaffold skill(s) from ${{ inputs.scaffold_repository }}@${{ inputs.scaffold_ref }}"
+
+    - name: Remove scaffold checkout
+      shell: bash
+      if: always()
+      run: |
+        rm -rf .ci-templates-scaffold-source

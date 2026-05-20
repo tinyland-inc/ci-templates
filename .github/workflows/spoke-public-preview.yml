@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: tinyland-inc/ci-templates/.github/actions/public-preview-dispatch@v1
+      - uses: tinyland-inc/ci-templates/.github/actions/public-preview-dispatch@v2
         with:
           operation: ${{ inputs.operation }}
           spoke: ${{ inputs.spoke }}

@@ -1,0 +1,52 @@
+title = "ci-templates gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Template and example files may contain documented placeholder values."
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/).*\.example\.(json|ya?ml|toml|env|txt)$''',
+  '''(^|/).*\.template$''',
+  '''(^|/).*\.sample$''',
+]
+
+[[allowlists]]
+description = "Known non-secret infrastructure literals."
+regexTarget = "line"
+regexes = [
+  '''/nix/store/[a-z0-9]{32}-''',
+  '''age1[a-z0-9]{58}''',
+  '''\{\{\s*vault_[A-Za-z0-9_]+''',
+  '''vault_[A-Za-z0-9_]+\s*[:=]\s*["']?\{\{''',
+  '''\$2[ayb]\$10\$placeholder''',
+]
+
+[[rules]]
+id = "tinyland-cloudflare-api-token"
+description = "Cloudflare API token with cfat_ prefix"
+regex = '''cfat_[A-Za-z0-9]{40,}'''
+keywords = ["cfat_"]
+tags = ["cloudflare", "tinyland"]
+
+[[rules]]
+id = "tinyland-porkbun-api-key"
+description = "Porkbun API key with pk1_ or sk1_ prefix"
+regex = '''(pk1|sk1)_[A-Za-z0-9]{60,}'''
+keywords = ["pk1_", "sk1_"]
+tags = ["porkbun", "tinyland"]
+
+[[rules]]
+id = "tinyland-age-secret-key"
+description = "age secret key"
+regex = '''AGE-SECRET-KEY-1[A-Z0-9]{58,}'''
+keywords = ["AGE-SECRET-KEY-1"]
+tags = ["age", "sops", "tinyland"]
+
+[[rules]]
+id = "tinyland-tailscale-auth-key"
+description = "Tailscale auth, API, or client key"
+regex = '''tskey-(auth|api|client)-[A-Za-z0-9-]{40,}'''
+keywords = ["tskey-"]
+tags = ["tailscale", "tinyland"]
