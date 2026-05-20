@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-05-20
+
 ### Added
 
 - **`inherit-scaffold-skills` composite** — pulls
@@ -58,6 +60,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
 - **`spoke-ci.yml` now validates repo manifests when present** — pre-manifest
   consumers continue with a notice; repos that ship `tinyland.repo.json` must
   declare `static-spoke` or `static-spoke-scaffold` for the spoke workflow.
+- **Release PRs may carry an empty Unreleased section** — `release: vX.Y.Z`
+  PRs are allowed through the changelog gate when branch protection blocks the
+  workflow-driven direct push release path.
 
 ### Fixed (v1.1.5)
 

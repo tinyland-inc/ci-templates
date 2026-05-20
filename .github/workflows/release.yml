@@ -41,6 +41,11 @@ jobs:
       - name: Assert ## [Unreleased] is non-empty
         run: |
           set -euo pipefail
+          subject=$(git log -1 --pretty=%s "${{ github.event.pull_request.head.sha }}")
+          if [[ "$subject" =~ ^release:\ v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::notice::release PR detected ($subject); allowing empty ## [Unreleased]"
+            exit 0
+          fi
           if [ ! -f CHANGELOG.md ]; then
             echo "::error::CHANGELOG.md missing"
             exit 1
