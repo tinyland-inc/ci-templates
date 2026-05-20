@@ -1,0 +1,217 @@
+name: public-preview-dispatch
+description: |
+  Construct + emit the Blahaj `<spoke>-public-preview`
+  `repository_dispatch` payload for explicit public/client review aliases.
+  Blahaj owns Cloudflare DNS, Access, Tunnel ingress, and cleanup.
+
+inputs:
+  operation:
+    description: provision or destroy.
+    required: false
+    default: provision
+  spoke:
+    description: Spoke slug.
+    required: true
+  source_repository:
+    description: Source repository in owner/name form.
+    required: true
+  source_pr:
+    description: Source pull request number.
+    required: true
+  source_commit:
+    description: Full 40-character source commit SHA.
+    required: true
+  lane:
+    description: Lane or env identity being publicly exposed.
+    required: true
+  origin_fqdn:
+    description: Existing tailnet or internal hostname that Cloudflare should route to.
+    required: true
+  origin_service:
+    description: Optional explicit Cloudflare Tunnel service URL. Blahaj may resolve from route authority when omitted.
+    required: false
+    default: ""
+  origin_host_header:
+    description: Optional Host header for the Cloudflare Tunnel origin request. Defaults to origin_fqdn.
+    required: false
+    default: ""
+  preview_hostname:
+    description: Public hostname to create.
+    required: true
+  ttl_hours:
+    description: Public preview TTL in hours. Max 168.
+    required: false
+    default: "72"
+  description:
+    description: Human-readable preview purpose.
+    required: false
+    default: ""
+  allow_emails_json:
+    description: JSON array of email addresses allowed through Cloudflare Access.
+    required: false
+    default: "[]"
+  allow_email_domains_json:
+    description: JSON array of email domains allowed through Cloudflare Access.
+    required: false
+    default: "[]"
+  session_duration:
+    description: Cloudflare Access session duration.
+    required: false
+    default: "24h"
+  blahaj_repository:
+    description: Target repository for the repository_dispatch.
+    required: false
+    default: tinyland-inc/blahaj
+  dispatch_token:
+    description: GitHub token with repo:dispatch scope on blahaj_repository. Required unless dry_run.
+    required: false
+    default: ""
+  dry_run:
+    description: If true, build + validate the payload but do not POST.
+    required: false
+    default: "false"
+
+outputs:
+  dispatch_id:
+    description: Synthetic dispatch ID.
+    value: ${{ steps.build.outputs.dispatch_id }}
+  payload_path:
+    description: Saved payload path.
+    value: ${{ steps.build.outputs.payload_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build payload
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        case "${{ inputs.operation }}" in
+          provision|destroy) ;;
+          *) echo "::error::operation must be provision or destroy"; exit 64 ;;
+        esac
+
+        if ! [[ "${{ inputs.ttl_hours }}" =~ ^[0-9]+$ ]] || [ "${{ inputs.ttl_hours }}" -lt 1 ] || [ "${{ inputs.ttl_hours }}" -gt 168 ]; then
+          echo "::error::ttl_hours must be an integer from 1 through 168"
+          exit 64
+        fi
+
+        emails='${{ inputs.allow_emails_json }}'
+        domains='${{ inputs.allow_email_domains_json }}'
+        jq -e 'type == "array" and all(.[]; type == "string")' <<<"${emails}" >/dev/null
+        jq -e 'type == "array" and all(.[]; type == "string")' <<<"${domains}" >/dev/null
+
+        payload="$(jq -nc \
+          --arg event_type "${{ inputs.spoke }}-public-preview" \
+          --arg operation "${{ inputs.operation }}" \
+          --arg spoke "${{ inputs.spoke }}" \
+          --arg source_repository "${{ inputs.source_repository }}" \
+          --argjson source_pr "${{ inputs.source_pr }}" \
+          --arg source_commit "${{ inputs.source_commit }}" \
+          --arg lane "${{ inputs.lane }}" \
+          --arg origin_fqdn "${{ inputs.origin_fqdn }}" \
+          --arg origin_service "${{ inputs.origin_service }}" \
+          --arg origin_host_header "${{ inputs.origin_host_header }}" \
+          --arg preview_hostname "${{ inputs.preview_hostname }}" \
+          --argjson ttl_hours "${{ inputs.ttl_hours }}" \
+          --arg description "${{ inputs.description }}" \
+          --argjson allow_emails "${emails}" \
+          --argjson allow_email_domains "${domains}" \
+          --arg session_duration "${{ inputs.session_duration }}" \
+          '{
+            event_type: $event_type,
+            client_payload: ({
+              schema_version: 1,
+              operation: $operation,
+              spoke: $spoke,
+              source_repository: $source_repository,
+              source_pr: $source_pr,
+              source_commit: $source_commit,
+              lane: $lane,
+              origin_fqdn: $origin_fqdn,
+              preview_hostname: $preview_hostname,
+              ttl_hours: $ttl_hours,
+              auth: {
+                provider: "cloudflare-access",
+                identity_provider: "One-time PIN",
+                allow_emails: $allow_emails,
+                allow_email_domains: $allow_email_domains,
+                session_duration: $session_duration
+              }
+            }
+            + (if $origin_service == "" then {} else {origin_service: $origin_service} end)
+            + (if $origin_host_header == "" then {} else {origin_host_header: $origin_host_header} end)
+            + (if $description == "" then {} else {description: $description} end))
+          }')"
+
+        dispatch_id="${{ inputs.spoke }}-public-preview-pr${{ inputs.source_pr }}-${GITHUB_RUN_ID}"
+        payload_path="${RUNNER_TEMP}/public-preview-${dispatch_id}.json"
+        echo "${payload}" | jq . > "${payload_path}"
+        {
+          echo "dispatch_id=${dispatch_id}"
+          echo "payload_path=${payload_path}"
+        } >> "${GITHUB_OUTPUT}"
+
+        echo "::group::Public preview dispatch payload (${dispatch_id})"
+        cat "${payload_path}"
+        echo "::endgroup::"
+
+    - name: Validate against schema
+      shell: bash
+      run: |
+        set -euo pipefail
+        schema="${{ github.action_path }}/../../../schemas/public-preview-dispatch.schema.json"
+        python3 - <<PY
+        import json, re, sys
+        try:
+            from jsonschema import Draft202012Validator
+        except ImportError:
+            Draft202012Validator = None
+        schema = json.load(open("$schema"))
+        payload = json.load(open("${{ steps.build.outputs.payload_path }}"))
+        if Draft202012Validator is None:
+            cp = payload.get("client_payload", {})
+            ok = (
+                re.match(r"^[a-z][a-z0-9-]+-public-preview$", payload.get("event_type", "")) and
+                cp.get("schema_version") == 1 and
+                cp.get("operation") in {"provision", "destroy"} and
+                cp.get("auth", {}).get("provider") == "cloudflare-access" and
+                cp.get("auth", {}).get("identity_provider") == "One-time PIN" and
+                (cp.get("auth", {}).get("allow_emails") or cp.get("auth", {}).get("allow_email_domains"))
+            )
+            if not ok:
+                print("::error::payload failed minimal public-preview validation", file=sys.stderr)
+                sys.exit(1)
+            print("::warning::jsonschema unavailable; used minimal public-preview validation")
+        else:
+            errs = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda e: list(e.absolute_path))
+            if errs:
+                for e in errs:
+                    p = "/" + "/".join(str(x) for x in e.absolute_path)
+                    print(f"::error::payload at {p}: {e.message}", file=sys.stderr)
+                sys.exit(1)
+        PY
+
+    - name: Dispatch
+      if: inputs.dry_run != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${{ inputs.dispatch_token }}" ]]; then
+          echo "::error::dispatch_token is required when dry_run=false"
+          exit 1
+        fi
+        gh api "/repos/${{ inputs.blahaj_repository }}/dispatches" \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          --input "${{ steps.build.outputs.payload_path }}"
+        echo "::notice::dispatched ${{ steps.build.outputs.dispatch_id }} -> ${{ inputs.blahaj_repository }}"
+      env:
+        GH_TOKEN: ${{ inputs.dispatch_token }}
+
+    - name: Dry-run notice
+      if: inputs.dry_run == 'true'
+      shell: bash
+      run: echo "::notice::dry_run=true - public preview payload built and validated, NOT dispatched"

@@ -1,8 +1,8 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"$id": "https://raw.githubusercontent.com/tinyland-inc/elders.tinyland.dev/main/docs/schemas/lanes.schema.json",
+	"$id": "https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/schemas/lanes.schema.json",
 	"title": "Tinyland Spoke lanes.json",
-	"description": "Normative schema for .github/lanes.json in any repo spawned from tinyland-inc/elders.tinyland.dev. Source of truth for per-spoke CI lane matrix, Blahaj PR-env provisioning, and Flywheel RBE binding. See docs/CI-SCHEMA.md for the full contract.",
+	"description": "Normative schema for .github/lanes.json in any repo spawned from tinyland-inc/site.scaffold. Source of truth for per-spoke CI lane matrix, Blahaj PR-env provisioning, and Flywheel RBE binding. See docs/CI-SCHEMA.md for the full contract.",
 	"type": "object",
 	"required": ["schema_version", "spoke", "lanes"],
 	"additionalProperties": false,

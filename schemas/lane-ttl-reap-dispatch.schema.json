@@ -1,0 +1,39 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/schemas/lane-ttl-reap-dispatch.schema.json",
+	"title": "Tinyland lane TTL reap repository_dispatch payload",
+	"description": "Canonical scheduled TTL backstop payload. Spokes request a sweep; Blahaj owns listing and idempotent destruction of expired lane environments.",
+	"type": "object",
+	"required": ["event_type", "client_payload"],
+	"additionalProperties": false,
+	"properties": {
+		"event_type": {
+			"type": "string",
+			"pattern": "^[a-z][a-z0-9-]+-lane-ttl-reap$"
+		},
+		"client_payload": {
+			"type": "object",
+			"required": ["schema_version", "operation", "spoke", "domain", "requested_at", "dry_run"],
+			"additionalProperties": false,
+			"properties": {
+				"schema_version": { "const": 1 },
+				"operation": { "const": "reap-expired" },
+				"spoke": {
+					"type": "string",
+					"pattern": "^[a-z][a-z0-9-]{1,62}$"
+				},
+				"domain": {
+					"type": "string",
+					"format": "hostname"
+				},
+				"requested_at": {
+					"type": "string",
+					"format": "date-time"
+				},
+				"dry_run": {
+					"type": "boolean"
+				}
+			}
+		}
+	}
+}

@@ -1,0 +1,85 @@
+name: spoke-public-preview
+
+on:
+  workflow_call:
+    inputs:
+      operation:
+        type: string
+        default: provision
+      spoke:
+        type: string
+        required: true
+      source_repository:
+        type: string
+        required: true
+      source_pr:
+        type: number
+        required: true
+      source_commit:
+        type: string
+        required: true
+      lane:
+        type: string
+        required: true
+      origin_fqdn:
+        type: string
+        required: true
+      origin_service:
+        type: string
+        default: ""
+      origin_host_header:
+        type: string
+        default: ""
+      preview_hostname:
+        type: string
+        required: true
+      ttl_hours:
+        type: number
+        default: 72
+      description:
+        type: string
+        default: ""
+      allow_emails_json:
+        type: string
+        default: "[]"
+      allow_email_domains_json:
+        type: string
+        default: "[]"
+      blahaj_repository:
+        type: string
+        default: tinyland-inc/blahaj
+      dry_run:
+        type: boolean
+        default: false
+    secrets:
+      BLAHAJ_DISPATCH_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch public preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: tinyland-inc/ci-templates/.github/actions/public-preview-dispatch@v2
+        with:
+          operation: ${{ inputs.operation }}
+          spoke: ${{ inputs.spoke }}
+          source_repository: ${{ inputs.source_repository }}
+          source_pr: ${{ inputs.source_pr }}
+          source_commit: ${{ inputs.source_commit }}
+          lane: ${{ inputs.lane }}
+          origin_fqdn: ${{ inputs.origin_fqdn }}
+          origin_service: ${{ inputs.origin_service }}
+          origin_host_header: ${{ inputs.origin_host_header }}
+          preview_hostname: ${{ inputs.preview_hostname }}
+          ttl_hours: ${{ inputs.ttl_hours }}
+          description: ${{ inputs.description }}
+          allow_emails_json: ${{ inputs.allow_emails_json }}
+          allow_email_domains_json: ${{ inputs.allow_email_domains_json }}
+          blahaj_repository: ${{ inputs.blahaj_repository }}
+          dispatch_token: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}
+          dry_run: ${{ inputs.dry_run }}

@@ -27,7 +27,7 @@ runs:
         extra_nix_config: |
           accept-flake-config = true
 
-    - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@main
+    - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
       with:
         attic-server: ${{ inputs.attic-server }}
         attic-cache: ${{ inputs.attic-cache }}

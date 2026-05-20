@@ -78,7 +78,7 @@ This is a hosted-only workflow today.
 ```yaml
 jobs:
   publish:
-    uses: tinyland-inc/ci-templates/.github/workflows/npm-publish.yml@main
+    uses: tinyland-inc/ci-templates/.github/workflows/npm-publish.yml@v2.0.0
     with:
       node-versions: '["20", "22"]'
       publish-node-version: "22"

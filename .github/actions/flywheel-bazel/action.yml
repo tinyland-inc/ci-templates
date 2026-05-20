@@ -1,9 +1,10 @@
 name: flywheel-bazel
 description: |
   Run bazelisk with GloriousFlywheel cache (`--config=flywheel`) or
-  cache+executor (`--config=flywheel-executor`). Wraps the
-  `scripts/bazel-cache-backed.sh` attachment-contract logic so spokes
-  don't carry it. Refuses executor mode on non-cluster runners.
+  cache+executor (`--config=flywheel-executor`). The vendored bazelrc is
+  endpoint-free: this action supplies `--remote_cache` and `--remote_executor`
+  from validated environment or inputs. Refuses executor mode on non-cluster
+  runners.
 
   Contract: tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §5.
 
@@ -32,14 +33,16 @@ inputs:
     default: ""
   bazel_remote_cache:
     description: |
-      Optional override for BAZEL_REMOTE_CACHE env. Default: read from env
-      injected by setup-flywheel / nix-setup composite actions.
+      Optional override for BAZEL_REMOTE_CACHE env. Required when config is
+      flywheel or flywheel-executor. Default: read from env injected by
+      GloriousFlywheel setup actions or operator environment.
     required: false
     default: ""
   bazel_remote_executor:
     description: |
-      Optional override for BAZEL_REMOTE_EXECUTOR env. Default: read from
-      env injected by setup-flywheel / nix-setup.
+      Optional override for BAZEL_REMOTE_EXECUTOR env. Required when config is
+      flywheel-executor. Default: read from env injected by GloriousFlywheel
+      setup actions or operator environment.
     required: false
     default: ""
   runner_class_override:
@@ -112,6 +115,7 @@ runs:
         set -euo pipefail
         config_flag=""
         executor_used=false
+        remote_args=()
         case "${{ inputs.config }}" in
           local)              config_flag="" ;;
           flywheel)           config_flag="--config=flywheel" ;;
@@ -121,6 +125,44 @@ runs:
 
         export BAZEL_REMOTE_CACHE="${{ inputs.bazel_remote_cache || env.BAZEL_REMOTE_CACHE }}"
         export BAZEL_REMOTE_EXECUTOR="${{ inputs.bazel_remote_executor || env.BAZEL_REMOTE_EXECUTOR }}"
+        remote_upload="${GF_BAZEL_REMOTE_UPLOAD:-false}"
+
+        case "$remote_upload" in
+          true|false) ;;
+          *) echo "::error::GF_BAZEL_REMOTE_UPLOAD must be true or false"; exit 64 ;;
+        esac
+
+        if [[ -n "$config_flag" ]]; then
+          if [[ -z "$BAZEL_REMOTE_CACHE" ]]; then
+            echo "::error::BAZEL_REMOTE_CACHE is required for ${{ inputs.config }}. The flywheel bazelrc is endpoint-free by contract."
+            exit 65
+          fi
+          remote_args+=(--remote_cache="$BAZEL_REMOTE_CACHE")
+          remote_args+=(--remote_upload_local_results="$remote_upload")
+          echo "::notice::Bazel remote cache configured from runtime environment (upload=$remote_upload)."
+        fi
+
+        if [[ "${{ inputs.config }}" == "flywheel-executor" ]]; then
+          if [[ -z "$BAZEL_REMOTE_EXECUTOR" ]]; then
+            echo "::error::BAZEL_REMOTE_EXECUTOR is required for flywheel-executor."
+            exit 65
+          fi
+          remote_args+=(--remote_executor="$BAZEL_REMOTE_EXECUTOR")
+          echo "::notice::Bazel remote executor configured from runtime environment."
+        fi
+
+        if [[ -n "${BAZEL_CREDENTIAL_HELPER:-}" ]]; then
+          remote_args+=(--credential_helper="$BAZEL_CREDENTIAL_HELPER")
+        fi
+        if [[ -n "${BAZEL_REMOTE_HEADER:-}" ]]; then
+          remote_args+=(--remote_header="$BAZEL_REMOTE_HEADER")
+        fi
+        if [[ -n "${BAZEL_REMOTE_CACHE_HEADER:-}" ]]; then
+          remote_args+=(--remote_cache_header="$BAZEL_REMOTE_CACHE_HEADER")
+        fi
+        if [[ -n "${BAZEL_REMOTE_EXEC_HEADER:-}" ]]; then
+          remote_args+=(--remote_exec_header="$BAZEL_REMOTE_EXEC_HEADER")
+        fi
 
         # bazelisk dispatch: prefer host PATH (cluster runner images that
         # preinstall bazelisk system-wide); fall back to `nix develop
@@ -137,8 +179,8 @@ runs:
           exit 127
         fi
 
-        echo "::group::${runner[*]} ${{ inputs.command }} $config_flag ${{ inputs.extra_flags }} ${{ inputs.targets }}"
-        "${runner[@]}" ${{ inputs.command }} $config_flag ${{ inputs.extra_flags }} ${{ inputs.targets }}
+        echo "::group::${runner[*]} ${{ inputs.command }} $config_flag <runtime-remote-args> ${{ inputs.extra_flags }} ${{ inputs.targets }}"
+        "${runner[@]}" ${{ inputs.command }} $config_flag "${remote_args[@]}" ${{ inputs.extra_flags }} ${{ inputs.targets }}
         echo "::endgroup::"
 
         echo "executor_used=$executor_used" >> "$GITHUB_OUTPUT"

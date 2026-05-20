@@ -1,0 +1,97 @@
+name: repo-manifest-validate
+description: |
+  Validate tinyland.repo.json against the Tinyland repo manifest schema and,
+  optionally, require one or more taxonomy roles.
+
+inputs:
+  path:
+    description: Path to tinyland.repo.json relative to the consumer repo checkout.
+    required: false
+    default: tinyland.repo.json
+  required_roles:
+    description: |
+      Optional comma-separated list of accepted taxonomy.primary_role values.
+      Example: static-spoke,static-spoke-scaffold
+    required: false
+    default: ""
+
+outputs:
+  primary_role:
+    description: taxonomy.primary_role from the manifest.
+    value: ${{ steps.read.outputs.primary_role }}
+  repo_name:
+    description: repo.name from the manifest.
+    value: ${{ steps.read.outputs.repo_name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate repo manifest schema
+      shell: bash
+      run: |
+        set -euo pipefail
+        schema="${{ github.action_path }}/../../../schemas/tinyland-repo-manifest.schema.json"
+        manifest="${{ inputs.path }}"
+        if [[ ! -f "$schema" ]]; then
+          echo "::error::ci-templates schema missing at $schema"
+          exit 1
+        fi
+        if [[ ! -f "$manifest" ]]; then
+          echo "::error::repo manifest not found at $manifest"
+          exit 1
+        fi
+
+        if python3 -c 'import jsonschema' >/dev/null 2>&1; then
+          validator=(python3)
+        elif command -v nix >/dev/null 2>&1 && [[ -f flake.nix ]]; then
+          validator=(nix develop --command python3)
+          echo "::notice::host python lacks jsonschema; validating via nix develop"
+        else
+          echo "::error::python jsonschema is unavailable and no flake.nix dev shell exists"
+          exit 2
+        fi
+
+        "${validator[@]}" - <<PY
+        import json, sys
+        from jsonschema import Draft202012Validator
+        schema = json.load(open("$schema"))
+        inst = json.load(open("$manifest"))
+        Draft202012Validator.check_schema(schema)
+        errors = sorted(Draft202012Validator(schema).iter_errors(inst), key=lambda e: list(e.absolute_path))
+        if errors:
+            for e in errors:
+                p = "/" + "/".join(str(x) for x in e.absolute_path)
+                print(f"::error file=$manifest::at {p}: {e.message}", file=sys.stderr)
+            sys.exit(1)
+        PY
+
+    - name: Read manifest role
+      id: read
+      shell: bash
+      run: |
+        set -euo pipefail
+        manifest="${{ inputs.path }}"
+        primary_role=$(jq -r '.taxonomy.primary_role' "$manifest")
+        repo_name=$(jq -r '.repo.name' "$manifest")
+        required="${{ inputs.required_roles }}"
+
+        if [[ -n "$required" ]]; then
+          found=false
+          IFS=',' read -ra roles <<< "$required"
+          for role in "${roles[@]}"; do
+            if [[ "$primary_role" == "$role" ]]; then
+              found=true
+              break
+            fi
+          done
+          if [[ "$found" != "true" ]]; then
+            echo "::error file=$manifest::taxonomy.primary_role=$primary_role is not one of: $required"
+            exit 1
+          fi
+        fi
+
+        {
+          echo "primary_role=$primary_role"
+          echo "repo_name=$repo_name"
+        } >> "$GITHUB_OUTPUT"
+        echo "::notice::repo manifest valid (repo=$repo_name, primary_role=$primary_role)"

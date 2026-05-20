@@ -1,6 +1,6 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"$id": "https://raw.githubusercontent.com/tinyland-inc/elders.tinyland.dev/main/docs/schemas/blahaj-dispatch.schema.json",
+	"$id": "https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/schemas/blahaj-dispatch.schema.json",
 	"title": "Tinyland Blahaj lane-env repository_dispatch payload",
 	"description": "Canonical payload shape for the `<spoke>-lane-env` repository_dispatch event sent from any spoke CI workflow to tinyland-inc/blahaj. One schema with an `operation` discriminator covers both provision and destroy. See docs/CI-SCHEMA.md §4.",
 	"type": "object",

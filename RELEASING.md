@@ -110,12 +110,23 @@ and may break without notice**.
 
 ## Composite-action internal refs
 
-Composite actions that nest other composites (e.g. `flywheel-bazel`
-calling `nix-setup`) MUST reference siblings by major tag, not `@main`:
+Composite actions and reusable workflows that call sibling composites
+(e.g. `flywheel-bazel` calling `nix-setup`) MUST reference siblings by the
+current major tag, not `@main` or an older major:
 
 ```yaml
-uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v1
+uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
 ```
 
-This ensures a `git checkout v1.2.3` of the repo exposes a coherent
-self-referential set of action versions.
+This ensures a `git checkout v2.0.0` of the repo exposes a coherent
+self-referential set of action versions. A v2 reusable workflow must not call
+v1 composites unless the migration guide explicitly documents that compatibility
+boundary.
+
+## Flywheel endpoint discipline
+
+`bazelrc/flywheel.bazelrc` MUST remain endpoint-free. Release checks should
+reject hard-coded `remote_cache`, `remote_executor`, credentials, headers, or
+cache upload authority in that fragment. Runtime authority belongs in
+`BAZEL_REMOTE_CACHE`, `BAZEL_REMOTE_EXECUTOR`, optional auth/header env vars,
+and `GF_BAZEL_REMOTE_UPLOAD`.
