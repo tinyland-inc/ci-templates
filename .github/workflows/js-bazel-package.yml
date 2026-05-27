@@ -100,6 +100,10 @@ on:
         description: "When true, request npm provenance for npmjs publishes when supported"
         type: boolean
         default: true
+      npm_publish_mode:
+        description: "npmjs publication policy: required, optional, or disabled"
+        type: string
+        default: "required"
       npm_registry_url:
         description: "npm registry URL for publication"
         type: string
@@ -237,6 +241,7 @@ jobs:
           RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
           WORKSPACE_MODE: ${{ inputs.workspace_mode }}
           PUBLISH_MODE: ${{ inputs.publish_mode }}
+          NPM_PUBLISH_MODE: ${{ inputs.npm_publish_mode }}
           BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
         run: |
           set -euo pipefail
@@ -258,6 +263,13 @@ jobs:
             same_runner|hosted_exception) ;;
             *)
               echo "Unsupported publish_mode: $PUBLISH_MODE" >&2
+              exit 1
+              ;;
+          esac
+          case "$NPM_PUBLISH_MODE" in
+            required|optional|disabled) ;;
+            *)
+              echo "Unsupported npm_publish_mode: $NPM_PUBLISH_MODE" >&2
               exit 1
               ;;
           esac
@@ -577,9 +589,11 @@ jobs:
           npm pack --dry-run "$PACKAGE_DIR"
 
       - name: Validate npm publish dry-run from Bazel artifact
+        if: ${{ inputs.npm_publish_mode != 'disabled' }}
         shell: bash
         env:
           NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
+          NPM_PUBLISH_MODE: ${{ inputs.npm_publish_mode || 'required' }}
           PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
         run: |
           set -euo pipefail
@@ -592,6 +606,8 @@ jobs:
           if [ "$dry_run_status" -ne 0 ]; then
             if grep -Fq "You cannot publish over the previously published versions" <<<"$dry_run_output"; then
               echo "::notice::Skipping npm publish dry-run because this exact package version already exists in npm."
+            elif [ "$NPM_PUBLISH_MODE" = "optional" ]; then
+              echo "::warning::npmjs publish dry-run failed, but npm_publish_mode=optional makes npmjs non-blocking."
             else
               exit "$dry_run_status"
             fi
@@ -646,13 +662,15 @@ jobs:
     needs:
       - resolve-runner
       - validate
-    if: ${{ inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) }}
+    if: ${{ inputs.npm_publish_mode != 'disabled' && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
     runs-on: ${{ fromJson(needs.resolve-runner.outputs.publish_runner_labels_json) }}
     timeout-minutes: 20
     steps:
-      - name: Validate publish contract
+      - name: Resolve npmjs publish policy
+        id: npm-policy
         shell: bash
         env:
+          NPM_PUBLISH_MODE: ${{ inputs.npm_publish_mode || 'required' }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
@@ -663,26 +681,46 @@ jobs:
               exit 1
               ;;
           esac
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "NPM_TOKEN is required for npmjs publication." >&2
-            exit 1
-          fi
+          case "$NPM_PUBLISH_MODE" in
+            required)
+              if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+                echo "NPM_TOKEN is required for npmjs publication." >&2
+                exit 1
+              fi
+              echo "should_publish=true" >> "$GITHUB_OUTPUT"
+              ;;
+            optional)
+              if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+                echo "::notice::Skipping npmjs publication because npm_publish_mode=optional and NPM_TOKEN is absent."
+                echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "should_publish=true" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            *)
+              echo "Unsupported npm_publish_mode: $NPM_PUBLISH_MODE" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Configure self-hosted cache contract
-        if: ${{ runner.environment != 'github-hosted' }}
+        if: ${{ steps.npm-policy.outputs.should_publish == 'true' && runner.environment != 'github-hosted' }}
         uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        if: ${{ steps.npm-policy.outputs.should_publish == 'true' }}
         with:
           node-version: ${{ inputs.publish_node_version || '22' }}
           registry-url: ${{ inputs.npm_registry_url || 'https://registry.npmjs.org' }}
 
       - name: Download Bazel package artifact
+        if: ${{ steps.npm-policy.outputs.should_publish == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: bazel-pkg
 
       - name: Extract Bazel package artifact into isolated publish workspace
+        if: ${{ steps.npm-policy.outputs.should_publish == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -693,10 +731,12 @@ jobs:
           echo "PUBLISH_ROOT=$PUBLISH_ROOT" >> "$GITHUB_ENV"
 
       - name: Publish npm artifact
+        if: ${{ steps.npm-policy.outputs.should_publish == 'true' }}
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
+          NPM_PUBLISH_MODE: ${{ inputs.npm_publish_mode || 'required' }}
           NPM_REGISTRY_URL: ${{ inputs.npm_registry_url || 'https://registry.npmjs.org' }}
           PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
@@ -719,7 +759,15 @@ jobs:
           if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
             PUBLISH_ARGS+=(--provenance)
           fi
+          set +e
           npm publish "${PUBLISH_ARGS[@]}"
+          publish_status="$?"
+          set -e
+          if [ "$publish_status" -ne 0 ] && [ "$NPM_PUBLISH_MODE" = "optional" ]; then
+            echo "::warning::npmjs publish failed, but npm_publish_mode=optional makes npmjs non-blocking."
+            exit 0
+          fi
+          exit "$publish_status"
 
   publish-github:
     needs:

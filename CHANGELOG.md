@@ -5,6 +5,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`js-bazel-package.yml` npmjs policy is explicit** — adds
+  `npm_publish_mode=required|optional|disabled`. The default remains
+  `required` for existing consumers, while Bazel-first packages can make
+  npmjs best-effort or disabled when GitHub Packages and the Tinyland Bazel
+  registry are the release authority.
+
 ## [2.0.0] — 2026-05-20
 
 ### Added
