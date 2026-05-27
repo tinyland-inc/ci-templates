@@ -165,12 +165,19 @@ jobs:
 
           runner_mode = os.environ.get("RUNNER_MODE") or "compat"
           publish_mode = os.environ.get("PUBLISH_MODE") or "same_runner"
+          shared_runner_labels_raw = os.environ.get("SHARED_RUNNER_LABELS_JSON")
 
           if runner_mode not in {"compat", "hosted", "shared", "repo_owned"}:
               raise SystemExit(f"Unsupported runner_mode: {runner_mode}")
 
           if publish_mode not in {"same_runner", "hosted_exception"}:
               raise SystemExit(f"Unsupported publish_mode: {publish_mode}")
+
+          if runner_mode == "shared" and shared_runner_labels_raw is not None and not shared_runner_labels_raw.strip():
+              raise SystemExit(
+                  "runner_mode=shared requires shared_runner_labels_json; "
+                  "an empty value usually means the caller repo variable is unset"
+              )
 
           def parse_labels(name: str, fallback: str) -> list[str]:
               raw = os.environ.get(name) or fallback
@@ -239,6 +246,7 @@ jobs:
         env:
           RUNNER_MODE: ${{ inputs.runner_mode }}
           RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
+          SHARED_RUNNER_LABELS_JSON: ${{ inputs.shared_runner_labels_json }}
           WORKSPACE_MODE: ${{ inputs.workspace_mode }}
           PUBLISH_MODE: ${{ inputs.publish_mode }}
           NPM_PUBLISH_MODE: ${{ inputs.npm_publish_mode }}
@@ -273,6 +281,10 @@ jobs:
               exit 1
               ;;
           esac
+          if [ "$RUNNER_MODE" = "shared" ] && [ -z "${SHARED_RUNNER_LABELS_JSON//[[:space:]]/}" ]; then
+            echo "runner_mode=shared requires shared_runner_labels_json; an empty value usually means the caller repo variable is unset" >&2
+            exit 1
+          fi
           case "$BAZEL_FETCH_RETRY_ATTEMPTS" in
             ""|*[!0-9]*)
               echo "bazel_fetch_retry_attempts must be a positive integer" >&2

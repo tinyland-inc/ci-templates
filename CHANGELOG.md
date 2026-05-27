@@ -12,6 +12,10 @@ Versioning: [SemVer 2.0](https://semver.org/).
   `required` for existing consumers, while Bazel-first packages can make
   npmjs best-effort or disabled when GitHub Packages and the Tinyland Bazel
   registry are the release authority.
+- **`js-bazel-package.yml` shared runner labels are guarded** —
+  `runner_mode=shared` now rejects an explicitly empty
+  `shared_runner_labels_json`, catching missing caller repo variables before the
+  workflow silently falls back to the default shared runner class.
 
 ## [2.0.0] — 2026-05-20
 

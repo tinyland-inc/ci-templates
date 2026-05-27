@@ -49,6 +49,8 @@ Meaning:
   - validate and publish on GitHub-hosted runners intentionally
 - `shared`
   - validate and publish on a documented shared GloriousFlywheel lane
+  - pass a non-empty `shared_runner_labels_json`; an empty value is rejected
+    because it usually means the caller repo variable is missing
 - `repo_owned`
   - validate and publish on repo-specific runner labels
 
@@ -193,6 +195,12 @@ jobs:
   the selected labels in a small hosted setup job, then passes simple JSON
   outputs into `runs-on` to avoid the complex inline expressions that previously
   caused GitHub Actions startup failures before jobs were created.
+- `runner_mode=shared` rejects an explicitly empty `shared_runner_labels_json`.
+  This catches missing caller repo variables before the workflow silently falls
+  back to the default shared runner class.
+- Package repos that need fork-safe owned capacity should prefer
+  `runner_mode=repo_owned` with explicit `runner_labels_json`. Use `hosted` for
+  packages that do not need cluster-internal REAPI access yet.
 - `bazel_fetch_retry_attempts` defaults to `3` and wraps consumer-provided
   validation commands plus explicit Bazel target validation. It only retries
   when the command log matches transient Bazel external archive fetch failures,
