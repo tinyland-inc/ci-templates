@@ -51,8 +51,17 @@ Meaning:
   - validate and publish on a documented shared GloriousFlywheel lane
   - pass a non-empty `shared_runner_labels_json`; an empty value is rejected
     because it usually means the caller repo variable is missing
+  - labels must include one of the shared Tinyland capability classes
 - `repo_owned`
-  - validate and publish on repo-specific runner labels
+  - validate and publish on a repo/owner-scoped runner registration path
+  - workflow-facing labels still stay shared Tinyland capability classes
+  - labels must include one of the shared Tinyland capability classes
+
+`repo_owned` is a trust and registration boundary, not permission to mint
+repo-shaped runner labels. GloriousFlywheel keeps runner labels capability-based
+(`tinyland-nix`, `tinyland-docker`, and related classes); owner/repo separation
+belongs in ARC registration identity, runner groups, GitHub App installation,
+and implementation-overlay policy.
 
 ### `workspace_mode`
 
@@ -119,7 +128,7 @@ account or organization that owns the package. For a `tinyland-inc/*` repository
 whose public npm package is `@tummycrypt/tinyland-auth`, use a GitHub Packages
 mirror name such as `@tinyland-inc/tinyland-auth`.
 
-## Example: repo-owned self-hosted package path
+## Example: repo-owned capability-class package path
 
 ```yaml
 name: CI
@@ -157,6 +166,12 @@ jobs:
     secrets: inherit
 ```
 
+In that example, `PRIMARY_LINUX_RUNNER_LABELS_JSON` must resolve to a
+capability-shaped label set such as `["self-hosted","linux","tinyland-nix"]`.
+It must not resolve to a repo-shaped label. Pull-request validation remains
+safe for forks because publish jobs are still gated by tag/workflow policy and
+GitHub does not expose protected publish secrets to untrusted fork PRs.
+
 ## Example: hosted template consumer
 
 ```yaml
@@ -190,7 +205,9 @@ jobs:
 
 - `compat` exists only to let existing consumers adopt the new template without
   breaking in one PR.
-- `runner_mode=repo_owned` should always pass explicit `runner_labels_json`.
+- `runner_mode=repo_owned` must pass explicit `runner_labels_json` and that
+  label set must include a Tinyland capability class. It does not authorize
+  repo-shaped labels.
 - `runner_mode=shared` uses `shared_runner_labels_json`. The workflow resolves
   the selected labels in a small hosted setup job, then passes simple JSON
   outputs into `runs-on` to avoid the complex inline expressions that previously
@@ -199,8 +216,9 @@ jobs:
   This catches missing caller repo variables before the workflow silently falls
   back to the default shared runner class.
 - Package repos that need fork-safe owned capacity should prefer
-  `runner_mode=repo_owned` with explicit `runner_labels_json`. Use `hosted` for
-  packages that do not need cluster-internal REAPI access yet.
+  `runner_mode=repo_owned` with explicit capability-shaped
+  `runner_labels_json`. Use `hosted` for packages that do not need
+  cluster-internal REAPI access yet.
 - `bazel_fetch_retry_attempts` defaults to `3` and wraps consumer-provided
   validation commands plus explicit Bazel target validation. It only retries
   when the command log matches transient Bazel external archive fetch failures,
