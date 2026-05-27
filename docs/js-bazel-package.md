@@ -15,6 +15,7 @@ It is meant for packages like:
 - makes runner intent explicit with `runner_mode`
 - makes workspace hygiene explicit with `workspace_mode`
 - makes publish authority explicit with `publish_mode`
+- makes npmjs authority explicit with `npm_publish_mode`
 - installs the workspace with pnpm
 - configures Attic and Bazel cache hints on self-hosted runners
 - optionally keeps legacy cleanup-based workspace behavior for migration
@@ -22,7 +23,8 @@ It is meant for packages like:
 - runs optional metadata, lint, typecheck, unit, and integration commands
 - builds the workspace artifact
 - validates the Bazel-built package via `npm pack --dry-run`
-- validates npm publish dry-runs against the Bazel artifact
+- validates npm publish dry-runs against the Bazel artifact unless npmjs is
+  disabled
 - optionally validates GitHub Packages dry-runs after rewriting package metadata
 - uploads the Bazel-built package artifact for publish jobs
 - publishes from the same runner class or from an explicit hosted exception path
@@ -81,6 +83,30 @@ Meaning:
   - validate on the chosen runner class
   - publish from `ubuntu-latest` intentionally after artifact handoff
 
+### `npm_publish_mode`
+
+Allowed values:
+
+- `required`
+- `optional`
+- `disabled`
+
+Meaning:
+
+- `required`
+  - preserve the legacy npmjs contract
+  - validate npmjs dry-runs
+  - require `secrets.NPM_TOKEN` before real npmjs publication
+  - fail the workflow when npmjs publish fails
+- `optional`
+  - keep npmjs validation and publication as best-effort compatibility
+  - skip real npmjs publication when `secrets.NPM_TOKEN` is absent
+  - warn, but do not fail, when npmjs dry-run or publish fails
+- `disabled`
+  - skip npmjs dry-run validation and npmjs publication
+  - use this for Bazel-first packages whose release authority is GitHub
+    tag/release, GitHub Packages, and the Tinyland Bazel registry
+
 ### `github_package_name`
 
 `github_package_name` is the package coordinate used only for the GitHub
@@ -123,6 +149,7 @@ jobs:
       bazel_targets: "//:typecheck //:pkg //:test"
       package_dir: ./bazel-bin/pkg
       github_package_name: "@jesssullivan/scheduling-kit"
+      npm_publish_mode: required
       dry_run: true
       publish_on_tag: true
     secrets: inherit
@@ -151,6 +178,8 @@ jobs:
       build_command: pnpm build
       bazel_targets: "//:pkg"
       package_dir: ./bazel-bin/pkg
+      github_package_name: "@tinyland-inc/tinyland-auth-redis"
+      npm_publish_mode: disabled
       dry_run: true
       publish_on_tag: true
 ```
@@ -174,8 +203,10 @@ jobs:
 - `dry_run: true` keeps pull requests and branch pushes in validation-only mode.
   Set `publish_on_tag: true` in package repositories that should publish the
   Bazel artifact when the caller workflow is triggered by a `push` to `refs/tags/v*`.
-  The caller workflow must include an `on.push.tags` trigger, and npmjs
-  publication still requires `secrets.NPM_TOKEN`.
+  The caller workflow must include an `on.push.tags` trigger. npmjs publication
+  requires `secrets.NPM_TOKEN` only when `npm_publish_mode=required`; Bazel-first
+  packages should use `optional` or `disabled` when GitHub Packages and the
+  Bazel registry are the release authority.
 - self-hosted jobs now call `nix-setup`, so Attic and Bazel cache hints are
   explicit instead of incidental runner state.
 - `workspace_mode=isolated` is the preferred contract for downstream pilots.
@@ -184,14 +215,17 @@ jobs:
 - publish jobs always extract into an isolated temp directory, even when the
   validation workspace stays in compatibility mode.
 - npmjs publication still requests provenance on hosted runners and skips it on
-  self-hosted runners when needed.
+  self-hosted runners when needed, but only when `npm_publish_mode` allows an
+  npmjs publish attempt.
 - real publish jobs are idempotent for already-published package versions. After
   extracting the Bazel artifact, the npmjs and GitHub Packages jobs check
   whether the exact `name@version` already exists in the target registry and
   skip only that duplicate-version case. Registry lookup failures or absent
   versions still fall through to `npm publish` so permission and package errors
-  remain visible.
+  remain visible unless `npm_publish_mode=optional`.
 - npm publish dry-run validation also treats npm's duplicate-version rejection
   as an idempotent pass. Newer npm versions may reject `npm publish --dry-run`
   for an already-published version even though the preceding `npm pack`
-  validation proved the package artifact shape.
+  validation proved the package artifact shape. Use `npm_publish_mode=disabled`
+  to skip npmjs dry-run validation entirely for Bazel-first packages with no
+  npmjs release target.

@@ -119,7 +119,7 @@ See per-action `action.yml` files for full input/output documentation.
 
 | Workflow | Purpose |
 |---|---|
-| `js-bazel-package.yml` | Pre-existing: JS/TS packages built by Bazel and published to npm/GHCR. |
+| `js-bazel-package.yml` | Pre-existing: JS/TS packages built by Bazel and published to GitHub Packages, with npmjs required/optional/disabled by package policy. |
 | `npm-publish.yml` | Pre-existing: hosted-only Node package build + publish. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
 | **`spoke-lane-env.yml`** | Canonical PR-env workflow. Replaces hand-rolled `pr-env-lanes.yml`. |
