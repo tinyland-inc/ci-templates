@@ -13,7 +13,7 @@ on:
         type: string
         default: '["tinyland-docker"]'
       runner_labels_json:
-        description: "JSON array of runner labels used by compat mode and required when runner_mode=repo_owned"
+        description: "JSON array of capability-class runner labels used by compat mode and required when runner_mode=repo_owned"
         type: string
         default: '["ubuntu-latest"]'
       workspace_mode:
@@ -195,6 +195,23 @@ jobs:
 
               return labels
 
+          tinyland_capability_labels = {
+              "tinyland-nix",
+              "tinyland-nix-heavy",
+              "tinyland-nix-kvm",
+              "tinyland-nix-gpu",
+              "tinyland-docker",
+              "tinyland-dind",
+          }
+
+          def require_tinyland_capability(labels: list[str], name: str) -> None:
+              if tinyland_capability_labels.isdisjoint(labels):
+                  allowed = ", ".join(sorted(tinyland_capability_labels))
+                  raise SystemExit(
+                      f"{name} must include a Tinyland capability-class label; "
+                      f"allowed capability labels: {allowed}"
+                  )
+
           runner_labels = parse_labels("RUNNER_LABELS_JSON", '["ubuntu-latest"]')
           shared_runner_labels = parse_labels(
               "SHARED_RUNNER_LABELS_JSON",
@@ -210,6 +227,11 @@ jobs:
 
           if runner_mode == "repo_owned" and validate_runner_labels == ["ubuntu-latest"]:
               raise SystemExit("runner_mode=repo_owned requires explicit runner_labels_json")
+
+          if runner_mode == "repo_owned":
+              require_tinyland_capability(validate_runner_labels, "runner_labels_json")
+          elif runner_mode == "shared":
+              require_tinyland_capability(validate_runner_labels, "shared_runner_labels_json")
 
           if publish_mode == "hosted_exception":
               publish_runner_labels = ["ubuntu-latest"]
@@ -298,6 +320,45 @@ jobs:
           if [ "$RUNNER_MODE" = "repo_owned" ] && [ "$RUNNER_LABELS_JSON" = '["ubuntu-latest"]' ]; then
             echo "runner_mode=repo_owned requires explicit runner_labels_json" >&2
             exit 1
+          fi
+          if [ "$RUNNER_MODE" = "repo_owned" ] || [ "$RUNNER_MODE" = "shared" ]; then
+            if [ "$RUNNER_MODE" = "repo_owned" ]; then
+              labels_json="$RUNNER_LABELS_JSON"
+              labels_name="runner_labels_json"
+            else
+              labels_json="$SHARED_RUNNER_LABELS_JSON"
+              labels_name="shared_runner_labels_json"
+            fi
+            LABELS_JSON="$labels_json" LABELS_NAME="$labels_name" python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          labels_name = os.environ["LABELS_NAME"]
+          labels_raw = os.environ.get("LABELS_JSON") or ""
+          try:
+              labels = json.loads(labels_raw)
+          except json.JSONDecodeError as exc:
+              print(f"{labels_name} must be a JSON array: {exc}", file=sys.stderr)
+              raise SystemExit(1) from exc
+
+          capabilities = {
+              "tinyland-nix",
+              "tinyland-nix-heavy",
+              "tinyland-nix-kvm",
+              "tinyland-nix-gpu",
+              "tinyland-docker",
+              "tinyland-dind",
+          }
+          if not isinstance(labels, list) or capabilities.isdisjoint(labels):
+              allowed = ", ".join(sorted(capabilities))
+              print(
+                  f"{labels_name} must include a Tinyland capability-class label; "
+                  f"allowed capability labels: {allowed}",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          PY
           fi
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6

@@ -62,13 +62,69 @@ def check_internal_refs() -> int:
     return 0
 
 
+def check_js_bazel_package_runner_contract() -> int:
+    workflow_path = ROOT / ".github/workflows/js-bazel-package.yml"
+    docs_path = ROOT / "docs/js-bazel-package.md"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    docs = docs_path.read_text(encoding="utf-8")
+
+    required_workflow_snippets = [
+        "runner_mode=repo_owned requires explicit runner_labels_json",
+        "must include a Tinyland capability-class label",
+        '"tinyland-nix"',
+        '"tinyland-docker"',
+        '"tinyland-dind"',
+        "runner_mode=shared requires shared_runner_labels_json",
+    ]
+    required_docs_snippets = [
+        "`repo_owned` is a trust and registration boundary",
+        "workflow-facing labels still stay shared Tinyland capability classes",
+        "It must not resolve to a repo-shaped label.",
+        "forks because publish jobs are still gated by tag/workflow policy",
+    ]
+    forbidden_docs_snippets = [
+        "- validate and publish on repo-specific runner labels",
+        "repo-owned dedicated lane",
+    ]
+
+    ok = True
+    for snippet in required_workflow_snippets:
+        if snippet not in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: missing runner contract snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    for snippet in required_docs_snippets:
+        if snippet not in docs:
+            print(
+                f"{docs_path.relative_to(ROOT)}: missing runner contract snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    for snippet in forbidden_docs_snippets:
+        if snippet in docs:
+            print(
+                f"{docs_path.relative_to(ROOT)}: stale runner contract snippet remains: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    if not ok:
+        return 1
+    print("js-bazel-package runner contract documented and guarded")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("check", choices=["manifest", "internal-refs"])
+    parser.add_argument("check", choices=["manifest", "internal-refs", "js-bazel-runner-contract"])
     args = parser.parse_args()
 
     if args.check == "manifest":
         return validate_manifest()
+    if args.check == "js-bazel-runner-contract":
+        return check_js_bazel_package_runner_contract()
     return check_internal_refs()
 
 

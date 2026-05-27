@@ -16,6 +16,10 @@ Versioning: [SemVer 2.0](https://semver.org/).
   `runner_mode=shared` now rejects an explicitly empty
   `shared_runner_labels_json`, catching missing caller repo variables before the
   workflow silently falls back to the default shared runner class.
+- **`js-bazel-package.yml` repo-owned mode uses capability labels** —
+  `runner_mode=repo_owned` now requires explicit runner labels that include a
+  Tinyland capability class, and docs clarify that repo ownership is a
+  registration/trust boundary rather than permission to mint repo-shaped labels.
 
 ## [2.0.0] — 2026-05-20
 
