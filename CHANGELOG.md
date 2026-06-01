@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-06-01
+
 ### Changed
 
 - **`js-bazel-package.yml` npmjs policy is explicit** — adds
@@ -20,6 +22,11 @@ Versioning: [SemVer 2.0](https://semver.org/).
   `runner_mode=repo_owned` now requires explicit runner labels that include a
   Tinyland capability class, and docs clarify that repo ownership is a
   registration/trust boundary rather than permission to mint repo-shaped labels.
+- **`flywheel-reapi-proof` run correlation is request-id based** — the
+  composite now dispatches GloriousFlywheel proof runs with a unique request
+  id and resolves the matching child run by run name instead of timestamp-only
+  "latest run" selection, so concurrent browser/RBE proof requests cannot watch
+  a sibling run.
 
 ## [2.0.0] — 2026-05-20
 
