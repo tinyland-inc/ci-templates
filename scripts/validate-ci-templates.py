@@ -116,15 +116,84 @@ def check_js_bazel_package_runner_contract() -> int:
     return 0
 
 
+def check_flywheel_reapi_proof_contract() -> int:
+    action_path = ROOT / ".github/actions/flywheel-reapi-proof/action.yml"
+    readme_path = ROOT / "README.md"
+    roadmap_path = ROOT / "docs/roadmap.md"
+    action = action_path.read_text(encoding="utf-8")
+    readme = readme_path.read_text(encoding="utf-8")
+    roadmap = roadmap_path.read_text(encoding="utf-8")
+
+    required_action_snippets = [
+        "request_id:",
+        "-f request_id=\"${request_id}\"",
+        "--json databaseId,createdAt,displayTitle",
+        "contains($request_id)",
+        "request_id=${request_id}",
+    ]
+    forbidden_action_snippets = [
+        "sort_by(.createdAt, .databaseId) | last",
+    ]
+    required_readme_snippet = "correlated by a unique request id"
+    required_roadmap_snippets = [
+        "timestamp-only child-run resolution",
+        "concurrent consumer proofs",
+    ]
+
+    ok = True
+    for snippet in required_action_snippets:
+        if snippet not in action:
+            print(
+                f"{action_path.relative_to(ROOT)}: missing request-id correlation snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    for snippet in forbidden_action_snippets:
+        if snippet in action:
+            print(
+                f"{action_path.relative_to(ROOT)}: stale timestamp-only correlation remains: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    if required_readme_snippet not in readme:
+        print(
+            f"{readme_path.relative_to(ROOT)}: missing request-id correlation docs",
+            file=sys.stderr,
+        )
+        ok = False
+    for snippet in required_roadmap_snippets:
+        if snippet not in roadmap:
+            print(
+                f"{roadmap_path.relative_to(ROOT)}: missing timestamp-only correlation warning: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    if not ok:
+        return 1
+    print("flywheel-reapi-proof request-id correlation guarded")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("check", choices=["manifest", "internal-refs", "js-bazel-runner-contract"])
+    parser.add_argument(
+        "check",
+        choices=[
+            "manifest",
+            "internal-refs",
+            "js-bazel-runner-contract",
+            "flywheel-reapi-proof-contract",
+        ],
+    )
     args = parser.parse_args()
 
     if args.check == "manifest":
         return validate_manifest()
     if args.check == "js-bazel-runner-contract":
         return check_js_bazel_package_runner_contract()
+    if args.check == "flywheel-reapi-proof-contract":
+        return check_flywheel_reapi_proof_contract()
     return check_internal_refs()
 
 

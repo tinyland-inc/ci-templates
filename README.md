@@ -109,7 +109,7 @@ endpoint-free, and runs the canonical Tinyland gitleaks working-tree scan.
 | **`lane-reap`** | Emit Blahaj destroy payload. Idempotent. |
 | **`lane-ttl-reap`** | Emit Blahaj expired-lane sweep payload for scheduled TTL backstops. |
 | **`public-preview-dispatch`** | Emit Blahaj public/client preview payload with Cloudflare Access allowlist. |
-| **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run. |
+| **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run, correlated by a unique request id. |
 | **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
 | **`pulse-ingest-validate`** | Validate a Pulse / static projection snapshot. |
 

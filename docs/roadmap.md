@@ -36,7 +36,9 @@ Likely: org-level allowlist of repos that may set `lane-ttl/permanent`.
 
 Implemented as a dispatcher-only composite. GloriousFlywheel remains the proof
 authority; consumers must cite the GF run/artifact evidence before calling a
-target class proved.
+target class proved. Dispatch correlation uses a unique request id in the
+GloriousFlywheel workflow run name; timestamp-only child-run resolution is not
+safe under concurrent consumer proofs.
 
 ### Public preview overlay
 

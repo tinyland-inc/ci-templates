@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate internal-refs-check js-bazel-runner-contract-check endpoint-free-check secrets-scan-dir
+check: yaml-parse json-parse repo-manifest-validate internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check secrets-scan-dir
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -38,6 +38,10 @@ internal-refs-check:
 # Ensure js-bazel-package keeps runner-mode semantics aligned with GloriousFlywheel.
 js-bazel-runner-contract-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py js-bazel-runner-contract
+
+# Ensure flywheel-reapi-proof keeps child-run correlation request-id based.
+flywheel-reapi-proof-contract-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py flywheel-reapi-proof-contract
 
 # Ensure the v2 Flywheel bazelrc fragment has no baked endpoints or upload authority.
 endpoint-free-check:
