@@ -5,6 +5,20 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-06-01
+
+### Changed
+
+- **`secrets-scan` runs TruffleHog as a pinned binary, not a Docker action** —
+  `trufflesecurity/trufflehog@main` is a container action and fails on
+  Docker-less self-hosted runners ("failed to connect to the docker API at
+  unix:///var/run/docker.sock"), e.g. the tinyland nix compute pool, taking the
+  whole `secrets-scan` lane (and its downstream `needs:` jobs) red. The action
+  now installs a pinned `trufflehog` binary (new optional `trufflehog-version`
+  input, default `3.95.3`) and scans git history directly, mirroring the
+  gitleaks binary install in the same action. The gitleaks half and the
+  `findings_count` output are unchanged.
+
 ## [2.1.0] — 2026-06-01
 
 ### Changed

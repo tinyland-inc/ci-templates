@@ -5,6 +5,9 @@ inputs:
   trufflehog-args:
     description: "Extra args for TruffleHog"
     default: "--only-verified"
+  trufflehog-version:
+    description: "TruffleHog version (pinned binary release; no Docker)"
+    default: "3.95.3"
   gitleaks-version:
     description: "Gitleaks version"
     default: "8.21.2"
@@ -26,10 +29,22 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # Docker-free: trufflesecurity/trufflehog@main is a container action and
+    # fails on Docker-less self-hosted runners (e.g. the tinyland nix compute
+    # pool: "failed to connect to the docker API at unix:///var/run/docker.sock").
+    # Install the pinned binary and scan git history directly, mirroring the
+    # gitleaks binary pattern below. `--fail` exits non-zero only when results
+    # are found; with the default `--only-verified` that means verified secrets.
+    - name: Install TruffleHog
+      shell: bash
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+          | sh -s -- -b /usr/local/bin "v${{ inputs.trufflehog-version }}"
+
     - name: TruffleHog scan
-      uses: trufflesecurity/trufflehog@main
-      with:
-        extra_args: ${{ inputs.trufflehog-args }}
+      shell: bash
+      run: |
+        trufflehog --no-update git "file://${GITHUB_WORKSPACE:-$PWD}" ${{ inputs.trufflehog-args }} --fail
 
     - name: Install gitleaks
       shell: bash
