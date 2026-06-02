@@ -38,8 +38,14 @@ runs:
     - name: Install TruffleHog
       shell: bash
       run: |
+        # /usr/local/bin is not writable on the nix self-hosted runners, so
+        # install into a job-writable dir and export it onto PATH for the
+        # subsequent scan steps via $GITHUB_PATH.
+        BIN_DIR="${RUNNER_TEMP:-/tmp}/secrets-scan-bin"
+        mkdir -p "$BIN_DIR"
         curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-          | sh -s -- -b /usr/local/bin "v${{ inputs.trufflehog-version }}"
+          | sh -s -- -b "$BIN_DIR" "v${{ inputs.trufflehog-version }}"
+        echo "$BIN_DIR" >> "$GITHUB_PATH"
 
     - name: TruffleHog scan
       shell: bash
@@ -49,8 +55,13 @@ runs:
     - name: Install gitleaks
       shell: bash
       run: |
+        # Same job-writable bin dir as TruffleHog (/usr/local/bin is not
+        # writable on the nix self-hosted runners).
+        BIN_DIR="${RUNNER_TEMP:-/tmp}/secrets-scan-bin"
+        mkdir -p "$BIN_DIR"
         curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${{ inputs.gitleaks-version }}/gitleaks_${{ inputs.gitleaks-version }}_linux_x64.tar.gz" \
-          | tar xz -C /usr/local/bin gitleaks
+          | tar xz -C "$BIN_DIR" gitleaks
+        echo "$BIN_DIR" >> "$GITHUB_PATH"
 
     - name: Resolve gitleaks config
       id: cfg
