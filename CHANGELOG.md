@@ -5,6 +5,18 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.1] — 2026-06-01
+
+### Fixed
+
+- **`secrets-scan` installs both scanners to a job-writable dir** — the v2.2.0
+  TruffleHog binary install (and the pre-existing gitleaks install) wrote to
+  `/usr/local/bin`, which is not writable by the runner user on the nix
+  self-hosted pool (`install: cannot create regular file ...: Permission
+  denied`). Both now install into `$RUNNER_TEMP/secrets-scan-bin` and prepend
+  it to `$GITHUB_PATH`. The gitleaks write was latently broken on these runners
+  too — it just never ran because the Docker-based TruffleHog step failed first.
+
 ## [2.2.0] — 2026-06-01
 
 ### Changed
