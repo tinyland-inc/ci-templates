@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.5.1] — 2026-06-14
+
 ### Fixed
 
 - **`repo-manifest-validate` runs without `jsonschema` or `nix` (TIN-2109)** —
