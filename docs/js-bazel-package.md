@@ -128,10 +128,22 @@ TIN-2110 cache-first enrollment surface (TIN-1997 Option D, proven by GF#889).
     `npx --yes @bazel/bazelisk build <targets> --verbose_failures` path,
     byte-identically. Non-opted consumers see zero behavior change.
 - `true`
-  - a fail-closed cache-attachment contract step runs first
+  - the consumer's `tinyland.repo.json` is validated against the vendored
+    ci-templates schema (network-free); an invalid manifest **fails closed**
+    (TIN-2109)
+  - a fail-closed cache-attachment contract step runs next
     (`scripts/cache-attachment-contract.sh --strict`), rejecting unexpanded
     `${...}` placeholders, non-`grpc`/`http` endpoints, and localhost endpoints
     (unless `GF_BAZEL_ALLOW_LOCALHOST_PROOF=true`)
+  - the contract's **expected mode is manifest-driven** (TIN-2109): it is read
+    from `enrollment.substrateMode` in `tinyland.repo.json`. If the manifest
+    declares `shared-cache-backed` but no cache actually attaches, the lane
+    **fails closed** (declared-vs-actual mismatch) instead of silently degrading
+  - the contract **rejects hosted / repo-shaped runner fallback**: the runner
+    labels are inspected and a GitHub-hosted (`ubuntu-*`), bare `self-hosted`, or
+    repo-shaped (`<name>-nix*`) runner is a deterministic failure, never a silent
+    degrade to a hosted build (override only with
+    `GF_BAZEL_ALLOW_HOSTED_RUNNER=true`)
   - the Bazel validation then runs
     `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
     --remote_upload_local_results=false`, reading the shared Bazel cache
@@ -139,10 +151,19 @@ TIN-2110 cache-first enrollment surface (TIN-1997 Option D, proven by GF#889).
     silently building local-only
 
 `cache_backed` is **cache-first only**. It never wires a remote executor; REAPI /
-remote execution is out of scope for this lane. On self-hosted Tinyland cluster
-runners, `nix-setup` exports `BAZEL_REMOTE_CACHE` from cluster DNS, so attach
-needs no new secret or infrastructure; off-cluster, supply the endpoint via a
-repo/org secret or a wrapping step before validation.
+remote execution is out of scope for this lane (the workflow contains no
+executor flag or endpoint). On self-hosted Tinyland cluster runners, `nix-setup`
+exports `BAZEL_REMOTE_CACHE` from cluster DNS, so attach needs no new secret or
+infrastructure; off-cluster, supply the endpoint via a repo/org secret or a
+wrapping step before validation.
+
+The contract script also **defines and enforces** the `executor-backed` contract
+for any repo that declares `enrollment.substrateMode: executor-backed`: it then
+requires the full set (remote executor endpoint + `BAZEL_REMOTE_CACHE` + a
+cluster runner class for platform identity + a digest-pinned REAPI proof image,
+`GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST`) and fails closed if any piece is missing.
+**No current repo selects executor-backed** (cache-first / Option D); the contract
+is defined so the gate is enforceable the moment a repo declares it.
 
 Consumers opting in must:
 
@@ -158,6 +179,21 @@ Consumers opting in must:
 Real enrollment is proven by remote cache hit/transfer lines in the cache-backed
 validation step log. A green build that shows only `--disk_cache` and no remote
 transfer is **not** enrollment.
+
+When the consumer has not vendored `scripts/cache-attachment-contract.sh`, the
+workflow fetches it from an **immutable releasing tag** (the fallback ref is
+pinned to `v2.5.0`, not the floating `v2` major), so pure-consumer spokes get a
+reproducible fetch.
+
+### `substrate_mode`
+
+Optional operator override for the cache-backed lane's expected substrate mode
+(`compatibility-local-only` | `shared-cache-backed` | `executor-backed`). It is
+used **only** when `cache_backed: true` and the consumer's `tinyland.repo.json`
+does not declare `enrollment.substrateMode` — the manifest is the authoritative
+source (TIN-2109). When both are empty the lane defaults to
+`shared-cache-backed`. This input has no effect on the default
+(non-cache-backed) path.
 
 ### `github_package_name`
 

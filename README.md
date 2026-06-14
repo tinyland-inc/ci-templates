@@ -138,6 +138,14 @@ are vendored from `tinyland-inc/site.scaffold/docs/schemas/`. The
 schema-doc repo is the source of truth; this repo vendors at known
 stable paths so composite actions can `jsonschema` against them.
 
+`tinyland-repo-manifest.schema.json` carries first-class, validated **enrollment**
+fields (TIN-2109): `enrollment.forgeScope`, `enrollment.operatorOverlay`,
+`enrollment.executionPool`, and `enrollment.substrateMode`
+(`compatibility-local-only` | `shared-cache-backed` | `executor-backed`). The
+object is additive and optional — existing manifests without it still validate —
+and `substrateMode` is the authoritative expected mode the cache-backed gate
+enforces.
+
 ## Bazelrc fragments
 
 `bazelrc/flywheel.bazelrc` is endpoint-free. It defines safe behavior for
@@ -168,9 +176,17 @@ cache-attachment contract and then validates with
 --remote_upload_local_results=false`, reading the shared Bazel cache. This lane is
 cache-first only (TIN-1997 Option D / GF#889); it never wires a remote executor.
 On self-hosted Tinyland cluster runners, `nix-setup` exports `BAZEL_REMOTE_CACHE`
-from cluster DNS, so attach needs no new secret or infrastructure. See
-[`docs/js-bazel-package.md`](docs/js-bazel-package.md) (`cache_backed`) and
-[`AGENTS.md`](AGENTS.md) for the enrollment doctrine.
+from cluster DNS, so attach needs no new secret or infrastructure.
+
+The cache-backed lane is **hardened for deterministic, fail-closed enrollment**
+(TIN-2109): it validates the consumer's `tinyland.repo.json` against the schema,
+reads `enrollment.substrateMode` as the authoritative expected mode (a
+declared-vs-actual mismatch fails closed), rejects hosted / repo-shaped runner
+fallback (no silent degrade to a GitHub-hosted build), and pins the contract-script
+fetch fallback to an immutable releasing tag. Copy the single **lace-up** pattern
+in [`AGENTS.md`](AGENTS.md) to enroll. See
+[`docs/js-bazel-package.md`](docs/js-bazel-package.md) (`cache_backed`,
+`substrate_mode`) for the consumer-facing details.
 
 ## Contributing
 

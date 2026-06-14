@@ -46,6 +46,12 @@
     "tofu_module_authority": "tinyland-inc/GloriousFlywheel",
     "package_registry": "tinyland-inc/bazel-registry"
   },
+  "enrollment": {
+    "forgeScope": "tinyland-inc",
+    "operatorOverlay": "tinyland-infra",
+    "executionPool": "tinyland-nix",
+    "substrateMode": "compatibility-local-only"
+  },
   "supply_chain": {
     "sbom": {
       "status": "not-required",
