@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-06-14
+
 ### Added
 
 - **First-class enrollment manifest fields (TIN-2109)** —
