@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
+check: yaml-parse json-parse repo-manifest-validate internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -68,6 +68,12 @@ ci-cached-endpoint-free-check:
 # (no remote executor wired in the workflow's cache-backed path).
 cache-backed-optin-contract-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py cache-backed-optin-contract
+
+# Prove the cache-attachment contract's fail-closed paths actually fail closed
+# (declared-vs-actual mismatch, hosted/repo-label fallback, executor-backed
+# without the required set, plus the pre-existing endpoint guards). TIN-2109.
+cache-contract-selftest:
+    cd {{ root }} && bash scripts/cache-attachment-contract-selftest.sh
 
 # Scan current files for secrets.
 secrets-scan-dir:

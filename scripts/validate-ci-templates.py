@@ -228,11 +228,50 @@ def check_cache_backed_optin_contract() -> int:
         # the unchanged default command must still be present verbatim
         'run_with_bazel_fetch_retry "Validate Bazel targets" '
         '"npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"',
+        # TIN-2109: manifest validation in the cache-backed lane (fail-closed)
+        "Validate repo manifest (cache-backed lane)",
+        "repo-manifest-validate@v2",
+        # TIN-2109: expected mode is manifest-driven (enrollment.substrateMode)
+        ".enrollment.substrateMode",
+        "GF_BAZEL_SUBSTRATE_MODE=",
+        # TIN-2109: runner labels fed so the contract rejects hosted/repo-label fallback
+        "GF_BAZEL_RUNNER_LABELS=",
+        "join(runner.labels, ',')",
+        # TIN-2109: fetch fallback pinned to the immutable releasing tag, not floating v2
+        "CI_TEMPLATES_REF: v2.5.0",
     ]
     for snippet in required_workflow_snippets:
         if snippet not in workflow:
             print(
                 f"{workflow_path.relative_to(ROOT)}: missing cache-backed snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    # TIN-2109: the floating-major fallback ref must NOT appear (it is pinned).
+    if re.search(r"CI_TEMPLATES_REF:\s*v2\s*$", workflow, re.MULTILINE):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: cache-backed fetch fallback uses floating "
+            "CI_TEMPLATES_REF: v2; pin to the immutable releasing tag",
+            file=sys.stderr,
+        )
+        ok = False
+
+    # TIN-2109: the contract script must DEFINE+ENFORCE the hardened gate behaviors.
+    contract = contract_path.read_text(encoding="utf-8") if contract_path.exists() else ""
+    required_contract_snippets = [
+        # hosted / repo-shaped runner rejection (no silent degrade)
+        "GF_BAZEL_RUNNER_LABELS",
+        "GF_BAZEL_ALLOW_HOSTED_RUNNER",
+        "classify_runner",
+        # executor-backed contract: full required set, defined + enforced
+        "GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST",
+        'executor-backed mode requires BAZEL_REMOTE_CACHE',
+    ]
+    for snippet in required_contract_snippets:
+        if snippet not in contract:
+            print(
+                f"{contract_path.relative_to(ROOT)}: missing TIN-2109 contract snippet: {snippet}",
                 file=sys.stderr,
             )
             ok = False

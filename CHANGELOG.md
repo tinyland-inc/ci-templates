@@ -5,6 +5,56 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **First-class enrollment manifest fields (TIN-2109)** —
+  `schemas/tinyland-repo-manifest.schema.json` gains an optional, additive
+  `enrollment` object promoting the four GloriousFlywheel enrollment dimensions
+  (`forgeScope`, `operatorOverlay`, `executionPool`, `substrateMode`) from
+  `supply_chain.sbom.notes` prose to validated fields. `substrateMode` is an enum
+  (`compatibility-local-only` | `shared-cache-backed` | `executor-backed`). The
+  object is back-compatible: existing manifests without it still validate, and it
+  is not globally required.
+- **Manifest-driven, fail-closed enrollment gate (TIN-2109)** — when
+  `cache_backed: true`, `js-bazel-package.yml` now (1) validates the consumer's
+  `tinyland.repo.json` against the vendored schema and **fails closed** on an
+  invalid manifest; (2) reads `enrollment.substrateMode` as the **authoritative**
+  expected mode fed to `cache-attachment-contract.sh --strict` (a manifest
+  declaring `shared-cache-backed` while no cache attaches fails closed, instead
+  of the previous hard-coded workflow default); and (3) feeds the runner labels
+  so the contract **rejects hosted (`ubuntu-*`) / bare `self-hosted` /
+  repo-shaped (`<name>-nix*`) runner fallback** — a missing substrate is a
+  deterministic failure, never a silent degrade to a GitHub-hosted build. All new
+  steps live inside the opt-in `cache_backed` path; the default
+  `bazelisk build … --verbose_failures` step is byte-identical for non-opted
+  consumers.
+- **`substrate_mode` workflow input** — optional operator override for the
+  cache-backed lane's expected mode, used only when the consumer manifest does
+  not declare `enrollment.substrateMode` (which remains authoritative). No effect
+  on the default path.
+- **Executor-backed contract DEFINED + ENFORCED (cache-first, never selected)** —
+  `scripts/cache-attachment-contract.sh` now requires the full executor contract
+  (remote executor endpoint + `BAZEL_REMOTE_CACHE` + a cluster runner class for
+  platform identity + a digest-pinned REAPI proof image via
+  `GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST`) whenever the declared/effective mode is
+  `executor-backed`, failing closed if any piece is missing. No current repo
+  selects executor-backed (TIN-1997 Option D / cache-first); the contract is
+  defined so the gate is enforceable the moment a repo declares it. The workflow
+  remains executor-free (no `--remote_executor` / `BAZEL_REMOTE_EXECUTOR` /
+  `--config=executor-backed`), keeping the `cache-backed-optin-contract` guard
+  green.
+
+### Changed
+
+- **Pinned the cache-attachment-contract fetch fallback** in
+  `js-bazel-package.yml` from the floating `CI_TEMPLATES_REF=v2` major tag to the
+  immutable releasing tag `v2.5.0`, so pure-consumer spokes that have not
+  vendored the script get a reproducible fetch.
+- **`just check` / `validate-ci-templates.py cache-backed-optin-contract`** now
+  additionally asserts the manifest-validation step, manifest-driven expected
+  mode, runner-label rejection wiring, the pinned (non-floating) fetch fallback,
+  and the contract script's hosted-runner + executor-backed enforcement.
+
 ## [2.4.0] — 2026-06-14
 
 ### Added

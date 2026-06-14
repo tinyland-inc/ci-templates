@@ -99,6 +99,17 @@ on:
           byte-identically (zero behavior change for non-opted consumers).
         type: boolean
         default: false
+      substrate_mode:
+        description: >-
+          Optional operator override for the cache-backed lane's expected Bazel
+          substrate mode (compatibility-local-only | shared-cache-backed |
+          executor-backed). Used ONLY when cache_backed=true AND the consumer's
+          tinyland.repo.json does not declare enrollment.substrateMode (which is
+          the authoritative source, TIN-2109). When empty and the manifest is
+          silent, the lane defaults to shared-cache-backed. Has no effect on the
+          default (non-cache-backed) path.
+        type: string
+        default: ""
       package_dir:
         description: "Directory containing the Bazel-built publishable package"
         type: string
@@ -664,16 +675,36 @@ jobs:
           targets_quoted="$(printf '%q ' "${bazel_targets[@]}")"
           run_with_bazel_fetch_retry "Validate Bazel targets" "npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"
 
+      # Opt-in (cache_backed=true) manifest validation. This is a NEW conditional
+      # path; the default path above is untouched (byte-identical for non-opted
+      # consumers). Validates the consumer's tinyland.repo.json against the
+      # vendored ci-templates schema and FAILS CLOSED on an invalid manifest
+      # (TIN-2109). Network-free: the schema ships in the action.
+      - name: Validate repo manifest (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2
+        with:
+          path: ${{ env.WORKSPACE_DIR }}/tinyland.repo.json
+
       # Opt-in (cache_backed=true) shared-cache-backed validation. This is a NEW
       # conditional path; the default path above is untouched. CACHE-FIRST only:
       # no remote executor is ever wired here (TIN-1997 Option D / TIN-2110).
+      # The contract's EXPECTED MODE is manifest-driven (TIN-2109): it is read
+      # from enrollment.substrateMode in tinyland.repo.json (authoritative), not a
+      # hard-coded workflow default. Runner labels are fed so the contract rejects
+      # hosted / repo-shaped runner fallback (no silent degrade).
       - name: Assert shared-cache attachment (cache-backed lane)
         if: ${{ inputs.cache_backed }}
         shell: bash
+        env:
+          CI_TEMPLATES_REF: v2.5.0
+          SUBSTRATE_MODE_INPUT: ${{ inputs.substrate_mode }}
+          RUNNER_LABELS: ${{ join(runner.labels, ',') }}
         run: |
           set -euo pipefail
           # The contract script ships in this ci-templates repo; locate it from
-          # the checked-out caller workspace fallback, else fetch the pinned copy.
+          # the checked-out caller workspace fallback, else fetch the immutable
+          # pinned copy (CI_TEMPLATES_REF is the releasing tag, not floating v2).
           script="$RUNNER_TEMP/cache-attachment-contract.sh"
           if [ -f "$WORKSPACE_DIR/scripts/cache-attachment-contract.sh" ]; then
             script="$WORKSPACE_DIR/scripts/cache-attachment-contract.sh"
@@ -683,10 +714,29 @@ jobs:
               -o "$script"
             chmod +x "$script"
           fi
-          export GF_BAZEL_SUBSTRATE_MODE="${GF_BAZEL_SUBSTRATE_MODE:-shared-cache-backed}"
+
+          # Manifest-driven expected mode (TIN-2109). Authority order:
+          #   1. enrollment.substrateMode in the consumer's tinyland.repo.json
+          #   2. the substrate_mode workflow input (operator override)
+          #   3. existing default (shared-cache-backed) for back-compat
+          # When the manifest declares a mode that disagrees with the actual
+          # endpoint attachment, the contract script fails closed.
+          declared_mode=""
+          manifest="$WORKSPACE_DIR/tinyland.repo.json"
+          if [ -f "$manifest" ]; then
+            declared_mode="$(jq -r '.enrollment.substrateMode // empty' "$manifest")"
+          fi
+          if [ -z "$declared_mode" ]; then
+            declared_mode="$SUBSTRATE_MODE_INPUT"
+          fi
+          export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"
+          echo "::notice::cache-backed lane expected mode (manifest-driven): $GF_BAZEL_SUBSTRATE_MODE"
+
+          # Feed runner labels so the contract rejects hosted / repo-shaped
+          # runner fallback. A missing substrate is a deterministic failure,
+          # never a silent degrade to a GitHub-hosted build.
+          export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"
           bash "$script" --strict
-        env:
-          CI_TEMPLATES_REF: v2
 
       - name: Validate Bazel targets (cache-backed)
         if: ${{ inputs.cache_backed }}

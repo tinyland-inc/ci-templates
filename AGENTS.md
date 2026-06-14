@@ -72,6 +72,61 @@ enrollment out to spokes.
 
 See `docs/js-bazel-package.md` (`cache_backed`) for the consumer-facing details.
 
+## Lace-up: the one copyable enrollment pattern (TIN-2109)
+
+A consumer enrolls in deterministic, fail-closed shared-cache validation by
+copying ONE pattern. Two edits, then a green build only happens when the
+substrate actually attaches on a shared cluster runner.
+
+**1. Declare the enrollment dimensions as first-class manifest fields** in
+`tinyland.repo.json`. `enrollment.substrateMode` is the AUTHORITATIVE expected
+mode the gate enforces (additive + optional; existing manifests still validate):
+
+```json
+"enrollment": {
+  "forgeScope": "Jesssullivan",
+  "operatorOverlay": "jesssullivan-infra",
+  "executionPool": "tinyland-nix",
+  "substrateMode": "shared-cache-backed"
+}
+```
+
+**2. Opt into the cache-backed lane** on the `js-bazel-package.yml` consumer
+call (runner_mode must resolve to a shared `tinyland-*` capability class — never
+`ubuntu-latest`, never a repo-shaped `<name>-nix` label):
+
+```yaml
+jobs:
+  package:
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v2.5.0
+    with:
+      runner_mode: repo_owned
+      runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
+      cache_backed: true            # opt-in; default off (non-opted consumers unchanged)
+      bazel_targets: "//:typecheck //:pkg //:test"
+```
+
+What you get, deterministically:
+
+- the gate validates `tinyland.repo.json` against the schema and **fails closed**
+  on an invalid manifest;
+- the gate reads `enrollment.substrateMode` and feeds it to
+  `cache-attachment-contract.sh --strict` as the expected mode. Declared
+  `shared-cache-backed` + no cache attached ⇒ **declared-vs-actual mismatch,
+  fail closed** (no silent local-only build);
+- a hosted (`ubuntu-*`), bare `self-hosted`, or repo-shaped (`<name>-nix*`)
+  runner is **rejected** — a missing substrate is a deterministic failure, never
+  a degrade to a GitHub-hosted build;
+- the fetch fallback for the contract script is pinned to the immutable releasing
+  tag (`v2.5.0`), so a pure-consumer spoke gets a reproducible fetch.
+
+**Executor-backed is defined but not selected.** If a repo ever declares
+`enrollment.substrateMode: executor-backed`, the SAME gate requires the full
+executor contract (remote executor endpoint + `BAZEL_REMOTE_CACHE` + cluster
+runner class + `GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST`) and fails closed if any piece
+is missing. No current repo selects it (cache-first / TIN-1997 Option D); the
+contract exists so the gate is enforceable the moment a repo declares it.
+
 ## Releasing
 
 See `RELEASING.md`. On a `release: vX.Y.Z` commit to `main`, `release.yml` cuts

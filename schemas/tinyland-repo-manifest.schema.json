@@ -106,6 +106,32 @@
 				"package_registry": { "type": "string" }
 			}
 		},
+		"enrollment": {
+			"type": "object",
+			"description": "First-class declaration of the four GloriousFlywheel enrollment dimensions. ADDITIVE + optional (TIN-2109): existing manifests without this object still validate. When present, `substrateMode` is the AUTHORITATIVE expected mode fed to scripts/cache-attachment-contract.sh --strict in the cache-backed lane; a declared-vs-actual mismatch fails closed.",
+			"additionalProperties": false,
+			"properties": {
+				"forgeScope": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Forge account / org that owns the repo (e.g. a personal account or a tinyland-inc org scope)."
+				},
+				"operatorOverlay": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Operator overlay that provisions the repo's runners/secrets (e.g. jesssullivan-infra)."
+				},
+				"executionPool": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Execution pool the lanes target (e.g. tinyland-nix in-cluster ARC)."
+				},
+				"substrateMode": {
+					"$ref": "#/$defs/substrateMode",
+					"description": "Authoritative Bazel substrate mode. compatibility-local-only = no shared cache; shared-cache-backed = cache-first (TIN-1997 Option D); executor-backed = REAPI executor (DEFINED + ENFORCED but not selected by any current repo)."
+				}
+			}
+		},
 		"supply_chain": {
 			"type": "object",
 			"required": ["sbom"],
@@ -185,6 +211,13 @@
 				"gitops-receiver",
 				"ci-template-library",
 				"infra-substrate"
+			]
+		},
+		"substrateMode": {
+			"enum": [
+				"compatibility-local-only",
+				"shared-cache-backed",
+				"executor-backed"
 			]
 		}
 	}
