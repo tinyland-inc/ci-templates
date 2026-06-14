@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-06-14
+
 ### Added
 
 - **`js-bazel-package.yml` opt-in `cache_backed` shared-cache lane (TIN-2110)** —
