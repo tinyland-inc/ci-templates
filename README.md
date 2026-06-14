@@ -90,8 +90,10 @@ nix develop --command just check
 
 The check parses all workflow/action YAML, parses vendored JSON schemas,
 validates `tinyland.repo.json`, verifies v2 internal action refs resolve to
-checked-in sibling actions, asserts `bazelrc/flywheel.bazelrc` remains
-endpoint-free, and runs the canonical Tinyland gitleaks working-tree scan.
+checked-in sibling actions, asserts `bazelrc/flywheel.bazelrc` and
+`bazelrc/ci-cached.bazelrc` remain endpoint-free, asserts the `cache_backed`
+opt-in lane stays default-off and cache-first, and runs the canonical Tinyland
+gitleaks working-tree scan.
 
 ## Composite actions
 
@@ -119,7 +121,7 @@ See per-action `action.yml` files for full input/output documentation.
 
 | Workflow | Purpose |
 |---|---|
-| `js-bazel-package.yml` | Pre-existing: JS/TS packages built by Bazel and published to GitHub Packages, with npmjs required/optional/disabled by package policy. |
+| `js-bazel-package.yml` | Pre-existing: JS/TS packages built by Bazel and published to GitHub Packages, with npmjs required/optional/disabled by package policy. Supports an **opt-in, default-off `cache_backed`** shared-cache Bazel validation lane (cache-first; see below). |
 | `npm-publish.yml` | Pre-existing: hosted-only Node package build + publish. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
 | **`spoke-lane-env.yml`** | Canonical PR-env workflow. Replaces hand-rolled `pr-env-lanes.yml`. |
@@ -136,7 +138,7 @@ are vendored from `tinyland-inc/site.scaffold/docs/schemas/`. The
 schema-doc repo is the source of truth; this repo vendors at known
 stable paths so composite actions can `jsonschema` against them.
 
-## Bazelrc fragment
+## Bazelrc fragments
 
 `bazelrc/flywheel.bazelrc` is endpoint-free. It defines safe behavior for
 `--config=flywheel` and `--config=flywheel-executor`, but does not hard-code
@@ -145,6 +147,30 @@ The `flywheel-bazel` composite installs it at runtime and supplies
 `--remote_cache` from `BAZEL_REMOTE_CACHE`; executor mode additionally requires
 `BAZEL_REMOTE_EXECUTOR`. Pull requests default to read-only cache use unless a
 trusted lane sets `GF_BAZEL_REMOTE_UPLOAD=true`.
+
+`bazelrc/ci-cached.bazelrc` is the consumer-naming counterpart for the
+**cache-first** lane. It defines endpoint-free `--config=ci-cached`,
+`--config=cache-readonly`, and `--config=no-remote-cache` behavior that spoke
+`.bazelrc` files reference. It is read-only by default (no upload) and never
+selects a remote executor. `scripts/cache-attachment-contract.sh` is the
+fail-closed checker that gates cache-backed work (`--strict` requires a real
+`BAZEL_REMOTE_CACHE`; rejects unexpanded `${...}` placeholders, non-`grpc`/`http`
+endpoints, and localhost without explicit proof).
+
+## Cache-backed enrollment (cache-first, TIN-2110)
+
+`js-bazel-package.yml` exposes an **opt-in, default-off** `cache_backed` input.
+When unset, the Bazel validation runs the existing
+`bazelisk build … --verbose_failures` path byte-identically — zero impact on
+non-opted consumers. When `cache_backed: true`, the workflow runs the fail-closed
+cache-attachment contract and then validates with
+`--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
+--remote_upload_local_results=false`, reading the shared Bazel cache. This lane is
+cache-first only (TIN-1997 Option D / GF#889); it never wires a remote executor.
+On self-hosted Tinyland cluster runners, `nix-setup` exports `BAZEL_REMOTE_CACHE`
+from cluster DNS, so attach needs no new secret or infrastructure. See
+[`docs/js-bazel-package.md`](docs/js-bazel-package.md) (`cache_backed`) and
+[`AGENTS.md`](AGENTS.md) for the enrollment doctrine.
 
 ## Contributing
 

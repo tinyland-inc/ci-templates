@@ -88,6 +88,17 @@ on:
         description: "Bazel validation attempts for transient external archive fetch failures"
         type: string
         default: "3"
+      cache_backed:
+        description: >-
+          Opt-in (default false) shared-cache-backed Bazel validation. When true,
+          the Bazel target validation runs through the cache-attachment contract
+          (fail-closed) and `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
+          --remote_upload_local_results=false`, reading the shared Bazel cache.
+          CACHE-FIRST only: no remote executor is wired. When false/unset the
+          existing plain `bazelisk build ... --verbose_failures` path runs
+          byte-identically (zero behavior change for non-opted consumers).
+        type: boolean
+        default: false
       package_dir:
         description: "Directory containing the Bazel-built publishable package"
         type: string
@@ -638,6 +649,7 @@ jobs:
           run_with_bazel_fetch_retry "Validate package surface" "$COMMAND"
 
       - name: Validate Bazel targets
+        if: ${{ !inputs.cache_backed }}
         shell: bash
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
@@ -651,6 +663,54 @@ jobs:
           source "$BAZEL_FETCH_RETRY_HELPER"
           targets_quoted="$(printf '%q ' "${bazel_targets[@]}")"
           run_with_bazel_fetch_retry "Validate Bazel targets" "npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"
+
+      # Opt-in (cache_backed=true) shared-cache-backed validation. This is a NEW
+      # conditional path; the default path above is untouched. CACHE-FIRST only:
+      # no remote executor is ever wired here (TIN-1997 Option D / TIN-2110).
+      - name: Assert shared-cache attachment (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The contract script ships in this ci-templates repo; locate it from
+          # the checked-out caller workspace fallback, else fetch the pinned copy.
+          script="$RUNNER_TEMP/cache-attachment-contract.sh"
+          if [ -f "$WORKSPACE_DIR/scripts/cache-attachment-contract.sh" ]; then
+            script="$WORKSPACE_DIR/scripts/cache-attachment-contract.sh"
+          else
+            curl -fsSL \
+              "https://raw.githubusercontent.com/tinyland-inc/ci-templates/${CI_TEMPLATES_REF}/scripts/cache-attachment-contract.sh" \
+              -o "$script"
+            chmod +x "$script"
+          fi
+          export GF_BAZEL_SUBSTRATE_MODE="${GF_BAZEL_SUBSTRATE_MODE:-shared-cache-backed}"
+          bash "$script" --strict
+        env:
+          CI_TEMPLATES_REF: v2
+
+      - name: Validate Bazel targets (cache-backed)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        env:
+          BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          if [ -z "${BAZEL_REMOTE_CACHE:-}" ]; then
+            echo "::error::cache_backed=true but BAZEL_REMOTE_CACHE is unset. On self-hosted cluster runners nix-setup exports it from cluster DNS; otherwise supply it via repo/org secret or input. The cache-backed lane fails closed rather than silently building local-only."
+            exit 1
+          fi
+          # shellcheck disable=SC2153
+          read -r -a bazel_targets <<< "$BAZEL_TARGETS"
+
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          targets_quoted="$(printf '%q ' "${bazel_targets[@]}")"
+          # CACHE-FIRST: ci-cached config + injected remote cache, read-only
+          # (no upload), and no remote executor is wired. The remote cache
+          # hit/transfer lines in this step's log are the real-attach proof.
+          run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
+            "npx --yes @bazel/bazelisk build ${targets_quoted}--config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
