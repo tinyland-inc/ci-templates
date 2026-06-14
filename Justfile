@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -74,6 +74,15 @@ cache-backed-optin-contract-check:
 # without the required set, plus the pre-existing endpoint guards). TIN-2109.
 cache-contract-selftest:
     cd {{ root }} && bash scripts/cache-attachment-contract-selftest.sh
+
+# Prove the dependency-free manifest validator accepts the real manifest and
+# fails closed on an invalid one (no jsonschema/nix/network required). TIN-2109.
+manifest-validate-selftest:
+    cd {{ root }} && python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json tinyland.repo.json
+    cd {{ root }} && bad=$(mktemp) && jq '.schema_version=2' tinyland.repo.json > "$bad" && \
+      if python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json "$bad" 2>/dev/null; then \
+        echo "FAIL: validator did not reject an invalid manifest" >&2; rm -f "$bad"; exit 1; \
+      else echo "manifest validator fails closed on invalid manifest"; rm -f "$bad"; fi
 
 # Scan current files for secrets.
 secrets-scan-dir:

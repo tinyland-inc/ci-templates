@@ -182,7 +182,7 @@ transfer is **not** enrollment.
 
 When the consumer has not vendored `scripts/cache-attachment-contract.sh`, the
 workflow fetches it from an **immutable releasing tag** (the fallback ref is
-pinned to `v2.5.0`, not the floating `v2` major), so pure-consumer spokes get a
+pinned to `v2.5.1`, not the floating `v2` major), so pure-consumer spokes get a
 reproducible fetch.
 
 ### `substrate_mode`

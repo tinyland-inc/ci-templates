@@ -98,7 +98,7 @@ call (runner_mode must resolve to a shared `tinyland-*` capability class — nev
 ```yaml
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v2.5.0
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v2.5.1
     with:
       runner_mode: repo_owned
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
@@ -118,7 +118,7 @@ What you get, deterministically:
   runner is **rejected** — a missing substrate is a deterministic failure, never
   a degrade to a GitHub-hosted build;
 - the fetch fallback for the contract script is pinned to the immutable releasing
-  tag (`v2.5.0`), so a pure-consumer spoke gets a reproducible fetch.
+  tag (`v2.5.1`), so a pure-consumer spoke gets a reproducible fetch.
 
 **Executor-backed is defined but not selected.** If a repo ever declares
 `enrollment.substrateMode: executor-backed`, the SAME gate requires the full

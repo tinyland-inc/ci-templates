@@ -238,7 +238,7 @@ def check_cache_backed_optin_contract() -> int:
         "GF_BAZEL_RUNNER_LABELS=",
         "join(runner.labels, ',')",
         # TIN-2109: fetch fallback pinned to the immutable releasing tag, not floating v2
-        "CI_TEMPLATES_REF: v2.5.0",
+        "CI_TEMPLATES_REF: v2.5.1",
     ]
     for snippet in required_workflow_snippets:
         if snippet not in workflow:
@@ -256,6 +256,30 @@ def check_cache_backed_optin_contract() -> int:
             file=sys.stderr,
         )
         ok = False
+
+    # TIN-2109: the manifest validator must be dependency-free (no nix/network)
+    # so the gate works on nix self-hosted cluster runners.
+    validator_path = ROOT / "scripts/manifest-schema-validate.py"
+    action_path = ROOT / ".github/actions/repo-manifest-validate/action.yml"
+    if not validator_path.exists():
+        print(f"missing {validator_path.relative_to(ROOT)}", file=sys.stderr)
+        ok = False
+    if action_path.exists():
+        action_text = action_path.read_text(encoding="utf-8")
+        if "manifest-schema-validate.py" not in action_text:
+            print(
+                f"{action_path.relative_to(ROOT)}: repo-manifest-validate must use the "
+                "bundled stdlib validator (manifest-schema-validate.py)",
+                file=sys.stderr,
+            )
+            ok = False
+        if "nix develop --command python3" in action_text:
+            print(
+                f"{action_path.relative_to(ROOT)}: repo-manifest-validate must not depend on "
+                "`nix develop` (fails on nix-store lock on cluster runners)",
+                file=sys.stderr,
+            )
+            ok = False
 
     # TIN-2109: the contract script must DEFINE+ENFORCE the hardened gate behaviors.
     contract = contract_path.read_text(encoding="utf-8") if contract_path.exists() else ""

@@ -697,7 +697,7 @@ jobs:
         if: ${{ inputs.cache_backed }}
         shell: bash
         env:
-          CI_TEMPLATES_REF: v2.5.0
+          CI_TEMPLATES_REF: v2.5.1
           SUBSTRATE_MODE_INPUT: ${{ inputs.substrate_mode }}
           RUNNER_LABELS: ${{ join(runner.labels, ',') }}
         run: |
