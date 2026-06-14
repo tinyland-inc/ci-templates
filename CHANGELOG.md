@@ -5,6 +5,18 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`repo-manifest-validate` runs without `jsonschema` or `nix` (TIN-2109)** —
+  the action now validates via a bundled, dependency-free stdlib validator
+  (`scripts/manifest-schema-validate.py`) that prefers the authoritative
+  `jsonschema` package when importable and otherwise falls back to a faithful
+  JSON-Schema-2020-12 subset validator. The previous `nix develop --command
+  python3` fallback failed on nix self-hosted cluster runners (a cold
+  `nix develop` hits an `opening lock file ".../big-lock": Permission denied`),
+  which made the v2.5.0 cache-backed manifest-validation gate fail closed for the
+  wrong reason. No network; fail-closed semantics unchanged.
+
 ## [2.5.0] — 2026-06-14
 
 ### Added

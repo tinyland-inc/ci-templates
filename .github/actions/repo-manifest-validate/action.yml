@@ -30,10 +30,16 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        schema="${{ github.action_path }}/../../../schemas/tinyland-repo-manifest.schema.json"
+        action_dir="${{ github.action_path }}"
+        schema="$action_dir/../../../schemas/tinyland-repo-manifest.schema.json"
+        validator="$action_dir/../../../scripts/manifest-schema-validate.py"
         manifest="${{ inputs.path }}"
         if [[ ! -f "$schema" ]]; then
           echo "::error::ci-templates schema missing at $schema"
+          exit 1
+        fi
+        if [[ ! -f "$validator" ]]; then
+          echo "::error::ci-templates manifest validator missing at $validator"
           exit 1
         fi
         if [[ ! -f "$manifest" ]]; then
@@ -41,29 +47,16 @@ runs:
           exit 1
         fi
 
-        if python3 -c 'import jsonschema' >/dev/null 2>&1; then
-          validator=(python3)
-        elif command -v nix >/dev/null 2>&1 && [[ -f flake.nix ]]; then
-          validator=(nix develop --command python3)
-          echo "::notice::host python lacks jsonschema; validating via nix develop"
-        else
-          echo "::error::python jsonschema is unavailable and no flake.nix dev shell exists"
-          exit 2
+        # Dependency-free, network-free validation (TIN-2109). The validator
+        # prefers the authoritative `jsonschema` package when importable and
+        # otherwise uses a stdlib JSON-Schema-subset fallback, so the gate works
+        # on nix self-hosted cluster runners (where a cold `nix develop` can fail
+        # on a nix-store lock) as well as on hosted runners. Fail-closed: a
+        # non-zero exit (invalid manifest) fails the step.
+        if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
+          echo "::notice::host python lacks jsonschema; using bundled stdlib validator"
         fi
-
-        "${validator[@]}" - <<PY
-        import json, sys
-        from jsonschema import Draft202012Validator
-        schema = json.load(open("$schema"))
-        inst = json.load(open("$manifest"))
-        Draft202012Validator.check_schema(schema)
-        errors = sorted(Draft202012Validator(schema).iter_errors(inst), key=lambda e: list(e.absolute_path))
-        if errors:
-            for e in errors:
-                p = "/" + "/".join(str(x) for x in e.absolute_path)
-                print(f"::error file=$manifest::at {p}: {e.message}", file=sys.stderr)
-            sys.exit(1)
-        PY
+        python3 "$validator" "$schema" "$manifest"
 
     - name: Read manifest role
       id: read
