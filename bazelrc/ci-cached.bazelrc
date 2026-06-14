@@ -1,0 +1,42 @@
+# ci-cached.bazelrc - endpoint-free shared-cache behavior for the cache-backed lane.
+#
+# Vendored by tinyland-inc/ci-templates. This is the consumer-naming counterpart
+# of bazelrc/flywheel.bazelrc: it defines the `ci-cached` config families that
+# spoke .bazelrc files reference, while the cache endpoint stays runtime
+# authority. The cache-backed path in js-bazel-package.yml (cache_backed=true)
+# validates BAZEL_REMOTE_CACHE via scripts/cache-attachment-contract.sh and then
+# supplies the remote cache endpoint as a runtime Bazel flag.
+#
+# Do not put deployment-specific endpoints, credentials, auth headers, or cache
+# upload authority in this file.
+#
+# Hard invariants:
+#   - Cache hits are not RBE. This fragment is CACHE-FIRST (TIN-1997 Option D);
+#     it never selects a remote executor.
+#   - read-only by default: clients read the shared cache, never upload local
+#     results (TIN-1462 posture). A trusted lane may opt into uploads by
+#     overriding the upload-local-results flag to true at invocation.
+#
+# A consumer .bazelrc is expected to define a base `:ci` config that, at minimum,
+# empties the disk cache in CI so a green build proves the REMOTE cache rather
+# than an incidental local disk hit:
+#
+#   build:ci --disk_cache=
+#
+# The `ci-cached` block then layers shared-cache behavior on top of it.
+
+# Shared remote cache behavior. The workflow/wrapper supplies --remote_cache and
+# upload policy after validating BAZEL_REMOTE_CACHE.
+build:ci-cached --config=ci
+build:ci-cached --remote_upload_local_results=false
+build:ci-cached --remote_download_minimal
+build:ci-cached --remote_timeout=60
+
+# Explicit read-only and disable knobs for proof/debug lanes.
+build:cache-readonly --remote_upload_local_results=false
+build:no-remote-cache --remote_cache=
+
+# Executor-backed is CLASSIFIED for naming convergence with the GF REAPI cell
+# lane but is NOT selected by the cache-first lane. The cache-backed path in
+# ci-templates never passes --config=executor-backed or --remote_executor.
+build:executor-backed --config=ci-cached

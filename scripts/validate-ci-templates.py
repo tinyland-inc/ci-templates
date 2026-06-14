@@ -175,6 +175,90 @@ def check_flywheel_reapi_proof_contract() -> int:
     return 0
 
 
+def check_cache_backed_optin_contract() -> int:
+    """Guard the TIN-2110 opt-in cache-backed lane: default-off and cache-first.
+
+    Asserts the new `cache_backed` input is default-off, the default Bazel
+    validation step stays guarded so non-opted consumers are byte-identical, the
+    cache-backed step routes through `--config=ci-cached` + injected
+    `--remote_cache`, gates on the cache-attachment contract, and NEVER wires a
+    remote executor (cache-first only, TIN-1997 Option D).
+    """
+    workflow_path = ROOT / ".github/workflows/js-bazel-package.yml"
+    docs_path = ROOT / "docs/js-bazel-package.md"
+    bazelrc_path = ROOT / "bazelrc/ci-cached.bazelrc"
+    contract_path = ROOT / "scripts/cache-attachment-contract.sh"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    docs = docs_path.read_text(encoding="utf-8")
+
+    ok = True
+
+    if not contract_path.exists():
+        print(f"missing {contract_path.relative_to(ROOT)}", file=sys.stderr)
+        ok = False
+    if not bazelrc_path.exists():
+        print(f"missing {bazelrc_path.relative_to(ROOT)}", file=sys.stderr)
+        ok = False
+
+    # Input is declared and default-off.
+    if not re.search(r"\n      cache_backed:\n", workflow):
+        print(f"{workflow_path.relative_to(ROOT)}: missing cache_backed input", file=sys.stderr)
+        ok = False
+    cache_backed_block = re.search(
+        r"\n      cache_backed:\n(?:.*\n)*?        default: (\w+)\n", workflow
+    )
+    if not cache_backed_block or cache_backed_block.group(1) != "false":
+        print(
+            f"{workflow_path.relative_to(ROOT)}: cache_backed must declare default: false",
+            file=sys.stderr,
+        )
+        ok = False
+
+    required_workflow_snippets = [
+        # default path stays guarded => byte-identical for non-opted consumers
+        "if: ${{ !inputs.cache_backed }}",
+        # opt-in path gated on the fail-closed cache-attachment contract
+        "Assert shared-cache attachment (cache-backed lane)",
+        "cache-attachment-contract.sh",
+        "--strict",
+        # opt-in path is cache-first: ci-cached config + injected remote cache, no upload
+        "--config=ci-cached",
+        "--remote_cache=${BAZEL_REMOTE_CACHE}",
+        "--remote_upload_local_results=false",
+        # the unchanged default command must still be present verbatim
+        'run_with_bazel_fetch_retry "Validate Bazel targets" '
+        '"npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"',
+    ]
+    for snippet in required_workflow_snippets:
+        if snippet not in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: missing cache-backed snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    # CACHE-FIRST: the workflow must never wire a remote executor anywhere.
+    for forbidden in ("--remote_executor", "--config=executor-backed", "BAZEL_REMOTE_EXECUTOR"):
+        if forbidden in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: cache-first lane must not wire executor: {forbidden}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    if "cache-backed" not in docs.lower() and "cache_backed" not in docs:
+        print(
+            f"{docs_path.relative_to(ROOT)}: missing cache-backed lane documentation",
+            file=sys.stderr,
+        )
+        ok = False
+
+    if not ok:
+        return 1
+    print("cache-backed opt-in lane is default-off and cache-first")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -184,6 +268,7 @@ def main() -> int:
             "internal-refs",
             "js-bazel-runner-contract",
             "flywheel-reapi-proof-contract",
+            "cache-backed-optin-contract",
         ],
     )
     args = parser.parse_args()
@@ -194,6 +279,8 @@ def main() -> int:
         return check_js_bazel_package_runner_contract()
     if args.check == "flywheel-reapi-proof-contract":
         return check_flywheel_reapi_proof_contract()
+    if args.check == "cache-backed-optin-contract":
+        return check_cache_backed_optin_contract()
     return check_internal_refs()
 
 

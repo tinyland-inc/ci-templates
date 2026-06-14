@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check secrets-scan-dir
+check: yaml-parse json-parse repo-manifest-validate internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check secrets-scan-dir
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -47,6 +47,18 @@ flywheel-reapi-proof-contract-check:
 endpoint-free-check:
     cd {{ root }} && ! grep -Eq -- '--remote_cache=|--remote_executor=|--remote_upload_local_results=true|grpc://bazel-cache|grpc://gf-reapi-cell' bazelrc/flywheel.bazelrc
     @echo "flywheel.bazelrc endpoint-free"
+
+# Ensure the ci-cached bazelrc fragment has no baked endpoints or upload authority.
+# `--remote_cache=` with an empty value (the no-remote-cache disable knob) is the
+# only permitted occurrence; any non-empty endpoint or executor is rejected.
+ci-cached-endpoint-free-check:
+    cd {{ root }} && ! grep -Eq -- '--remote_cache=[^[:space:]]|--remote_executor=|--remote_upload_local_results=true|grpc://bazel-cache|grpc://gf-reapi-cell|grpcs?://[a-z0-9.-]+:[0-9]' bazelrc/ci-cached.bazelrc
+    @echo "ci-cached.bazelrc endpoint-free"
+
+# Ensure the cache-backed opt-in stays opt-in/default-off and cache-first
+# (no remote executor wired in the workflow's cache-backed path).
+cache-backed-optin-contract-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py cache-backed-optin-contract
 
 # Scan current files for secrets.
 secrets-scan-dir:

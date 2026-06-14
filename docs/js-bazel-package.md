@@ -118,6 +118,47 @@ Meaning:
   - use this for Bazel-first packages whose release authority is GitHub
     tag/release, GitHub Packages, and the Tinyland Bazel registry
 
+### `cache_backed`
+
+Opt-in (default `false`) shared-cache-backed Bazel validation. This is the
+TIN-2110 cache-first enrollment surface (TIN-1997 Option D, proven by GF#889).
+
+- `false` / unset (default)
+  - the Bazel target validation runs the existing plain
+    `npx --yes @bazel/bazelisk build <targets> --verbose_failures` path,
+    byte-identically. Non-opted consumers see zero behavior change.
+- `true`
+  - a fail-closed cache-attachment contract step runs first
+    (`scripts/cache-attachment-contract.sh --strict`), rejecting unexpanded
+    `${...}` placeholders, non-`grpc`/`http` endpoints, and localhost endpoints
+    (unless `GF_BAZEL_ALLOW_LOCALHOST_PROOF=true`)
+  - the Bazel validation then runs
+    `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
+    --remote_upload_local_results=false`, reading the shared Bazel cache
+  - the lane fails closed when `BAZEL_REMOTE_CACHE` is unset rather than
+    silently building local-only
+
+`cache_backed` is **cache-first only**. It never wires a remote executor; REAPI /
+remote execution is out of scope for this lane. On self-hosted Tinyland cluster
+runners, `nix-setup` exports `BAZEL_REMOTE_CACHE` from cluster DNS, so attach
+needs no new secret or infrastructure; off-cluster, supply the endpoint via a
+repo/org secret or a wrapping step before validation.
+
+Consumers opting in must:
+
+1. set `cache_backed: true` in the `with:` block
+2. vendor `bazelrc/ci-cached.bazelrc` behavior in their `.bazelrc` (a base `:ci`
+   config that empties `--disk_cache=` in CI plus the `:ci-cached` block) so a
+   green build proves the **remote** cache, not an incidental disk hit
+3. optionally vendor `scripts/cache-attachment-contract.sh` for the same
+   fail-closed self-check locally (`scripts/cache-attachment-contract.sh
+   --strict`); the workflow falls back to fetching the pinned ci-templates copy
+   when the consumer has not vendored it
+
+Real enrollment is proven by remote cache hit/transfer lines in the cache-backed
+validation step log. A green build that shows only `--disk_cache` and no remote
+transfer is **not** enrollment.
+
 ### `github_package_name`
 
 `github_package_name` is the package coordinate used only for the GitHub

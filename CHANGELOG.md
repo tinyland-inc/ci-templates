@@ -5,6 +5,34 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`js-bazel-package.yml` opt-in `cache_backed` shared-cache lane (TIN-2110)** —
+  a new boolean input (default `false`). When `true`, Bazel target validation
+  runs a fail-closed cache-attachment contract step and then
+  `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
+  --remote_upload_local_results=false`, reading the shared Bazel cache
+  (cache-first, TIN-1997 Option D / GF#889). When `false`/unset the existing
+  `bazelisk build … --verbose_failures` path runs **byte-identically** — zero
+  behavior change for the ~190 non-opted consumers. The lane is cache-first only
+  and never wires a remote executor.
+- **`scripts/cache-attachment-contract.sh`** — shared fail-closed classifier
+  generalized from MassageIthaca, aligned to TIN-2108 naming
+  (`GF_BAZEL_SUBSTRATE_MODE`; modes `compatibility-local-only` /
+  `shared-cache-backed` / `executor-backed`). Rejects unexpanded `${...}`
+  placeholders, non-`grpc`/`http` endpoints, localhost without explicit proof,
+  executor-without-cache, and executor≠cache mismatches.
+- **`bazelrc/ci-cached.bazelrc`** — endpoint-free `--config=ci-cached`,
+  `cache-readonly`, and `no-remote-cache` behavior for consumer `.bazelrc`
+  files; read-only by default and never executor-selecting.
+- **`AGENTS.md`** — agent/operator guide documenting the shared-surface golden
+  rules and the cache-first Bazel enrollment doctrine (closes the missing-AGENTS
+  AX gap).
+- **`just ci-cached-endpoint-free-check` + `just cache-backed-optin-contract-check`**
+  — repo-local guards asserting `bazelrc/ci-cached.bazelrc` stays endpoint-free
+  and the `cache_backed` lane stays default-off and cache-first (no executor
+  wiring in the workflow).
+
 ## [2.2.1] — 2026-06-01
 
 ### Fixed
