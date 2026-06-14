@@ -5,7 +5,7 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
-## [2.3.0] — 2026-06-14
+## [2.4.0] — 2026-06-14
 
 ### Added
 
@@ -23,7 +23,12 @@ Versioning: [SemVer 2.0](https://semver.org/).
   first semantic workflow-yaml lint in the repo and is wired into `just check`
   (`lint-runs-on-selftest` + `lint-runs-on-check`). First guardrail of the
   GloriousFlywheel enrollment paradigm (P0 #2 — kills the `runs-on: <repo>-nix`
-  mistake at author time).
+  mistake at author time). (Landed just after the v2.3.0 cut.)
+
+## [2.3.0] — 2026-06-14
+
+### Added
+
 - **`js-bazel-package.yml` opt-in `cache_backed` shared-cache lane (TIN-2110)** —
   a new boolean input (default `false`). When `true`, Bazel target validation
   runs a fail-closed cache-attachment contract step and then
