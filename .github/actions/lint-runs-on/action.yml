@@ -1,0 +1,59 @@
+name: lint-runs-on
+description: |
+  Guard every workflow `runs-on` against the shared ARC capability-label
+  taxonomy (CI-SCHEMA.md section 6). FAILS repo-shaped / project-identity
+  self-hosted labels (e.g. dollhouse-farm-nix, jesssullivan-nix-heavy), bare
+  `self-hosted`, and drift baked into a fromJSON() fallback. PASSES shared
+  tinyland-* capability labels, GitHub-hosted labels, and runtime-dynamic
+  indirection (which WARNs). Run after actions/checkout. Ruby-only: no Python,
+  PyYAML, or nix required, so it runs on hosted and self-hosted runners alike.
+
+inputs:
+  root:
+    description: Repo root to scan (the consumer checkout).
+    required: false
+    default: "."
+  workflows_glob:
+    description: Workflow glob relative to root.
+    required: false
+    default: ".github/workflows/*.yml"
+  strict:
+    description: Treat WARN (runs-on resolvable only at runtime) as a failure.
+    required: false
+    default: "false"
+  self_hosted_array_mixed:
+    description: fail|warn for a non-canonical self-hosted array that mixes a shared label with bare self-hosted / host pins.
+    required: false
+    default: "fail"
+
+outputs:
+  violations_count:
+    description: Number of FAIL findings (0 if clean). Surface into GITHUB_STEP_SUMMARY downstream.
+    value: ${{ steps.lint.outputs.violations_count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Lint workflow runs-on labels
+      id: lint
+      shell: bash
+      run: |
+        set -euo pipefail
+        script="${{ github.action_path }}/../../../scripts/lint-runs-on.rb"
+        if [[ ! -f "$script" ]]; then
+          echo "::error::ci-templates lint-runs-on.rb missing at $script"
+          exit 1
+        fi
+        if ! command -v ruby >/dev/null 2>&1; then
+          echo "::error::ruby (stdlib YAML) is required for lint-runs-on; present on all GitHub-hosted and tinyland-* runners"
+          exit 1
+        fi
+        args=(
+          --root "${{ inputs.root }}"
+          --workflows-glob "${{ inputs.workflows_glob }}"
+          --self-hosted-array-mixed "${{ inputs.self_hosted_array_mixed }}"
+        )
+        if [[ "${{ inputs.strict }}" == "true" ]]; then
+          args+=(--strict)
+        fi
+        ruby "$script" "${args[@]}"

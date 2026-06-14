@@ -9,12 +9,21 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check secrets-scan-dir
+check: yaml-parse json-parse repo-manifest-validate internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
 yaml-parse:
     cd {{ root }} && ruby -e 'require "yaml"; Dir[".github/**/*.{yml,yaml}"].sort.each { |f| YAML.load_file(f); puts "yaml ok: #{f}" }'
+
+# Self-test the runs-on guard against its taxonomy oracle (parity with
+# GloriousFlywheel validate-arc-runner-taxonomy.py::label_errors()).
+lint-runs-on-selftest:
+    cd {{ root }} && ruby scripts/lint-runs-on.rb --self-test
+
+# Guard ci-templates' OWN workflow runs-on labels (dogfood the action).
+lint-runs-on-check:
+    cd {{ root }} && ruby scripts/lint-runs-on.rb --root {{ root }}
 
 # Parse all vendored JSON schemas.
 json-parse:

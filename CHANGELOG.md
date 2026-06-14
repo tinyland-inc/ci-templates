@@ -7,6 +7,21 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Added
 
+- **`lint-runs-on` composite action + `scripts/lint-runs-on.rb` runs-on guard** —
+  a portable, Ruby-only (zero Python/PyYAML/nix) author-time guard that fails any
+  workflow `runs-on` using a repo-shaped / project-identity self-hosted label
+  (e.g. `jesssullivan-nix-heavy`, `chapel-nix`), bare `self-hosted`, or drift
+  baked into a `fromJSON()` fallback — while passing shared `tinyland-*`
+  capability labels, GitHub-hosted labels, and runtime-dynamic indirection
+  (which WARNs, never FAILs). Adopt with one line:
+  `- uses: tinyland-inc/ci-templates/.github/actions/lint-runs-on@v2` (after
+  `actions/checkout`). The label taxonomy (`scripts/runner_label_taxonomy.rb`)
+  is a faithful, self-test-pinned port of GloriousFlywheel
+  `scripts/validate-arc-runner-taxonomy.py::label_errors()`; the guard is the
+  first semantic workflow-yaml lint in the repo and is wired into `just check`
+  (`lint-runs-on-selftest` + `lint-runs-on-check`). First guardrail of the
+  GloriousFlywheel enrollment paradigm (P0 #2 — kills the `runs-on: <repo>-nix`
+  mistake at author time).
 - **`js-bazel-package.yml` opt-in `cache_backed` shared-cache lane (TIN-2110)** —
   a new boolean input (default `false`). When `true`, Bazel target validation
   runs a fail-closed cache-attachment contract step and then
