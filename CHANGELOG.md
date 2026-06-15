@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.6.0] — 2026-06-14
+
 ### Added
 
 - **Opt-in shared-cache enrollment gate for `spoke-ci.yml` (TIN-2119)** — the
