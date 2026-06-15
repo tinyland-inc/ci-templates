@@ -188,6 +188,16 @@ in [`AGENTS.md`](AGENTS.md) to enroll. See
 [`docs/js-bazel-package.md`](docs/js-bazel-package.md) (`cache_backed`,
 `substrate_mode`) for the consumer-facing details.
 
+`spoke-ci.yml` exposes the **same opt-in, default-off** enrollment (TIN-2119)
+via `cache_backed` + `substrate_mode` (and `cache_backed_targets` for the
+SvelteKit flywheel-eligible CAS surface). When set, the `flywheel-build` and
+`bazel-graph` jobs switch from `setup-nix@v2` (install-only) to `nix-setup@v2`
+(which exports `BAZEL_REMOTE_CACHE` from cluster DNS — the spoke wiring fix),
+run the identical fail-closed contract, and execute a cache-backed Bazel build
+of the flywheel-eligible targets reading the shared cache. The default path is
+byte-identical for the ~34 non-opted spoke consumers. An opted spoke must also
+set `flywheel_config: flywheel` so `flywheel-bazel` forwards the remote cache.
+
 ## Contributing
 
 See [`RELEASING.md`](./RELEASING.md) for the release flow and SemVer
