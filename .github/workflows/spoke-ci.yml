@@ -12,6 +12,42 @@ on:
         type: string
         default: flywheel-executor
         description: One of flywheel | flywheel-executor | local. Per-lane override via lanes.json.
+      cache_backed:
+        description: >-
+          Opt-in (default false) shared-cache-backed Bazel enrollment for the
+          flywheel-build + bazel-graph jobs. When true, those jobs additionally
+          (a) switch their Nix setup to nix-setup@v2 so BAZEL_REMOTE_CACHE is
+          exported from cluster DNS, (b) validate tinyland.repo.json and assert
+          shared-cache attachment via scripts/cache-attachment-contract.sh
+          (fail-closed: contract --strict), and (c) run a cache-backed Bazel
+          build of the flywheel-eligible targets with
+          `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
+          --remote_upload_local_results=false` reading the shared Bazel cache.
+          CACHE-FIRST only: no remote executor is wired. When false/unset the
+          existing default path runs byte-identically (zero behavior change for
+          non-opted spoke consumers). An opted spoke must also set
+          flywheel_config: flywheel (not local) so flywheel-bazel forwards the
+          remote cache.
+        type: boolean
+        default: false
+      substrate_mode:
+        description: >-
+          Optional operator override for the cache-backed lane's expected Bazel
+          substrate mode (compatibility-local-only | shared-cache-backed |
+          executor-backed). Used ONLY when cache_backed=true AND the spoke's
+          tinyland.repo.json does not declare enrollment.substrateMode (which is
+          the authoritative source, TIN-2109). When empty and the manifest is
+          silent, the lane defaults to shared-cache-backed. Has no effect on the
+          default (non-cache-backed) path.
+        type: string
+        default: ""
+      cache_backed_targets:
+        description: >-
+          Space-separated Bazel targets exercised by the cache-backed lane's
+          real-attach build (cache_backed=true only). Defaults to the SvelteKit
+          flywheel-eligible CAS surface. Ignored on the default path.
+        type: string
+        default: "//:node_modules //:sveltekit_types //:svelte_check_test"
       playwright_enabled:
         type: boolean
         default: false
@@ -108,10 +144,72 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+
+      # Default path (cache_backed=false): byte-identical setup for the ~34
+      # non-opted spoke consumers. setup-nix installs Nix only; it does NOT
+      # export BAZEL_REMOTE_CACHE.
+      - if: ${{ !inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+
+      # Cache-backed path (cache_backed=true): nix-setup probes cluster DNS and
+      # exports BAZEL_REMOTE_CACHE / ATTIC_SERVER so the contract + cache-backed
+      # build below can attach the shared Bazel cache. This is the spoke wiring
+      # fix: spoke-ci's default setup-nix does not export the cache endpoint.
+      - if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
 
       - name: Setup workspace
         run: nix develop --command just setup
+
+      # --- Opt-in (cache_backed=true) enrollment gate. NEW conditional steps; ---
+      # --- the default flywheel-bazel + just build steps below are untouched.  ---
+
+      # (a) Validate the spoke's tinyland.repo.json against the vendored schema
+      # and FAIL CLOSED on an invalid manifest (TIN-2109). Network-free.
+      - name: Validate repo manifest (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2
+        with:
+          required_roles: static-spoke,static-spoke-scaffold
+
+      # (b) Assert shared-cache attachment. Manifest-driven expected mode
+      # (TIN-2109): authority order enrollment.substrateMode > substrate_mode
+      # input > shared-cache-backed default. Runner labels are fed so the
+      # contract rejects hosted / repo-shaped fallback (no silent degrade).
+      - name: Assert shared-cache attachment (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        env:
+          CI_TEMPLATES_REF: v2.5.1
+          SUBSTRATE_MODE_INPUT: ${{ inputs.substrate_mode }}
+          RUNNER_LABELS: ${{ join(runner.labels, ',') }}
+        run: |
+          set -euo pipefail
+          # The contract script ships in this ci-templates repo; prefer the
+          # spoke's vendored copy, else fetch the immutable pinned copy
+          # (CI_TEMPLATES_REF is the releasing tag, not floating v2).
+          script="$RUNNER_TEMP/cache-attachment-contract.sh"
+          if [ -f "scripts/cache-attachment-contract.sh" ]; then
+            script="scripts/cache-attachment-contract.sh"
+          else
+            curl -fsSL \
+              "https://raw.githubusercontent.com/tinyland-inc/ci-templates/${CI_TEMPLATES_REF}/scripts/cache-attachment-contract.sh" \
+              -o "$script"
+            chmod +x "$script"
+          fi
+
+          declared_mode=""
+          if [ -f tinyland.repo.json ]; then
+            declared_mode="$(jq -r '.enrollment.substrateMode // empty' tinyland.repo.json)"
+          fi
+          if [ -z "$declared_mode" ]; then
+            declared_mode="$SUBSTRATE_MODE_INPUT"
+          fi
+          export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"
+          echo "::notice::cache-backed lane expected mode (manifest-driven): $GF_BAZEL_SUBSTRATE_MODE"
+
+          export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"
+          bash "$script" --strict
 
       - name: Build (flywheel)
         uses: tinyland-inc/ci-templates/.github/actions/flywheel-bazel@v2
@@ -120,6 +218,31 @@ jobs:
           command: build
           config: ${{ inputs.flywheel_config }}
           target_class: sveltekit-app-build
+
+      # (c) Cache-backed real-attach build. Fails closed if BAZEL_REMOTE_CACHE is
+      # unset. Runs the flywheel-eligible CAS targets through --config=ci-cached
+      # with the validated remote cache, read-only (no upload). The spoke's
+      # `build:ci --disk_cache=` makes a green build prove the REMOTE cache, not
+      # an incidental local-disk hit. The remote-cache hit/transfer lines in
+      # this step's log are the real-attach proof.
+      - name: Validate Bazel targets (cache-backed)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        env:
+          BAZEL_TARGETS: ${{ inputs.cache_backed_targets }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BAZEL_REMOTE_CACHE:-}" ]; then
+            echo "::error::cache_backed=true but BAZEL_REMOTE_CACHE is unset. nix-setup exports it from cluster DNS on self-hosted runners; the cache-backed lane fails closed rather than silently building local-only."
+            exit 1
+          fi
+          # CACHE-FIRST: ci-cached config + injected remote cache, read-only
+          # (no upload); no remote executor is wired.
+          nix develop --command bazelisk build ${BAZEL_TARGETS} \
+            --config=ci-cached \
+            --remote_cache="${BAZEL_REMOTE_CACHE}" \
+            --remote_upload_local_results=false \
+            --verbose_failures
 
       - name: Static site build
         run: nix develop --command just build
@@ -154,9 +277,65 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+
+      # Default path (cache_backed=false): byte-identical for non-opted spokes.
+      - if: ${{ !inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      # Cache-backed path: nix-setup exports BAZEL_REMOTE_CACHE from cluster DNS.
+      - if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
+
       - run: nix develop --command bazelisk mod graph
-      - run: nix develop --command bazelisk build //:node_modules
+
+      # Default path: plain local build (untouched, byte-identical).
+      - if: ${{ !inputs.cache_backed }}
+        run: nix develop --command bazelisk build //:node_modules
+
+      # Cache-backed path: same target read through the validated shared cache.
+      # tinyland-nix-heavy is a cluster capability class accepted by the contract.
+      - name: Assert shared-cache attachment (bazel-graph)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        env:
+          CI_TEMPLATES_REF: v2.5.1
+          SUBSTRATE_MODE_INPUT: ${{ inputs.substrate_mode }}
+          RUNNER_LABELS: ${{ join(runner.labels, ',') }}
+        run: |
+          set -euo pipefail
+          script="$RUNNER_TEMP/cache-attachment-contract.sh"
+          if [ -f "scripts/cache-attachment-contract.sh" ]; then
+            script="scripts/cache-attachment-contract.sh"
+          else
+            curl -fsSL \
+              "https://raw.githubusercontent.com/tinyland-inc/ci-templates/${CI_TEMPLATES_REF}/scripts/cache-attachment-contract.sh" \
+              -o "$script"
+            chmod +x "$script"
+          fi
+          declared_mode=""
+          if [ -f tinyland.repo.json ]; then
+            declared_mode="$(jq -r '.enrollment.substrateMode // empty' tinyland.repo.json)"
+          fi
+          if [ -z "$declared_mode" ]; then
+            declared_mode="$SUBSTRATE_MODE_INPUT"
+          fi
+          export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"
+          export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"
+          bash "$script" --strict
+
+      - name: Build //:node_modules (cache-backed)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${BAZEL_REMOTE_CACHE:-}" ]; then
+            echo "::error::cache_backed=true but BAZEL_REMOTE_CACHE is unset; failing closed rather than building local-only."
+            exit 1
+          fi
+          nix develop --command bazelisk build //:node_modules \
+            --config=ci-cached \
+            --remote_cache="${BAZEL_REMOTE_CACHE}" \
+            --remote_upload_local_results=false \
+            --verbose_failures
 
   playwright:
     if: ${{ inputs.playwright_enabled }}

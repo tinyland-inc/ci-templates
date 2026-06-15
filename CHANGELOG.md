@@ -5,6 +5,33 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in shared-cache enrollment gate for `spoke-ci.yml` (TIN-2119)** — the
+  SvelteKit spoke wrapper gains two operator inputs, `cache_backed` (boolean,
+  default `false`) and `substrate_mode` (string, default `""`), plus a
+  `cache_backed_targets` input (default the SvelteKit flywheel-eligible CAS
+  surface `//:node_modules //:sveltekit_types //:svelte_check_test`). When
+  `cache_backed=true`, the `flywheel-build` and `bazel-graph` jobs additionally:
+  (a) switch their Nix setup from `setup-nix@v2` (install-only) to
+  `nix-setup@v2`, which probes cluster DNS and exports `BAZEL_REMOTE_CACHE` /
+  `ATTIC_SERVER` — the spoke wiring fix, since `setup-nix` does not export the
+  cache endpoint; (b) validate `tinyland.repo.json` via `repo-manifest-validate@v2`
+  and assert shared-cache attachment with the reused
+  `scripts/cache-attachment-contract.sh --strict` (manifest-driven expected mode
+  `enrollment.substrateMode` > `substrate_mode` input > `shared-cache-backed`
+  default; fail-closed on missing/invalid endpoint, non-grpc/http scheme, and
+  hosted / repo-shaped runner fallback); and (c) run a cache-backed Bazel build
+  of the flywheel-eligible targets with
+  `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
+  --remote_upload_local_results=false`, reading the shared Bazel cache.
+  CACHE-FIRST only (TIN-1997 Option D): no remote executor is wired. The default
+  path (`cache_backed=false`) is byte-identical for the ~34 non-opted spoke
+  consumers — all new steps are conditional and the existing setup/build steps are
+  unchanged. Reuses the v2.5.1 contract, manifest schema, validator, and
+  hosted-runner rejection verbatim (no fork). An opted spoke must also set
+  `flywheel_config: flywheel` so `flywheel-bazel` forwards the remote cache.
+
 ## [2.5.1] — 2026-06-14
 
 ### Fixed
