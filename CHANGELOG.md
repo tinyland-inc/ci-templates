@@ -5,6 +5,16 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Flywheel profile-state propagation for cache-backed enrollment (TIN-2130)** —
+  cache-backed `js-bazel-package.yml` and `spoke-ci.yml` lanes now export
+  `GF_FLYWHEEL_PROFILE_STATE` from the manifest-driven substrate mode, and the
+  fail-closed cache attachment contract rejects contradictory profile states.
+  This gives consumer `flywheel-doctor` / `flywheel-verify` tooling the same
+  machine-readable attachment state as CI without minting tokens or changing the
+  cache-first/no-executor boundary.
+
 ## [2.6.0] — 2026-06-14
 
 ### Added

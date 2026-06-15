@@ -46,15 +46,21 @@ CACHE="grpcs://gf-reapi-cell.internal:443"
 echo "== happy paths (exit 0) =="
 # Current kit/bridge shape: cache attaches, declared shared-cache-backed, cluster runner.
 run_case 0 "shared-cache attaches on cluster runner, declared shared-cache-backed" \
-  BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed GF_BAZEL_RUNNER_LABELS=tinyland-nix
+  BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed \
+  GF_FLYWHEEL_PROFILE_STATE=shared-cache-backed GF_BAZEL_RUNNER_LABELS=tinyland-nix
 # Back-compat: no runner labels supplied (pre-TIN-2109 callers).
 run_case 0 "shared-cache attaches, no runner labels supplied (back-compat)" \
   BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed
 # Full executor contract present => executor-backed classification passes.
 run_case 0 "executor-backed full contract present" \
   BAZEL_REMOTE_EXECUTOR="${CACHE}" BAZEL_REMOTE_CACHE="${CACHE}" \
-  GF_BAZEL_RUNNER_LABELS=tinyland-nix GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST=sha256:deadbeef \
+  GF_FLYWHEEL_PROFILE_STATE=executor-backed GF_BAZEL_RUNNER_LABELS=tinyland-nix \
+  GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST=sha256:deadbeef \
   GF_BAZEL_SUBSTRATE_MODE=executor-backed
+run_case 0 "local-proof allows localhost only with explicit proof marker" \
+  BAZEL_REMOTE_CACHE='grpc://localhost:9092' GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed \
+  GF_FLYWHEEL_PROFILE_STATE=local-proof GF_BAZEL_LOCAL_PROOF=port-forward \
+  GF_BAZEL_ALLOW_LOCALHOST_PROOF=true
 
 echo "== declared-vs-actual mismatch (exit 1) =="
 run_case 1 "declared shared-cache-backed but no cache attaches" \
@@ -88,6 +94,21 @@ run_case 1 "localhost cache without GF_BAZEL_ALLOW_LOCALHOST_PROOF" \
   BAZEL_REMOTE_CACHE='grpc://localhost:9092' GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed
 run_case 1 "strict with empty BAZEL_REMOTE_CACHE (compat declared compat)" \
   GF_BAZEL_SUBSTRATE_MODE=compatibility-local-only
+
+echo "== profile-state mismatch (exit 1) =="
+run_case 1 "profile shared-cache-backed but executor endpoint set" \
+  BAZEL_REMOTE_CACHE="${CACHE}" BAZEL_REMOTE_EXECUTOR="${CACHE}" \
+  GF_BAZEL_SUBSTRATE_MODE=executor-backed GF_FLYWHEEL_PROFILE_STATE=shared-cache-backed \
+  GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST=sha256:deadbeef GF_BAZEL_RUNNER_LABELS=tinyland-nix
+run_case 1 "profile unattached but cache endpoint set" \
+  BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed \
+  GF_FLYWHEEL_PROFILE_STATE=unattached
+run_case 1 "local-proof missing port-forward marker" \
+  BAZEL_REMOTE_CACHE='grpc://localhost:9092' GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed \
+  GF_FLYWHEEL_PROFILE_STATE=local-proof GF_BAZEL_ALLOW_LOCALHOST_PROOF=true
+run_case 1 "unknown profile state" \
+  BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed \
+  GF_FLYWHEEL_PROFILE_STATE=maybe
 
 echo
 echo "cache-attachment-contract self-test: ${pass} passed, ${fail} failed"

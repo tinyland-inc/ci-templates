@@ -27,6 +27,7 @@
 #   - executor set without a cache endpoint
 #   - executor != cache unless GF_BAZEL_ALLOW_SEPARATE_EXECUTOR_CACHE=true
 #   - declared GF_BAZEL_SUBSTRATE_MODE disagreeing with endpoint presence
+#   - declared GF_FLYWHEEL_PROFILE_STATE contradicting the selected substrate
 #   - --strict with an empty BAZEL_REMOTE_CACHE
 #   - (TIN-2109) --strict on a hosted / repo-shaped runner: a missing substrate is a
 #     deterministic failure, never a silent degrade to a GitHub-hosted build. Gated by
@@ -55,6 +56,10 @@ Environment:
   BAZEL_REMOTE_EXECUTOR     Optional remote executor endpoint. Classified as
                             executor-backed but NOT selected by the cache-first lane.
   GF_BAZEL_SUBSTRATE_MODE   Optional declared mode; must agree with endpoint presence.
+  GF_FLYWHEEL_PROFILE_STATE Optional fleet enrollment state. Valid values:
+                            unattached, shared-cache-backed, executor-backed,
+                            local-proof. When set, it must agree with the
+                            selected cache/executor environment.
   GF_BAZEL_ALLOW_LOCALHOST_PROOF
                             Set true to permit a localhost endpoint (explicit proof only).
   GF_BAZEL_ALLOW_SEPARATE_EXECUTOR_CACHE
@@ -95,6 +100,7 @@ done
 remote_cache="${BAZEL_REMOTE_CACHE:-}"
 remote_executor="${BAZEL_REMOTE_EXECUTOR:-}"
 mode="${GF_BAZEL_SUBSTRATE_MODE:-}"
+profile_state="${GF_FLYWHEEL_PROFILE_STATE:-}"
 
 if [[ -n ${remote_executor} ]]; then
   expected_mode="executor-backed"
@@ -221,6 +227,7 @@ Bazel mode:         ${effective_mode}
 Bazel remote cache: ${remote_cache:-unset}
 Bazel executor:     ${remote_executor:-unset}
 Expected mode:      ${expected_mode}
+Flywheel profile:   ${profile_state:-unset}
 Runner class:       ${runner_class:-${runner_labels_raw:+unclassified (${runner_labels_raw})}}
 Strict:             ${STRICT}
 
@@ -239,6 +246,51 @@ if [[ ${effective_mode} != "${expected_mode}" ]]; then
   echo "ERROR: GF_BAZEL_SUBSTRATE_MODE=${effective_mode} disagrees with endpoint presence (expected ${expected_mode})."
   exit 1
 fi
+
+case "${profile_state}" in
+"") ;;
+unattached)
+  if [[ -n ${remote_cache} || -n ${remote_executor} || ${effective_mode} != "compatibility-local-only" ]]; then
+    echo
+    echo "ERROR: GF_FLYWHEEL_PROFILE_STATE=unattached must not set cache/executor endpoints or a cache-backed mode."
+    exit 1
+  fi
+  ;;
+shared-cache-backed)
+  if [[ ${effective_mode} != "shared-cache-backed" || -z ${remote_cache} || -n ${remote_executor} ]]; then
+    echo
+    echo "ERROR: GF_FLYWHEEL_PROFILE_STATE=shared-cache-backed requires GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed, BAZEL_REMOTE_CACHE, and no BAZEL_REMOTE_EXECUTOR."
+    exit 1
+  fi
+  ;;
+executor-backed)
+  if [[ ${effective_mode} != "executor-backed" || -z ${remote_cache} || -z ${remote_executor} ]]; then
+    echo
+    echo "ERROR: GF_FLYWHEEL_PROFILE_STATE=executor-backed requires GF_BAZEL_SUBSTRATE_MODE=executor-backed plus cache and executor endpoints."
+    exit 1
+  fi
+  ;;
+local-proof)
+  if [[ ${GF_BAZEL_LOCAL_PROOF:-} != "port-forward" ]]; then
+    echo
+    echo "ERROR: GF_FLYWHEEL_PROFILE_STATE=local-proof requires GF_BAZEL_LOCAL_PROOF=port-forward."
+    exit 1
+  fi
+  case "${effective_mode}" in
+  shared-cache-backed | executor-backed) ;;
+  *)
+    echo
+    echo "ERROR: GF_FLYWHEEL_PROFILE_STATE=local-proof requires shared-cache-backed or executor-backed substrate mode."
+    exit 1
+    ;;
+  esac
+  ;;
+*)
+  echo
+  echo "ERROR: GF_FLYWHEEL_PROFILE_STATE=${profile_state} is not recognized. Expected unattached, shared-cache-backed, executor-backed, or local-proof."
+  exit 1
+  ;;
+esac
 
 if [[ ${literal_cache} == "true" ]]; then
   echo
