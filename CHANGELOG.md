@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.7.0] — 2026-06-23
+
 ### Added
 
 - **Flywheel profile-state propagation for cache-backed enrollment (TIN-2130)** —
@@ -14,6 +16,15 @@ Versioning: [SemVer 2.0](https://semver.org/).
   This gives consumer `flywheel-doctor` / `flywheel-verify` tooling the same
   machine-readable attachment state as CI without minting tokens or changing the
   cache-first/no-executor boundary.
+
+### Fixed
+
+- **Flywheel advertised-path executor config for fresh-repo proofs
+  (TIN-2162)** — the `flywheel-executor` template now forces remote executor
+  mode without exposing a consumer-visible platform repository, and release
+  validation asserts the template stays executor-backed. This keeps
+  enroll/doctor/verify consumers on the advertised GloriousFlywheel path instead
+  of requiring repo-local Bazel platform wiring.
 
 ## [2.6.0] — 2026-06-14
 
