@@ -139,6 +139,9 @@ TIN-2110 cache-first enrollment surface (TIN-1997 Option D, proven by GF#889).
     from `enrollment.substrateMode` in `tinyland.repo.json`. If the manifest
     declares `shared-cache-backed` but no cache actually attaches, the lane
     **fails closed** (declared-vs-actual mismatch) instead of silently degrading
+  - the workflow exports `GF_FLYWHEEL_PROFILE_STATE` from the resolved substrate
+    mode so consumer `flywheel-doctor` / `flywheel-verify` commands see the
+    same machine-readable attachment state as CI
   - the contract **rejects hosted / repo-shaped runner fallback**: the runner
     labels are inspected and a GitHub-hosted (`ubuntu-*`), bare `self-hosted`, or
     repo-shaped (`<name>-nix*`) runner is a deterministic failure, never a silent

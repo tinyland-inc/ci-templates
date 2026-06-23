@@ -730,7 +730,10 @@ jobs:
             declared_mode="$SUBSTRATE_MODE_INPUT"
           fi
           export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"
+          export GF_FLYWHEEL_PROFILE_STATE="$GF_BAZEL_SUBSTRATE_MODE"
+          echo "GF_FLYWHEEL_PROFILE_STATE=$GF_FLYWHEEL_PROFILE_STATE" >> "$GITHUB_ENV"
           echo "::notice::cache-backed lane expected mode (manifest-driven): $GF_BAZEL_SUBSTRATE_MODE"
+          echo "::notice::Flywheel profile state: $GF_FLYWHEEL_PROFILE_STATE"
 
           # Feed runner labels so the contract rejects hosted / repo-shaped
           # runner fallback. A missing substrate is a deterministic failure,

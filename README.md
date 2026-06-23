@@ -183,8 +183,11 @@ The cache-backed lane is **hardened for deterministic, fail-closed enrollment**
 reads `enrollment.substrateMode` as the authoritative expected mode (a
 declared-vs-actual mismatch fails closed), rejects hosted / repo-shaped runner
 fallback (no silent degrade to a GitHub-hosted build), and pins the contract-script
-fetch fallback to an immutable releasing tag. Copy the single **lace-up** pattern
-in [`AGENTS.md`](AGENTS.md) to enroll. See
+fetch fallback to an immutable releasing tag. It also exports
+`GF_FLYWHEEL_PROFILE_STATE` from the resolved substrate mode so consumer
+`flywheel-doctor` / `flywheel-verify` tooling sees the same machine-readable
+attachment state as CI. Copy the single **lace-up** pattern in
+[`AGENTS.md`](AGENTS.md) to enroll. See
 [`docs/js-bazel-package.md`](docs/js-bazel-package.md) (`cache_backed`,
 `substrate_mode`) for the consumer-facing details.
 
@@ -193,8 +196,9 @@ via `cache_backed` + `substrate_mode` (and `cache_backed_targets` for the
 SvelteKit flywheel-eligible CAS surface). When set, the `flywheel-build` and
 `bazel-graph` jobs switch from `setup-nix@v2` (install-only) to `nix-setup@v2`
 (which exports `BAZEL_REMOTE_CACHE` from cluster DNS — the spoke wiring fix),
-run the identical fail-closed contract, and execute a cache-backed Bazel build
-of the flywheel-eligible targets reading the shared cache. The default path is
+export `GF_FLYWHEEL_PROFILE_STATE` from the manifest-driven substrate mode, run
+the identical fail-closed contract, and execute a cache-backed Bazel build of
+the flywheel-eligible targets reading the shared cache. The default path is
 byte-identical for the ~34 non-opted spoke consumers. An opted spoke must also
 set `flywheel_config: flywheel` so `flywheel-bazel` forwards the remote cache.
 

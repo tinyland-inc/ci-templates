@@ -234,6 +234,7 @@ def check_cache_backed_optin_contract() -> int:
         # TIN-2109: expected mode is manifest-driven (enrollment.substrateMode)
         ".enrollment.substrateMode",
         "GF_BAZEL_SUBSTRATE_MODE=",
+        "GF_FLYWHEEL_PROFILE_STATE=",
         # TIN-2109: runner labels fed so the contract rejects hosted/repo-label fallback
         "GF_BAZEL_RUNNER_LABELS=",
         "join(runner.labels, ',')",
@@ -289,6 +290,7 @@ def check_cache_backed_optin_contract() -> int:
         "GF_BAZEL_ALLOW_HOSTED_RUNNER",
         "classify_runner",
         # executor-backed contract: full required set, defined + enforced
+        "GF_FLYWHEEL_PROFILE_STATE",
         "GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST",
         'executor-backed mode requires BAZEL_REMOTE_CACHE',
     ]
