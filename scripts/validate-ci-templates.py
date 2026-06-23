@@ -187,6 +187,7 @@ def check_cache_backed_optin_contract() -> int:
     workflow_path = ROOT / ".github/workflows/js-bazel-package.yml"
     docs_path = ROOT / "docs/js-bazel-package.md"
     bazelrc_path = ROOT / "bazelrc/ci-cached.bazelrc"
+    flywheel_bazelrc_path = ROOT / "bazelrc/flywheel.bazelrc"
     contract_path = ROOT / "scripts/cache-attachment-contract.sh"
     workflow = workflow_path.read_text(encoding="utf-8")
     docs = docs_path.read_text(encoding="utf-8")
@@ -198,6 +199,9 @@ def check_cache_backed_optin_contract() -> int:
         ok = False
     if not bazelrc_path.exists():
         print(f"missing {bazelrc_path.relative_to(ROOT)}", file=sys.stderr)
+        ok = False
+    if not flywheel_bazelrc_path.exists():
+        print(f"missing {flywheel_bazelrc_path.relative_to(ROOT)}", file=sys.stderr)
         ok = False
 
     # Input is declared and default-off.
@@ -314,6 +318,22 @@ def check_cache_backed_optin_contract() -> int:
     if "cache-backed" not in docs.lower() and "cache_backed" not in docs:
         print(
             f"{docs_path.relative_to(ROOT)}: missing cache-backed lane documentation",
+            file=sys.stderr,
+        )
+        ok = False
+
+    # Fresh consumers must be able to attach without declaring a
+    # @gloriousflywheel Bzlmod repo. The wrapper/action passes platform identity
+    # as a remote default exec property.
+    flywheel_bazelrc = (
+        flywheel_bazelrc_path.read_text(encoding="utf-8")
+        if flywheel_bazelrc_path.exists()
+        else ""
+    )
+    if "@gloriousflywheel//platforms" in flywheel_bazelrc:
+        print(
+            f"{flywheel_bazelrc_path.relative_to(ROOT)}: fresh spokes must not require "
+            "@gloriousflywheel//platforms; use gf.platform remote exec properties",
             file=sys.stderr,
         )
         ok = False

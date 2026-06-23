@@ -370,7 +370,7 @@ if [[ ${effective_mode} == "executor-backed" || -n ${remote_executor} ]]; then
   fi
   if [[ -n ${runner_labels_raw} && -z ${runner_class} && ${allow_hosted_runner} != "true" ]]; then
     echo
-    echo "ERROR: executor-backed mode requires a cluster runner class for platform identity (@gloriousflywheel//platforms:linux-x86_64); got ${runner_reject_reason:-no capability-class label}."
+    echo "ERROR: executor-backed mode requires a cluster runner class for GloriousFlywheel platform identity (gf.platform=gloriousflywheel-rbe-linux-x86_64); got ${runner_reject_reason:-no capability-class label}."
     exit 1
   fi
   if [[ -z ${GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST:-} ]]; then
