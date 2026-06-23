@@ -24,6 +24,8 @@ common:flywheel --remote_timeout=60
 # when executor mode is selected and BAZEL_REMOTE_EXECUTOR is present.
 common:flywheel-executor --config=flywheel
 common:flywheel-executor --remote_download_minimal
+common:flywheel-executor --remote_local_fallback=false
+common:flywheel-executor --spawn_strategy=remote
 common:flywheel-executor --jobs=200
 
 # Worker platform identity is supplied by the repo-managed wrapper/action via
