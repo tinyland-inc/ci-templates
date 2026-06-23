@@ -5,6 +5,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release workflow floating-major tag movement** — release automation now
+  captures the current remote `vMAJOR` tag object before retagging and pushes the
+  floating major tag with an explicit lease. This prevents the partial-release
+  failure seen during `v2.7.0`, where the immutable tag was created but moving
+  `v2` failed with stale tag state.
+
 ## [2.7.0] — 2026-06-23
 
 ### Added
