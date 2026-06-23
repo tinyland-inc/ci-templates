@@ -120,12 +120,20 @@ jobs:
           set -euo pipefail
           v="${{ steps.detect.outputs.version }}"
           major="${{ steps.detect.outputs.major }}"
+          current_major_ref="$(
+            git ls-remote --tags origin "refs/tags/$major" | awk '{print $1}'
+          )"
 
           git tag -a "$v" -m "$v"
           git tag -f -a "$major" -m "track $v"
 
           git push origin "$v"
-          git push origin "$major" --force-with-lease
+          if [ -n "$current_major_ref" ]; then
+            git push origin "refs/tags/$major" \
+              --force-with-lease="refs/tags/$major:$current_major_ref"
+          else
+            git push origin "refs/tags/$major"
+          fi
 
       - name: Create GitHub Release
         if: steps.detect.outputs.is_release == 'true'
