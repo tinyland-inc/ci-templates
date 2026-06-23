@@ -337,6 +337,17 @@ def check_cache_backed_optin_contract() -> int:
             file=sys.stderr,
         )
         ok = False
+    for required in (
+        "common:flywheel-executor --remote_local_fallback=false",
+        "common:flywheel-executor --spawn_strategy=remote",
+    ):
+        if required not in flywheel_bazelrc:
+            print(
+                f"{flywheel_bazelrc_path.relative_to(ROOT)}: missing executor-backed "
+                f"force-remote setting: {required}",
+                file=sys.stderr,
+            )
+            ok = False
 
     if not ok:
         return 1
