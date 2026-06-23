@@ -26,9 +26,9 @@ common:flywheel-executor --config=flywheel
 common:flywheel-executor --remote_download_minimal
 common:flywheel-executor --jobs=200
 
-# Worker platform pin: only the GloriousFlywheel Linux x86_64 worker image class
-# is accepted for static spokes until a GloriousFlywheel PR proves another one.
-common:flywheel-executor --extra_execution_platforms=@gloriousflywheel//platforms:linux-x86_64
+# Worker platform identity is supplied by the repo-managed wrapper/action via
+# --remote_default_exec_properties=gf.platform=<class>. Fresh spokes must not
+# need a consumer-visible @gloriousflywheel Bzlmod repo just to attach.
 
 # Proved-class gating: consumers add tags = ["flywheel-eligible"] only for
 # target classes present in the GloriousFlywheel eligibility manifest.
