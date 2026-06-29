@@ -9,6 +9,11 @@
 	"properties": {
 		"$schema": { "type": "string" },
 		"schema_version": { "const": 1 },
+		"scaffold_tag": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The site.scaffold release tag a repo was spawned from (e.g. v0.1.0). Stamped by site.scaffold's scripts/rebrand.sh at spawn time and read by tinyland-scaffold-doctor Layer 2 for the version-drift diff. Optional and additive — existing manifests without it still validate."
+		},
 		"repo": {
 			"type": "object",
 			"required": ["name", "github", "description"],
