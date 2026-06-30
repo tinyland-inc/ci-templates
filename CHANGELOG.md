@@ -5,6 +5,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`scaffold_tag` in the repo-manifest schema (TIN-2229)** — optional, additive
+  top-level string property recording the `site.scaffold` release tag a repo was
+  spawned from. `site.scaffold`'s `rebrand.sh` stamps it; `tinyland-scaffold-doctor`
+  Layer 2 reads it for the version-drift diff. Backward-compatible — manifests without
+  it still validate. The floating `@v2` tag needs a new `v2.x` release to ship it.
+
 ### Fixed
 
 - **Release workflow floating-major tag movement** — release automation now
