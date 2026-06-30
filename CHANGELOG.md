@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.8.0] — 2026-06-30
+
 ### Added
 
 - **`scaffold_tag` in the repo-manifest schema (TIN-2229)** — optional, additive
