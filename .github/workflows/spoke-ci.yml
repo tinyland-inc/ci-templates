@@ -71,6 +71,22 @@ on:
           The string must be a JSON array. The receiver passes it
           through fromJSON when non-empty. See README + the v1.1
           release notes for an end-to-end caller example.
+      heavy_runner_class:
+        type: string
+        default: tinyland-nix-heavy
+        description: >-
+          Runner-class label for the bazel-graph job. Org tenancies that only
+          publish the base `tinyland-nix` capability label (the TIN-2299
+          org-scope overlay shape, e.g. Great-Falls-Tool-Bus) pass their served
+          label here instead of the tinyland-inc pool's heavy class. Default
+          preserves pre-v2.8.1 behavior byte-identically.
+      kvm_runner_class:
+        type: string
+        default: tinyland-nix-kvm
+        description: >-
+          Runner-class label for the playwright job (playwright_enabled=true
+          only). Same org-tenancy rationale as heavy_runner_class. Default
+          preserves pre-v2.8.1 behavior byte-identically.
       gitleaks_config:
         type: string
         default: .gitleaks.toml
@@ -276,7 +292,7 @@ jobs:
 
   bazel-graph:
     needs: [secrets-scan]
-    runs-on: tinyland-nix-heavy
+    runs-on: ${{ inputs.heavy_runner_class }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -350,7 +366,7 @@ jobs:
       fail-fast: false
       matrix:
         lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
-    runs-on: tinyland-nix-kvm
+    runs-on: ${{ inputs.kvm_runner_class }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
