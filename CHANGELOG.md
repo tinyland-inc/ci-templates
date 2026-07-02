@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.9.0] — 2026-07-02
+
 ### Added
 
 - **`heavy_runner_class` / `kvm_runner_class` spoke-ci inputs** — the `bazel-graph`
