@@ -5,6 +5,17 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`heavy_runner_class` / `kvm_runner_class` spoke-ci inputs** — the `bazel-graph`
+  and `playwright` jobs hard-coded `tinyland-nix-heavy` / `tinyland-nix-kvm`, labels
+  only the tinyland-inc pool publishes. Org-scope ARC tenancies riding the TIN-2299
+  sense-3 overlay serve a single capability label (e.g. Great-Falls-Tool-Bus serves
+  only `tinyland-nix`), so both jobs queued forever on any spoke in such an org
+  (observed live: greatfallstoolbus.org PR #2, run 28607136454). Two new optional
+  inputs default to the previous hard-coded values — pinned consumers are
+  byte-identical until they opt in.
+
 ## [2.8.0] — 2026-06-30
 
 ### Added
