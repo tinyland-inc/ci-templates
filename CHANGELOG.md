@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.10.0] — 2026-07-03
+
 ### Added
 
 - **`spoke-deploy-cloudflare-pages.yml` reusable workflow** — a sanctioned,
