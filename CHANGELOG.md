@@ -5,6 +5,26 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`spoke-deploy-cloudflare-pages.yml` reusable workflow** — a sanctioned,
+  opt-in Cloudflare Pages deploy lane that DRYs the hand-rolled CF-Pages
+  publisher copied into ≥3 spokes: GFTB `greatfallstoolbus.org`
+  (`.github/workflows/deploy-pages.yml`), `transscendsurvival.org`
+  (`cloudflare-pages-shadow.yml`), and the `site.scaffold`
+  `docs/deploy/cloudflare-pages.md` template block. It builds the adapter-static
+  `build/` via `nix develop --command just setup/check/build` (with
+  `setup_command` / `check_command` / `build_command` inputs defaulting to
+  `just setup` / `just check` / `just build`), resolves `project_name`
+  (input; defaults to the slugified repo name) and the deploy branch (from
+  `github.head_ref || github.ref_name`, lowercased/sanitized), credential-skips
+  with a `::notice::` when `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` are
+  absent, and never deploys or mutates on PR events. `secrets:` are declared
+  `required: false`; `permissions:` are `contents: read` + `deployments: write`.
+  This is the CF-Pages opt-in — it does **not** replace the scaffold default
+  GitHub-Pages lane. GFTB and transscendsurvival can adopt it in follow-ups by
+  collapsing their inline copies into a thin `uses:` wrapper.
+
 ## [2.9.1] — 2026-07-03
 
 ### Added
