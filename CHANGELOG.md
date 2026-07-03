@@ -5,6 +5,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`flywheel-reapi-proof` pending-cancel retry** — callers may opt into
+  `retry_cancelled_before_start: true` (with `max_attempts`, default `3`) so a
+  GF proof dispatch cancelled before GitHub assigns a job can be retried with a
+  fresh request id. This targets GitHub Actions concurrency pending-slot eviction
+  only; existing callers are byte-identical unless they opt in.
+
 ## [2.9.0] — 2026-07-02
 
 ### Added

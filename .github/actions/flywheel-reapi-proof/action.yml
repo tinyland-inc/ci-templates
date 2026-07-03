@@ -58,6 +58,14 @@ inputs:
     description: Wait for the GF workflow to finish.
     required: false
     default: "true"
+  retry_cancelled_before_start:
+    description: Retry when the dispatched GF proof run is cancelled before GitHub assigns any job. This covers GitHub concurrency pending-slot eviction.
+    required: false
+    default: "false"
+  max_attempts:
+    description: Maximum GF proof dispatch attempts when retry_cancelled_before_start is true.
+    required: false
+    default: "3"
   dispatch_token:
     description: GitHub token allowed to dispatch and watch the GF workflow.
     required: true
@@ -65,13 +73,13 @@ inputs:
 outputs:
   run_id:
     description: Dispatched GF run ID.
-    value: ${{ steps.resolve.outputs.run_id }}
+    value: ${{ steps.wait.outputs.run_id || steps.resolve.outputs.run_id }}
   run_url:
     description: Dispatched GF run URL.
-    value: ${{ steps.resolve.outputs.run_url }}
+    value: ${{ steps.wait.outputs.run_url || steps.resolve.outputs.run_url }}
   request_id:
     description: Unique request id passed to the GF workflow run.
-    value: ${{ steps.dispatch.outputs.request_id }}
+    value: ${{ steps.wait.outputs.request_id || steps.dispatch.outputs.request_id }}
 
 runs:
   using: composite
@@ -158,8 +166,126 @@ runs:
         GH_TOKEN: ${{ inputs.dispatch_token }}
 
     - name: Wait for GloriousFlywheel REAPI proof
+      id: wait
       if: inputs.wait == 'true'
       shell: bash
-      run: gh run watch "${{ steps.resolve.outputs.run_id }}" --repo "${{ inputs.gf_repository }}" --exit-status
+      run: |
+        set -euo pipefail
+
+        retry_cancelled="${INPUT_RETRY_CANCELLED_BEFORE_START}"
+        max_attempts="${INPUT_MAX_ATTEMPTS}"
+        case "${retry_cancelled}" in
+          true|false) ;;
+          *)
+            echo "::error::retry_cancelled_before_start must be true or false"
+            exit 1
+            ;;
+        esac
+        if ! [[ "${max_attempts}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::max_attempts must be a positive integer"
+          exit 1
+        fi
+
+        dispatch_gf_run() {
+          local request_id="$1"
+          gh workflow run "${INPUT_GF_WORKFLOW}" \
+            --repo "${INPUT_GF_REPOSITORY}" \
+            --ref "${INPUT_GF_REF}" \
+            -f request_id="${request_id}" \
+            -f image_digest="${INPUT_IMAGE_DIGEST}" \
+            -f target="${INPUT_TARGET}" \
+            -f bazel_command="${INPUT_BAZEL_COMMAND}" \
+            -f consumer_repository="${INPUT_CONSUMER_REPOSITORY}" \
+            -f consumer_ref="${INPUT_CONSUMER_REF}" \
+            -f consumer_checkout_authority="${INPUT_CONSUMER_CHECKOUT_AUTHORITY}" \
+            -f tinyland_schemas_private_handoff="${INPUT_TINYLAND_SCHEMAS_PRIVATE_HANDOFF}" \
+            -f apply="${INPUT_APPLY}" \
+            -f force_execution="${INPUT_FORCE_EXECUTION}"
+        }
+
+        resolve_gf_run() {
+          local request_id="$1"
+          local dispatch_time="$2"
+          local run_id=""
+          for _ in $(seq 1 60); do
+            runs_json="$(
+              gh run list \
+                --repo "${INPUT_GF_REPOSITORY}" \
+                --workflow "${INPUT_GF_WORKFLOW}" \
+                --event workflow_dispatch \
+                --branch "${INPUT_GF_REF}" \
+                --limit 50 \
+                --json databaseId,createdAt,displayTitle
+            )"
+            run_id="$(
+              jq -r \
+                --arg dispatch_time "${dispatch_time}" \
+                --arg request_id "${request_id}" \
+                '[.[] | select(.createdAt >= $dispatch_time) | select((.displayTitle // "") | contains($request_id))] | sort_by(.createdAt, .databaseId) | first | .databaseId // ""' \
+                <<< "${runs_json}"
+            )"
+            if [ -n "${run_id}" ]; then
+              printf '%s\n' "${run_id}"
+              return 0
+            fi
+            sleep 5
+          done
+          return 1
+        }
+
+        run_id="${INITIAL_RUN_ID}"
+        request_id="${INITIAL_REQUEST_ID}"
+        run_url="${INITIAL_RUN_URL}"
+        attempt=1
+
+        while true; do
+          if gh run watch "${run_id}" --repo "${INPUT_GF_REPOSITORY}" --exit-status; then
+            {
+              echo "run_id=${run_id}"
+              echo "run_url=${run_url}"
+              echo "request_id=${request_id}"
+              echo "attempt=${attempt}"
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          run_json="$(gh run view "${run_id}" --repo "${INPUT_GF_REPOSITORY}" --json conclusion,jobs,status,url)"
+          conclusion="$(jq -r '.conclusion // ""' <<< "${run_json}")"
+          job_count="$(jq -r '.jobs | length' <<< "${run_json}")"
+          if [ "${retry_cancelled}" != "true" ] || [ "${conclusion}" != "cancelled" ] || [ "${job_count}" != "0" ] || [ "${attempt}" -ge "${max_attempts}" ]; then
+            echo "::error::GloriousFlywheel proof run ${run_id} ended with conclusion=${conclusion:-unknown}, jobs=${job_count}"
+            exit 1
+          fi
+
+          attempt=$((attempt + 1))
+          request_id="${INITIAL_REQUEST_ID}-retry${attempt}"
+          request_id="${request_id:0:200}"
+          dispatch_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "::warning::GloriousFlywheel proof run ${run_id} was cancelled before job assignment; retrying attempt ${attempt}/${max_attempts} (request_id=${request_id})"
+          dispatch_gf_run "${request_id}"
+          if ! run_id="$(resolve_gf_run "${request_id}" "${dispatch_time}")"; then
+            echo "::error::Could not resolve retried GloriousFlywheel proof run"
+            exit 1
+          fi
+          run_url="$(gh run view "${run_id}" --repo "${INPUT_GF_REPOSITORY}" --json url --jq .url)"
+          echo "::notice::GloriousFlywheel proof retry run: ${run_url} (request_id=${request_id})"
+        done
       env:
         GH_TOKEN: ${{ inputs.dispatch_token }}
+        INPUT_GF_REPOSITORY: ${{ inputs.gf_repository }}
+        INPUT_GF_WORKFLOW: ${{ inputs.gf_workflow }}
+        INPUT_GF_REF: ${{ inputs.gf_ref }}
+        INPUT_IMAGE_DIGEST: ${{ inputs.image_digest }}
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_BAZEL_COMMAND: ${{ inputs.bazel_command }}
+        INPUT_CONSUMER_REPOSITORY: ${{ inputs.consumer_repository }}
+        INPUT_CONSUMER_REF: ${{ inputs.consumer_ref }}
+        INPUT_CONSUMER_CHECKOUT_AUTHORITY: ${{ inputs.consumer_checkout_authority }}
+        INPUT_TINYLAND_SCHEMAS_PRIVATE_HANDOFF: ${{ inputs.tinyland_schemas_private_handoff }}
+        INPUT_APPLY: ${{ inputs.apply }}
+        INPUT_FORCE_EXECUTION: ${{ inputs.force_execution }}
+        INPUT_RETRY_CANCELLED_BEFORE_START: ${{ inputs.retry_cancelled_before_start }}
+        INPUT_MAX_ATTEMPTS: ${{ inputs.max_attempts }}
+        INITIAL_RUN_ID: ${{ steps.resolve.outputs.run_id }}
+        INITIAL_RUN_URL: ${{ steps.resolve.outputs.run_url }}
+        INITIAL_REQUEST_ID: ${{ steps.dispatch.outputs.request_id }}
