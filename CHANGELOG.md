@@ -5,6 +5,15 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cloudflare Pages wrapper docs** — the consumer example now matches the
+  first live downstream adoption (GFTB PR #28): callers pass job-level
+  `contents: read` / `deployments: write`, use `secrets: inherit`, and do not
+  duplicate the reusable workflow's `cloudflare-pages-${{ github.ref }}`
+  concurrency group. Duplicating that group deadlocks the caller against the
+  called `deploy` job before any build step runs.
+
 ## [2.10.0] — 2026-07-03
 
 ### Added
