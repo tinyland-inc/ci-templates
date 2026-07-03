@@ -5,6 +5,17 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (at next major/minor tag): `flywheel-test` job renamed `flywheel-check`
+  and made verb-aware** — the old name promised flywheel coverage while the job ran a
+  purely local `just check`. The renamed job runs the spoke's `just flywheel-check`
+  verb (cache-first read-only contract) when the spoke exposes it, and falls back to
+  `just check` byte-identically for pre-uplift spokes. Rollout note: any spoke with a
+  required status check pinned to the literal `flywheel-test` job name must update its
+  branch protection at the version bump that ships this. (prompt-37 movement;
+  proposed in #70.)
+
 ### Fixed
 
 - **Cloudflare Pages wrapper docs** — the consumer example now matches the
@@ -47,7 +58,6 @@ Versioning: [SemVer 2.0](https://semver.org/).
   GF proof dispatch cancelled before GitHub assigns a job can be retried with a
   fresh request id. This targets GitHub Actions concurrency pending-slot eviction
   only; existing callers are byte-identical unless they opt in.
-
 ## [2.9.0] — 2026-07-02
 
 ### Added
