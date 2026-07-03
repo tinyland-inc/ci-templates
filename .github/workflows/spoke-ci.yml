@@ -275,7 +275,13 @@ jobs:
           state: ${{ job.status == 'success' && 'success' || 'failure' }}
           description: "build-and-test (${{ matrix.lane.name }})"
 
-  flywheel-test:
+  # Renamed from flywheel-test (prompt-37 movement): the old name promised
+  # flywheel coverage while the job ran a purely LOCAL `just check`. Now it
+  # earns the name: when the spoke exposes a `flywheel-check` verb (the
+  # cache-first read-only contract: shared-cache-backed, upload=false, no
+  # executor), run it; otherwise fall back to `just check` unchanged, so
+  # non-uplifted spokes are byte-identical in behavior.
+  flywheel-check:
     needs: [secrets-scan, repo-manifest, lanes-load]
     strategy:
       fail-fast: false
@@ -288,7 +294,16 @@ jobs:
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
 
       - run: nix develop --command just setup
-      - run: nix develop --command just check
+      - name: flywheel-check when the spoke has the verb, local check otherwise
+        run: |
+          set -euo pipefail
+          if nix develop --command just --show flywheel-check >/dev/null 2>&1; then
+            echo "spoke exposes flywheel-check - running the cache-first contract verb"
+            nix develop --command just flywheel-check
+          else
+            echo "no flywheel-check verb - falling back to local just check (pre-uplift spoke)"
+            nix develop --command just check
+          fi
 
   bazel-graph:
     needs: [secrets-scan]
