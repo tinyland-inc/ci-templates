@@ -158,10 +158,11 @@ permissions:
 
 jobs:
   deploy:
+    permissions:
+      contents: read
+      deployments: write
     uses: tinyland-inc/ci-templates/.github/workflows/spoke-deploy-cloudflare-pages.yml@v2.10.0
-    secrets:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    secrets: inherit
 ```
 
 `project_name` defaults to the slugified repository name (dots/underscores →
@@ -169,9 +170,13 @@ hyphens); override it with the `project_name` input when the CF project name
 differs. The deploy step **skips with a `::notice::`** when
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` are absent, so the wrapper
 merges safely before the org token is minted (personal-account spokes never
-hold CF creds). PR events build only — they never deploy and never mutate repo
-state. Pin `@vX.Y.Z` to your intended release; the example above assumes the
-first release that ships this lane.
+hold CF creds). Use `secrets: inherit` so org/repo-provisioned secrets are
+available by name without forcing absent optional secrets to exist. Do **not**
+copy a `cloudflare-pages-${{ github.ref }}` concurrency group into the caller:
+the reusable workflow already owns that group, and duplicating it deadlocks the
+caller against the called `deploy` job. PR events build only — they never deploy
+and never mutate repo state. Pin `@vX.Y.Z` to your intended release; the example
+above assumes the first release that ships this lane.
 
 ## Schemas
 
