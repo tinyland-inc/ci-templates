@@ -82,8 +82,13 @@ jobs:
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
 
       # wrangler-action installs Wrangler with pnpm when it is not already on
-      # PATH; the Nix devshell keeps pnpm inside `nix develop --command`, so
-      # expose the same pinned pnpm to the host action environment first.
+      # PATH; the Nix devshell keeps Node/pnpm inside `nix develop --command`,
+      # so expose the declared host Node + pinned pnpm to the action
+      # environment first.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ inputs.pnpm_version }}

@@ -15,7 +15,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
   `docs/deploy/cloudflare-pages.md` template block. It builds the adapter-static
   `build/` via `nix develop --command just setup/check/build` (with
   `setup_command` / `check_command` / `build_command` inputs defaulting to
-  `just setup` / `just check` / `just build`), resolves `project_name`
+  `just setup` / `just check` / `just build`), exposes declared host
+  `node_version` / `pnpm_version` inputs for the Cloudflare action environment,
+  resolves `project_name`
   (input; defaults to the slugified repo name) and the deploy branch (from
   `github.head_ref || github.ref_name`, lowercased/sanitized), credential-skips
   with a `::notice::` when `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` are
