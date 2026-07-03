@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.9.1] — 2026-07-03
+
 ### Added
 
 - **`flywheel-reapi-proof` pending-cancel retry** — callers may opt into
