@@ -128,6 +128,50 @@ See per-action `action.yml` files for full input/output documentation.
 | **`spoke-lane-ttl-reap.yml`** | Reusable scheduled TTL backstop dispatcher for Blahaj lane cleanup. |
 | **`spoke-public-preview.yml`** | Reusable public/client preview dispatcher for Cloudflare Access-gated aliases. |
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |
+| **`spoke-deploy-cloudflare-pages.yml`** | Sanctioned **opt-in** Cloudflare Pages deploy lane. Builds the adapter-static `build/` via `nix develop --command just setup/check/build`, then `wrangler pages deploy build`. Credential-skips when the org CF secrets are absent; PR events build only. Does **not** replace the scaffold default GitHub-Pages lane. |
+
+### Cloudflare Pages deploy lane (opt-in)
+
+`spoke-deploy-cloudflare-pages.yml` DRYs the hand-rolled CF-Pages publisher that
+was copied into multiple spokes (GFTB `greatfallstoolbus.org`,
+`transscendsurvival.org`, and the `site.scaffold`
+`docs/deploy/cloudflare-pages.md` template block). GitHub Pages remains the
+scaffold **default** deploy lane (`deploy-pages.yml`); this is the sanctioned
+CF-Pages **opt-in**, now reusable.
+
+A spoke's thin `.github/workflows/deploy-pages.yml` becomes a wrapper:
+
+```yaml
+# .github/workflows/deploy-pages.yml
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  deploy:
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-deploy-cloudflare-pages.yml@v2.10.0
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+```
+
+`project_name` defaults to the slugified repository name (dots/underscores →
+hyphens); override it with the `project_name` input when the CF project name
+differs. The deploy step **skips with a `::notice::`** when
+`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` are absent, so the wrapper
+merges safely before the org token is minted (personal-account spokes never
+hold CF creds). PR events build only — they never deploy and never mutate repo
+state. Pin `@vX.Y.Z` to your intended release; the example above assumes the
+first release that ships this lane.
 
 ## Schemas
 
