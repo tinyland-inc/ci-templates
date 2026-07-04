@@ -162,7 +162,14 @@ jobs:
       contents: read
       deployments: write
     uses: tinyland-inc/ci-templates/.github/workflows/spoke-deploy-cloudflare-pages.yml@v2.10.0
-    secrets: inherit
+    # Pass the CF secrets EXPLICITLY. `secrets: inherit` does not reliably
+    # deliver repo secrets when the calling repo lives in a DIFFERENT org than
+    # ci-templates (observed 2026-07-04: Great-Falls-Tool-Bus spoke built green
+    # while the deploy step credential-skipped on every push). Explicit mapping
+    # works in both same-org and cross-org callers.
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 ```
 
 `project_name` defaults to the slugified repository name (dots/underscores →
