@@ -62,6 +62,18 @@ inputs:
     description: Retry when the dispatched GF proof run is cancelled before GitHub assigns any job. This covers GitHub concurrency pending-slot eviction.
     required: false
     default: "false"
+  retry_conclusions:
+    description: Comma-separated GF proof conclusions eligible for retry when retry_cancelled_before_start is true. Defaults preserve the existing cancelled-before-start behavior.
+    required: false
+    default: "cancelled"
+  backoff_min_seconds:
+    description: Minimum retry backoff seconds.
+    required: false
+    default: "30"
+  backoff_max_seconds:
+    description: Maximum retry backoff seconds.
+    required: false
+    default: "90"
   max_attempts:
     description: Maximum GF proof dispatch attempts when retry_cancelled_before_start is true.
     required: false
@@ -173,6 +185,9 @@ runs:
         set -euo pipefail
 
         retry_cancelled="${INPUT_RETRY_CANCELLED_BEFORE_START}"
+        retry_conclusions="${INPUT_RETRY_CONCLUSIONS}"
+        backoff_min="${INPUT_BACKOFF_MIN_SECONDS}"
+        backoff_max="${INPUT_BACKOFF_MAX_SECONDS}"
         max_attempts="${INPUT_MAX_ATTEMPTS}"
         case "${retry_cancelled}" in
           true|false) ;;
@@ -185,6 +200,22 @@ runs:
           echo "::error::max_attempts must be a positive integer"
           exit 1
         fi
+        if ! [[ "${backoff_min}" =~ ^[0-9]+$ ]] || ! [[ "${backoff_max}" =~ ^[0-9]+$ ]] || [ "${backoff_min}" -gt "${backoff_max}" ]; then
+          echo "::error::backoff_min_seconds/backoff_max_seconds must be non-negative integers with min <= max"
+          exit 1
+        fi
+
+        conclusion_is_retryable() {
+          local conclusion="$1"
+          IFS=',' read -r -a allowed <<< "${retry_conclusions}"
+          for item in "${allowed[@]}"; do
+            item="$(printf '%s' "${item}" | xargs)"
+            if [ "${item}" = "${conclusion}" ]; then
+              return 0
+            fi
+          done
+          return 1
+        }
 
         dispatch_gf_run() {
           local request_id="$1"
@@ -233,13 +264,37 @@ runs:
           return 1
         }
 
+        await_gf_run() {
+          local run_id="$1"
+          local run_json=""
+          local status=""
+          for _ in $(seq 1 120); do
+            run_json="$(gh run view "${run_id}" --repo "${INPUT_GF_REPOSITORY}" --json conclusion,jobs,status,url)"
+            status="$(jq -r '.status // ""' <<< "${run_json}")"
+            if [ "${status}" = "completed" ]; then
+              printf '%s\n' "${run_json}"
+              return 0
+            fi
+            echo "GloriousFlywheel proof run ${run_id} status: ${status:-unknown}" >&2
+            sleep 15
+          done
+          return 1
+        }
+
         run_id="${INITIAL_RUN_ID}"
         request_id="${INITIAL_REQUEST_ID}"
         run_url="${INITIAL_RUN_URL}"
         attempt=1
 
         while true; do
-          if gh run watch "${run_id}" --repo "${INPUT_GF_REPOSITORY}" --exit-status; then
+          if ! run_json="$(await_gf_run "${run_id}")"; then
+            echo "::error::Timed out waiting for GloriousFlywheel proof run ${run_id}"
+            exit 1
+          fi
+
+          conclusion="$(jq -r '.conclusion // ""' <<< "${run_json}")"
+          job_count="$(jq -r '.jobs | length' <<< "${run_json}")"
+          if [ "${conclusion}" = "success" ]; then
             {
               echo "run_id=${run_id}"
               echo "run_url=${run_url}"
@@ -249,11 +304,12 @@ runs:
             exit 0
           fi
 
-          run_json="$(gh run view "${run_id}" --repo "${INPUT_GF_REPOSITORY}" --json conclusion,jobs,status,url)"
-          conclusion="$(jq -r '.conclusion // ""' <<< "${run_json}")"
-          job_count="$(jq -r '.jobs | length' <<< "${run_json}")"
-          if [ "${retry_cancelled}" != "true" ] || [ "${conclusion}" != "cancelled" ] || [ "${job_count}" != "0" ] || [ "${attempt}" -ge "${max_attempts}" ]; then
+          if [ "${retry_cancelled}" != "true" ] || ! conclusion_is_retryable "${conclusion}" || [ "${attempt}" -ge "${max_attempts}" ]; then
             echo "::error::GloriousFlywheel proof run ${run_id} ended with conclusion=${conclusion:-unknown}, jobs=${job_count}"
+            exit 1
+          fi
+          if [ "${conclusion}" = "cancelled" ] && [ "${job_count}" != "0" ]; then
+            echo "::error::GloriousFlywheel proof run ${run_id} was cancelled after job assignment; not treating it as pending-slot eviction"
             exit 1
           fi
 
@@ -261,7 +317,14 @@ runs:
           request_id="${INITIAL_REQUEST_ID}-retry${attempt}"
           request_id="${request_id:0:200}"
           dispatch_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          echo "::warning::GloriousFlywheel proof run ${run_id} was cancelled before job assignment; retrying attempt ${attempt}/${max_attempts} (request_id=${request_id})"
+          backoff_range=$((backoff_max - backoff_min + 1))
+          if [ "${backoff_range}" -le 1 ]; then
+            backoff="${backoff_min}"
+          else
+            backoff=$((backoff_min + RANDOM % backoff_range))
+          fi
+          echo "::warning::GloriousFlywheel proof run ${run_id} concluded ${conclusion}; retrying attempt ${attempt}/${max_attempts} after ${backoff}s (request_id=${request_id})"
+          sleep "${backoff}"
           dispatch_gf_run "${request_id}"
           if ! run_id="$(resolve_gf_run "${request_id}" "${dispatch_time}")"; then
             echo "::error::Could not resolve retried GloriousFlywheel proof run"
@@ -285,6 +348,9 @@ runs:
         INPUT_APPLY: ${{ inputs.apply }}
         INPUT_FORCE_EXECUTION: ${{ inputs.force_execution }}
         INPUT_RETRY_CANCELLED_BEFORE_START: ${{ inputs.retry_cancelled_before_start }}
+        INPUT_RETRY_CONCLUSIONS: ${{ inputs.retry_conclusions }}
+        INPUT_BACKOFF_MIN_SECONDS: ${{ inputs.backoff_min_seconds }}
+        INPUT_BACKOFF_MAX_SECONDS: ${{ inputs.backoff_max_seconds }}
         INPUT_MAX_ATTEMPTS: ${{ inputs.max_attempts }}
         INITIAL_RUN_ID: ${{ steps.resolve.outputs.run_id }}
         INITIAL_RUN_URL: ${{ steps.resolve.outputs.run_url }}

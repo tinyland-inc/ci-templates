@@ -5,6 +5,29 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`lane-ttl-reap` lifecycle payloads** — existing callers still emit the exact
+  v1 `reap-expired` TTL-only dispatch, while opted spokes can pass
+  `.github/lanes.json`, `lane_mode`, `source_repository`, `max_reaps`, and
+  `reap_reasons_json` such as `["ttl-expired","pr-closed"]`. The v2
+  `reap-lifecycle` payload makes PR-state-aware cleanup a ci-templates contract
+  while keeping Blahaj as the only deletion/OpenTofu authority.
+- **Lane manifest compatibility for current spokes** —
+  `schemas/lanes.schema.json` now accepts optional `spoke.tailnet_domain` and
+  `defaults.lane_modes`, so spoke lane subsets such as `all` / `full` / `draft`
+  are validated by the shared schema instead of living in per-repo forks.
+- **`lane-reaper-contract-check`** — repository validation now asserts that
+  lifecycle cleanup remains schema/dispatch-only in ci-templates, with no direct
+  kube, SOPS, or OpenTofu deletion primitives.
+
+### Changed
+
+- **`flywheel-reapi-proof` waits via `gh run view` polling and adds retry knobs**
+  — consumers can opt into retrying transient proof conclusions with randomized
+  backoff instead of vendoring bespoke wrapper scripts. Default retry behavior
+  remains off unless requested by the caller.
+
 ### Fixed
 
 - **Cloudflare Pages wrapper docs** — the consumer example now matches the

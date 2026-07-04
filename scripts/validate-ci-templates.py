@@ -130,9 +130,13 @@ def check_flywheel_reapi_proof_contract() -> int:
         "--json databaseId,createdAt,displayTitle",
         "contains($request_id)",
         "request_id=${request_id}",
+        "retry_conclusions:",
+        "await_gf_run()",
+        "--json conclusion,jobs,status,url",
     ]
     forbidden_action_snippets = [
         "sort_by(.createdAt, .databaseId) | last",
+        "gh run watch",
     ]
     required_readme_snippet = "correlated by a unique request id"
     required_roadmap_snippets = [
@@ -172,6 +176,107 @@ def check_flywheel_reapi_proof_contract() -> int:
     if not ok:
         return 1
     print("flywheel-reapi-proof request-id correlation guarded")
+    return 0
+
+
+def check_lane_reaper_contract() -> int:
+    action_path = ROOT / ".github/actions/lane-ttl-reap/action.yml"
+    workflow_path = ROOT / ".github/workflows/spoke-lane-ttl-reap.yml"
+    ttl_schema_path = ROOT / "schemas/lane-ttl-reap-dispatch.schema.json"
+    lanes_schema_path = ROOT / "schemas/lanes.schema.json"
+    readme_path = ROOT / "README.md"
+    action = action_path.read_text(encoding="utf-8")
+    workflow = workflow_path.read_text(encoding="utf-8")
+    ttl_schema = ttl_schema_path.read_text(encoding="utf-8")
+    lanes_schema = lanes_schema_path.read_text(encoding="utf-8")
+    readme = readme_path.read_text(encoding="utf-8")
+
+    ok = True
+    required_action_snippets = [
+        "schema_version\": 1",
+        "operation\": \"reap-expired\"",
+        "schema_version\": 2",
+        "operation\": \"reap-lifecycle\"",
+        "INPUT_REAP_REASONS_JSON",
+        "INPUT_LANE_MANIFEST_PATH",
+        "validate_lane_manifest",
+        "allowed_reasons = {\"ttl-expired\", \"pr-closed\", \"capacity-pressure\"}",
+    ]
+    required_workflow_snippets = [
+        "lane_manifest_path:",
+        "reap_reasons_json:",
+        "actions/checkout@v6",
+        "inputs.lane_manifest_path != ''",
+    ]
+    required_schema_snippets = [
+        "\"operation\": { \"const\": \"reap-expired\" }",
+        "\"operation\": { \"const\": \"reap-lifecycle\" }",
+        "\"reap_reasons\"",
+        "\"pr-closed\"",
+        "\"capacity-pressure\"",
+        "\"source_repository\"",
+        "\"lane_manifest\"",
+    ]
+    required_lanes_schema_snippets = [
+        "\"tailnet_domain\"",
+        "\"lane_modes\"",
+    ]
+    forbidden_action_snippets = [
+        "kubectl",
+        "tofu ",
+        "opentofu",
+    ]
+    required_readme_snippets = [
+        "PR-state-aware lifecycle cleanup",
+        "Blahaj remains the deletion authority",
+    ]
+
+    for snippet in required_action_snippets:
+        if snippet not in action:
+            print(
+                f"{action_path.relative_to(ROOT)}: missing lifecycle reaper snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    for snippet in required_workflow_snippets:
+        if snippet not in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: missing lifecycle reaper workflow snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    for snippet in required_schema_snippets:
+        if snippet not in ttl_schema:
+            print(
+                f"{ttl_schema_path.relative_to(ROOT)}: missing lifecycle reaper schema snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    for snippet in required_lanes_schema_snippets:
+        if snippet not in lanes_schema:
+            print(
+                f"{lanes_schema_path.relative_to(ROOT)}: missing lanes schema snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    for snippet in forbidden_action_snippets:
+        if snippet in action:
+            print(
+                f"{action_path.relative_to(ROOT)}: ci-templates reaper must not own runtime deletion primitive: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    for snippet in required_readme_snippets:
+        if snippet not in readme:
+            print(
+                f"{readme_path.relative_to(ROOT)}: missing lifecycle reaper docs snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    if not ok:
+        return 1
+    print("lane lifecycle reaper contract guarded")
     return 0
 
 
@@ -364,6 +469,7 @@ def main() -> int:
             "internal-refs",
             "js-bazel-runner-contract",
             "flywheel-reapi-proof-contract",
+            "lane-reaper-contract",
             "cache-backed-optin-contract",
         ],
     )
@@ -375,6 +481,8 @@ def main() -> int:
         return check_js_bazel_package_runner_contract()
     if args.check == "flywheel-reapi-proof-contract":
         return check_flywheel_reapi_proof_contract()
+    if args.check == "lane-reaper-contract":
+        return check_lane_reaper_contract()
     if args.check == "cache-backed-optin-contract":
         return check_cache_backed_optin_contract()
     return check_internal_refs()

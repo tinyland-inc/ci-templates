@@ -25,7 +25,8 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
   `lane-dispatch` / `lane-reap`.
 - **Public client preview dispatch** via `public-preview-dispatch`;
   Blahaj owns Cloudflare DNS, Access, Tunnel ingress, and cleanup.
-- **Scheduled expired-lane cleanup dispatch** via `lane-ttl-reap`.
+- **Scheduled lane cleanup dispatch** via `lane-ttl-reap`: legacy TTL-only by
+  default, with opt-in PR-state-aware lifecycle cleanup payloads.
 - **GloriousFlywheel proof dispatch** via `flywheel-reapi-proof`.
 - **Per-lane GitHub commit status checks** via `lane-status-check`.
 
@@ -109,7 +110,7 @@ gitleaks working-tree scan.
 | **`lanes-load`** | Validate + load `.github/lanes.json`. Outputs matrix-ready `lanes_json`. |
 | **`lane-dispatch`** | Emit Blahaj `<spoke>-lane-env` provision payload. Supports `dry_run`. |
 | **`lane-reap`** | Emit Blahaj destroy payload. Idempotent. |
-| **`lane-ttl-reap`** | Emit Blahaj expired-lane sweep payload for scheduled TTL backstops. |
+| **`lane-ttl-reap`** | Emit Blahaj lane cleanup payloads. Legacy callers emit the existing TTL-only `reap-expired` payload; opted callers can emit PR-state-aware lifecycle cleanup requests. Blahaj remains the deletion authority. |
 | **`public-preview-dispatch`** | Emit Blahaj public/client preview payload with Cloudflare Access allowlist. |
 | **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run, correlated by a unique request id. |
 | **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
@@ -125,7 +126,7 @@ See per-action `action.yml` files for full input/output documentation.
 | `npm-publish.yml` | Pre-existing: hosted-only Node package build + publish. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
 | **`spoke-lane-env.yml`** | Canonical PR-env workflow. Replaces hand-rolled `pr-env-lanes.yml`. |
-| **`spoke-lane-ttl-reap.yml`** | Reusable scheduled TTL backstop dispatcher for Blahaj lane cleanup. |
+| **`spoke-lane-ttl-reap.yml`** | Reusable scheduled lane cleanup dispatcher for Blahaj. Legacy callers stay TTL-only; opted callers can pass `.github/lanes.json`, a lane mode, and reap reasons such as `ttl-expired` + `pr-closed`. |
 | **`spoke-public-preview.yml`** | Reusable public/client preview dispatcher for Cloudflare Access-gated aliases. |
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |
 | **`spoke-deploy-cloudflare-pages.yml`** | Sanctioned **opt-in** Cloudflare Pages deploy lane. Builds the adapter-static `build/` via `nix develop --command just setup/check/build`, then `wrangler pages deploy build`. Credential-skips when the org CF secrets are absent; PR events build only. Does **not** replace the scaffold default GitHub-Pages lane. |

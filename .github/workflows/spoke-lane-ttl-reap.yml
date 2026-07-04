@@ -12,6 +12,24 @@ on:
       dry_run:
         type: boolean
         default: false
+      source_repository:
+        type: string
+        default: ""
+      lane_manifest_path:
+        type: string
+        default: ""
+      lane_mode:
+        type: string
+        default: ""
+      reap_reasons_json:
+        type: string
+        default: ""
+      max_reaps:
+        type: string
+        default: ""
+      min_age_hours:
+        type: string
+        default: ""
       blahaj_repository:
         type: string
         default: tinyland-inc/blahaj
@@ -31,11 +49,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v6
+        if: inputs.lane_manifest_path != ''
+
       - uses: tinyland-inc/ci-templates/.github/actions/lane-ttl-reap@v2
         with:
           spoke: ${{ inputs.spoke }}
           domain: ${{ inputs.domain }}
           dry_run: ${{ inputs.dry_run }}
+          source_repository: ${{ inputs.source_repository }}
+          lane_manifest_path: ${{ inputs.lane_manifest_path }}
+          lane_mode: ${{ inputs.lane_mode }}
+          reap_reasons_json: ${{ inputs.reap_reasons_json }}
+          max_reaps: ${{ inputs.max_reaps }}
+          min_age_hours: ${{ inputs.min_age_hours }}
           blahaj_repository: ${{ inputs.blahaj_repository }}
           dry_run_only: ${{ inputs.dry_run_only }}
           dispatch_token: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}

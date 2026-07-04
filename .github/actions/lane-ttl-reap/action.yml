@@ -1,8 +1,8 @@
 name: lane-ttl-reap
 description: |
   Construct + emit the Blahaj `<spoke>-lane-ttl-reap`
-  `repository_dispatch` payload for scheduled expired-lane cleanup.
-  Blahaj owns listing and idempotent destruction.
+  `repository_dispatch` payload for scheduled lane cleanup.
+  Blahaj owns listing, PR-state verification, and idempotent destruction.
 
 inputs:
   spoke:
@@ -15,6 +15,30 @@ inputs:
     description: Ask Blahaj to report expired lanes without deleting them.
     required: false
     default: "false"
+  source_repository:
+    description: Source GitHub repository whose PR state Blahaj should verify, for lifecycle reaping. Defaults to GITHUB_REPOSITORY when lifecycle inputs are used.
+    required: false
+    default: ""
+  lane_manifest_path:
+    description: Optional path to .github/lanes.json. When set, the action validates it and includes the selected lane manifest in the v2 lifecycle payload.
+    required: false
+    default: ""
+  lane_mode:
+    description: Optional lane mode from defaults.lane_modes to include in the lifecycle payload, such as all/full/draft. Defaults to all when lane_manifest_path is set.
+    required: false
+    default: ""
+  reap_reasons_json:
+    description: JSON array of lifecycle reasons, e.g. ["ttl-expired","pr-closed"]. When empty, the legacy v1 TTL-only payload is emitted.
+    required: false
+    default: ""
+  max_reaps:
+    description: Maximum lifecycle candidates Blahaj may destroy in one run. Required for lifecycle mode; defaults to 20 there.
+    required: false
+    default: ""
+  min_age_hours:
+    description: Optional minimum namespace age for lifecycle reaping; useful for capacity-pressure sweeps.
+    required: false
+    default: ""
   blahaj_repository:
     description: Target repository for the repository_dispatch.
     required: false
@@ -39,40 +63,223 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Build TTL reap payload
+    - name: Build lane reap payload
       id: build
       shell: bash
       run: |
         set -euo pipefail
-        requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        case "${{ inputs.dry_run }}" in true|false) ;; *) echo "::error::dry_run must be true or false"; exit 64 ;; esac
+        python3 - <<'PY' > "${RUNNER_TEMP}/lane-ttl-reap-payload.json"
+        import json
+        import os
+        import pathlib
+        import re
+        import sys
+        from datetime import datetime, timezone
 
-        payload="$(jq -nc \
-          --arg event_type "${{ inputs.spoke }}-lane-ttl-reap" \
-          --arg spoke "${{ inputs.spoke }}" \
-          --arg domain "${{ inputs.domain }}" \
-          --arg requested_at "${requested_at}" \
-          --argjson dry_run "${{ inputs.dry_run }}" \
-          '{
-            event_type: $event_type,
-            client_payload: {
-              schema_version: 1,
-              operation: "reap-expired",
-              spoke: $spoke,
-              domain: $domain,
-              requested_at: $requested_at,
-              dry_run: $dry_run
+        def error(message: str) -> None:
+            print(f"::error::{message}", file=sys.stderr)
+            raise SystemExit(1)
+
+        def parse_bool(name: str, value: str) -> bool:
+            if value == "true":
+                return True
+            if value == "false":
+                return False
+            error(f"{name} must be true or false")
+
+        def parse_positive_int(name: str, value: str, default: int | None, maximum: int | None = None) -> int | None:
+            if value == "":
+                return default
+            if not re.fullmatch(r"[1-9][0-9]*", value):
+                error(f"{name} must be a positive integer")
+            parsed = int(value)
+            if maximum is not None and parsed > maximum:
+                error(f"{name} must be <= {maximum}")
+            return parsed
+
+        def parse_nonnegative_int(name: str, value: str, maximum: int | None = None) -> int | None:
+            if value == "":
+                return None
+            if not re.fullmatch(r"[0-9]+", value):
+                error(f"{name} must be a non-negative integer")
+            parsed = int(value)
+            if maximum is not None and parsed > maximum:
+                error(f"{name} must be <= {maximum}")
+            return parsed
+
+        def validate_lane_manifest(manifest_path: pathlib.Path) -> dict:
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                error(f"lane_manifest_path not found: {manifest_path}")
+            except json.JSONDecodeError as exc:
+                error(f"{manifest_path}: invalid JSON: {exc}")
+
+            schema_path = pathlib.Path(os.environ["LANES_SCHEMA_PATH"])
+            try:
+                from jsonschema import Draft202012Validator
+            except ImportError:
+                Draft202012Validator = None
+            if Draft202012Validator is not None:
+                schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                errors = sorted(
+                    Draft202012Validator(schema).iter_errors(manifest),
+                    key=lambda e: list(e.absolute_path),
+                )
+                if errors:
+                    for err in errors:
+                        path = "/" + "/".join(str(p) for p in err.absolute_path)
+                        print(f"::error::{manifest_path} {path}: {err.message}", file=sys.stderr)
+                    raise SystemExit(1)
+            else:
+                if manifest.get("schema_version") != 1 or not isinstance(manifest.get("lanes"), list):
+                    error(f"{manifest_path}: failed minimal lanes.json validation")
+                print("::warning::jsonschema unavailable; used minimal lanes.json validation", file=sys.stderr)
+            return manifest
+
+        spoke = os.environ["INPUT_SPOKE"]
+        domain = os.environ["INPUT_DOMAIN"]
+        dry_run = parse_bool("dry_run", os.environ["INPUT_DRY_RUN"])
+        requested_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        event_type = f"{spoke}-lane-ttl-reap"
+
+        source_repository = os.environ["INPUT_SOURCE_REPOSITORY"]
+        lane_manifest_path = os.environ["INPUT_LANE_MANIFEST_PATH"]
+        lane_mode = os.environ["INPUT_LANE_MODE"]
+        reap_reasons_json = os.environ["INPUT_REAP_REASONS_JSON"]
+        max_reaps_input = os.environ["INPUT_MAX_REAPS"]
+        min_age_hours_input = os.environ["INPUT_MIN_AGE_HOURS"]
+        lifecycle_requested = any(
+            [
+                source_repository,
+                lane_manifest_path,
+                lane_mode,
+                reap_reasons_json,
+                max_reaps_input,
+                min_age_hours_input,
+            ]
+        )
+
+        if not lifecycle_requested:
+            print(
+                json.dumps(
+                    {
+                        "event_type": event_type,
+                        "client_payload": {
+                            "schema_version": 1,
+                            "operation": "reap-expired",
+                            "spoke": spoke,
+                            "domain": domain,
+                            "requested_at": requested_at,
+                            "dry_run": dry_run,
+                        },
+                    },
+                    separators=(",", ":"),
+                )
+            )
+            raise SystemExit(0)
+
+        if not source_repository:
+            source_repository = os.environ.get("GITHUB_REPOSITORY", "")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source_repository):
+            error("source_repository must be owner/repo")
+
+        try:
+            reap_reasons = json.loads(reap_reasons_json or '["ttl-expired"]')
+        except json.JSONDecodeError as exc:
+            error(f"reap_reasons_json must be a JSON array: {exc}")
+        if not isinstance(reap_reasons, list) or not reap_reasons:
+            error("reap_reasons_json must be a non-empty JSON array")
+        allowed_reasons = {"ttl-expired", "pr-closed", "capacity-pressure"}
+        normalized_reasons: list[str] = []
+        for reason in reap_reasons:
+            if reason not in allowed_reasons:
+                error(f"unsupported reap reason: {reason}")
+            if reason not in normalized_reasons:
+                normalized_reasons.append(reason)
+
+        max_reaps = parse_positive_int("max_reaps", max_reaps_input, 20, maximum=100)
+        min_age_hours = parse_nonnegative_int("min_age_hours", min_age_hours_input, maximum=720)
+
+        manifest_path = pathlib.Path(lane_manifest_path or ".github/lanes.json")
+        manifest = validate_lane_manifest(manifest_path)
+        selected_mode = lane_mode or "all"
+        lanes = manifest.get("lanes", [])
+        lanes_by_name = {lane.get("name"): lane for lane in lanes}
+        lane_modes = manifest.get("defaults", {}).get("lane_modes", {})
+        if lane_modes:
+            if selected_mode not in lane_modes:
+                error(f"lane_mode {selected_mode!r} not present in defaults.lane_modes")
+            selected_names = lane_modes[selected_mode]
+        else:
+            selected_names = [lane.get("name") for lane in lanes]
+            if lane_mode and lane_mode != "all":
+                error("lane_mode requires defaults.lane_modes unless lane_mode is all")
+
+        selected_lanes = []
+        for name in selected_names:
+            lane = lanes_by_name.get(name)
+            if lane is None:
+                error(f"defaults.lane_modes.{selected_mode} references unknown lane {name!r}")
+            extra = lane.get("extra", {})
+            deployment_style = extra.get("style") or lane.get("tofu_state_suffix") or name
+            lane_payload = {
+                "name": name,
+                "deployment_style": deployment_style,
             }
-          }')"
+            if lane.get("domain"):
+                lane_payload["domain"] = lane["domain"]
+            selected_lanes.append(lane_payload)
+
+        lane_manifest = {
+            "path": str(manifest_path),
+            "lane_mode": selected_mode,
+            "lanes": selected_lanes,
+        }
+        default_ttl = manifest.get("defaults", {}).get("ttl_hours")
+        if isinstance(default_ttl, int):
+            lane_manifest["default_ttl_hours"] = default_ttl
+        tailnet_domain = manifest.get("spoke", {}).get("tailnet_domain")
+        if tailnet_domain:
+            lane_manifest["tailnet_domain"] = tailnet_domain
+
+        client_payload = {
+            "schema_version": 2,
+            "operation": "reap-lifecycle",
+            "spoke": spoke,
+            "domain": domain,
+            "source_repository": source_repository,
+            "requested_at": requested_at,
+            "dry_run": dry_run,
+            "reap_reasons": normalized_reasons,
+            "max_reaps": max_reaps,
+            "lane_manifest": lane_manifest,
+        }
+        if min_age_hours is not None:
+            client_payload["min_age_hours"] = min_age_hours
+
+        print(json.dumps({"event_type": event_type, "client_payload": client_payload}, separators=(",", ":")))
+        PY
 
         dispatch_id="${{ inputs.spoke }}-ttl-reap-${GITHUB_RUN_ID}"
         payload_path="${RUNNER_TEMP}/lane-ttl-reap-${dispatch_id}.json"
-        echo "${payload}" | jq . > "${payload_path}"
+        jq . "${RUNNER_TEMP}/lane-ttl-reap-payload.json" > "${payload_path}"
         {
           echo "dispatch_id=${dispatch_id}"
           echo "payload_path=${payload_path}"
         } >> "${GITHUB_OUTPUT}"
         cat "${payload_path}"
+      env:
+        INPUT_SPOKE: ${{ inputs.spoke }}
+        INPUT_DOMAIN: ${{ inputs.domain }}
+        INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        INPUT_SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+        INPUT_LANE_MANIFEST_PATH: ${{ inputs.lane_manifest_path }}
+        INPUT_LANE_MODE: ${{ inputs.lane_mode }}
+        INPUT_REAP_REASONS_JSON: ${{ inputs.reap_reasons_json }}
+        INPUT_MAX_REAPS: ${{ inputs.max_reaps }}
+        INPUT_MIN_AGE_HOURS: ${{ inputs.min_age_hours }}
+        LANES_SCHEMA_PATH: ${{ github.action_path }}/../../../schemas/lanes.schema.json
 
     - name: Validate against schema
       shell: bash
@@ -91,8 +298,10 @@ runs:
             cp = payload.get("client_payload", {})
             ok = (
                 re.match(r"^[a-z][a-z0-9-]+-lane-ttl-reap$", payload.get("event_type", "")) and
-                cp.get("schema_version") == 1 and
-                cp.get("operation") == "reap-expired" and
+                (
+                    (cp.get("schema_version") == 1 and cp.get("operation") == "reap-expired") or
+                    (cp.get("schema_version") == 2 and cp.get("operation") == "reap-lifecycle")
+                ) and
                 isinstance(cp.get("dry_run"), bool)
             )
             if not ok:
