@@ -1,7 +1,7 @@
 name: "GF Credential Helper Install"
 description: >-
   Fetch a pinned gf-reapi-credhelper release binary, verify it against a
-  caller-supplied sha256, and put it on PATH as GF_REAPI_CREDENTIAL_HELPER.
+  caller-supplied sha256, and put it on PATH as GF_REAPI_CREDENTIAL_HELPER_BIN.
   This is the non-Nix distribution channel (TIN-2724): external-org runners
   without the tinyland Nix profile pin+verify the credential helper the same
   way GFTB-infra pins flywheel-github-oidc-profile.sh — an explicit ref and
@@ -61,7 +61,15 @@ runs:
         curl --fail --silent --show-error --location --retry 3 \
           --output "$dest" "$url"
 
-        actual="$(sha256sum "$dest" | awk '{ print $1 }')"
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual="$(sha256sum "$dest" | awk '{ print $1 }')"
+        elif command -v shasum >/dev/null 2>&1; then
+          actual="$(shasum -a 256 "$dest" | awk '{ print $1 }')"
+        else
+          rm -f "$dest"
+          echo "::error::gf-credhelper-install: sha256sum or shasum is required to verify ${asset}."
+          exit 1
+        fi
         if [ "$actual" != "$GF_CREDHELPER_SHA256" ]; then
           rm -f "$dest"
           echo "::error::gf-credhelper-install: sha256 mismatch for ${asset} @ ${GF_CREDHELPER_VERSION} — expected ${GF_CREDHELPER_SHA256}, got ${actual}. Refusing to install."
@@ -70,6 +78,9 @@ runs:
 
         chmod +x "$dest"
         echo "$install_dir" >> "$GITHUB_PATH"
+        echo "GF_REAPI_CREDENTIAL_HELPER_BIN=$dest" >> "$GITHUB_ENV"
+        # Compatibility alias for early proof workflows that asserted this
+        # helper-local name before the documented *_BIN contract existed.
         echo "GF_REAPI_CREDENTIAL_HELPER=$dest" >> "$GITHUB_ENV"
         echo "path=$dest" >> "$GITHUB_OUTPUT"
         echo "::notice::gf-credhelper-install: verified and installed ${asset} (${actual})"
