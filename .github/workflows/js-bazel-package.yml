@@ -88,6 +88,10 @@ on:
         description: "Bazel validation attempts for transient external archive fetch failures"
         type: string
         default: "3"
+      trusted_module_owners:
+        description: "Comma-separated GitHub owners whose github.com/raw.githubusercontent.com fetch URIs receive the registry token via the Bazel credential helper. Org-parameterized (TIN-2353): a tenant org lists itself to fetch its own private Bazel modules; tinyland-inc remains the default."
+        type: string
+        default: "tinyland-inc"
       cache_backed:
         description: >-
           Opt-in (default false) shared-cache-backed Bazel validation. When true,
@@ -505,6 +509,7 @@ jobs:
         shell: bash
         env:
           TINYLAND_REGISTRY_GITHUB_TOKEN: ${{ secrets.TINYLAND_REGISTRY_GITHUB_TOKEN || secrets.SYNC_PAT || secrets.GH_TOKEN || github.token }}
+          BAZEL_TRUSTED_MODULE_OWNERS: ${{ inputs.trusted_module_owners }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
@@ -537,10 +542,21 @@ jobs:
               or ""
           )
 
-          if token and (
-              uri.startswith("https://github.com/tinyland-inc/")
-              or uri.startswith("https://raw.githubusercontent.com/tinyland-inc/")
-          ):
+          owners = [
+              o.strip().lower()
+              for o in (os.environ.get("BAZEL_TRUSTED_MODULE_OWNERS") or "tinyland-inc").split(",")
+              if o.strip()
+          ]
+          prefixes = tuple(
+              prefix
+              for owner in owners
+              for prefix in (
+                  f"https://github.com/{owner}/",
+                  f"https://raw.githubusercontent.com/{owner}/",
+              )
+          )
+
+          if token and uri.lower().startswith(prefixes):
               print(json.dumps({"headers": {"Authorization": [f"Bearer {token}"]}}))
           else:
               print(json.dumps({"headers": {}}))
@@ -557,6 +573,7 @@ jobs:
             {
               printf 'TINYLAND_REGISTRY_GITHUB_TOKEN=%s\n' "$TINYLAND_REGISTRY_GITHUB_TOKEN"
               printf 'BAZEL_GITHUB_CREDENTIAL_HELPER=%s\n' "$helper_path"
+              printf 'BAZEL_TRUSTED_MODULE_OWNERS=%s\n' "${BAZEL_TRUSTED_MODULE_OWNERS:-tinyland-inc}"
             } >> "$GITHUB_ENV"
           else
             echo "::warning::No GitHub token is available for private Bazel module tarball fetches."
