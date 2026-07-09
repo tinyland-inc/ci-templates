@@ -5,6 +5,19 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`authorities.artifact_registry` manifest key** — new optional string
+  authority in `schemas/tinyland-repo-manifest.schema.json`, distinct from
+  `authorities.package_registry`. `package_registry` keeps its Bzlmod
+  source-dependency-registry meaning (`tinyland-inc/bazel-registry`);
+  `artifact_registry` names the published-artifact serving/gating surface (the
+  Pulp registry — signed, versioned RELEASE artifacts over dnf/podman/https).
+  Additive + optional (manifests without it still validate); resolves the
+  long-standing `package_registry` naming overload before any consumer sets a
+  value. Anchors the Cordillera registry charter (TIN-2718). The value lands
+  separately in `rockies/tinyland.repo.json`.
+
 ### Fixed
 
 - **Cloudflare Pages wrapper docs** — the consumer example now matches the

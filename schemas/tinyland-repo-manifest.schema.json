@@ -108,7 +108,11 @@
 				"ci_templates": { "type": "string" },
 				"cache_rbe_authority": { "type": "string" },
 				"tofu_module_authority": { "type": "string" },
-				"package_registry": { "type": "string" }
+				"package_registry": { "type": "string" },
+				"artifact_registry": {
+					"type": "string",
+					"description": "Published-artifact registry authority: the durable, signed, versioned RELEASE-artifact serving + gating surface (Pulp — dnf/podman/https), keyed by repo + name + version + tag + signature at release/serve time. DISTINCT from package_registry, which is the Bzlmod SOURCE-dependency registry (module + version + integrity hash, resolved at build/dep-graph time) and keeps that meaning unchanged. Additive + optional: manifests without this key still validate. See TIN-2718 (charter: pkgs.tinyland.dev as a Bazel-SSOT + Pulp registry)."
+				}
 			}
 		},
 		"enrollment": {
