@@ -1,0 +1,86 @@
+name: "GF Credential Helper Install"
+description: >-
+  Fetch a pinned gf-reapi-credhelper release binary, verify it against a
+  caller-supplied sha256, and put it on PATH as GF_REAPI_CREDENTIAL_HELPER_BIN.
+  This is the non-Nix distribution channel (TIN-2724): external-org runners
+  without the tinyland Nix profile pin+verify the credential helper the same
+  way GFTB-infra pins flywheel-github-oidc-profile.sh — an explicit ref and
+  content hash, never a floating download trusted onto PATH.
+
+inputs:
+  version:
+    description: "GloriousFlywheel release tag carrying the credhelper binaries (e.g. v0.35.0). Required — there is no floating 'latest'."
+    required: true
+  sha256:
+    description: "Expected sha256 of THIS platform's binary (from the release's SHA256SUMS). Required — a mismatch fails the step before the binary ever reaches PATH."
+    required: true
+  repository:
+    description: "GitHub repository publishing the release binaries."
+    default: "tinyland-inc/GloriousFlywheel"
+  install-dir:
+    description: "Directory to install into (created if absent; prepended to PATH)."
+    default: ""
+
+outputs:
+  path:
+    description: "Absolute path of the installed gf-reapi-credhelper binary."
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Fetch, verify, install gf-reapi-credhelper
+      id: install
+      shell: bash
+      env:
+        GF_CREDHELPER_VERSION: ${{ inputs.version }}
+        GF_CREDHELPER_SHA256: ${{ inputs.sha256 }}
+        GF_CREDHELPER_REPOSITORY: ${{ inputs.repository }}
+        GF_CREDHELPER_INSTALL_DIR: ${{ inputs.install-dir }}
+      run: |
+        set -euo pipefail
+
+        case "$(uname -s)" in
+          Linux)  os="linux" ;;
+          Darwin) os="darwin" ;;
+          *) echo "::error::gf-credhelper-install: unsupported OS $(uname -s)"; exit 1 ;;
+        esac
+        case "$(uname -m)" in
+          x86_64|amd64)  arch="amd64" ;;
+          aarch64|arm64) arch="arm64" ;;
+          *) echo "::error::gf-credhelper-install: unsupported arch $(uname -m)"; exit 1 ;;
+        esac
+
+        install_dir="${GF_CREDHELPER_INSTALL_DIR:-${RUNNER_TEMP}/gf-tools}"
+        mkdir -p "$install_dir"
+        dest="$install_dir/gf-reapi-credhelper"
+        asset="gf-reapi-credhelper-${os}-${arch}"
+        url="https://github.com/${GF_CREDHELPER_REPOSITORY}/releases/download/${GF_CREDHELPER_VERSION}/${asset}"
+
+        echo "::notice::gf-credhelper-install: fetching ${asset} @ ${GF_CREDHELPER_VERSION}"
+        curl --fail --silent --show-error --location --retry 3 \
+          --output "$dest" "$url"
+
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual="$(sha256sum "$dest" | awk '{ print $1 }')"
+        elif command -v shasum >/dev/null 2>&1; then
+          actual="$(shasum -a 256 "$dest" | awk '{ print $1 }')"
+        else
+          rm -f "$dest"
+          echo "::error::gf-credhelper-install: sha256sum or shasum is required to verify ${asset}."
+          exit 1
+        fi
+        if [ "$actual" != "$GF_CREDHELPER_SHA256" ]; then
+          rm -f "$dest"
+          echo "::error::gf-credhelper-install: sha256 mismatch for ${asset} @ ${GF_CREDHELPER_VERSION} — expected ${GF_CREDHELPER_SHA256}, got ${actual}. Refusing to install."
+          exit 1
+        fi
+
+        chmod +x "$dest"
+        echo "$install_dir" >> "$GITHUB_PATH"
+        echo "GF_REAPI_CREDENTIAL_HELPER_BIN=$dest" >> "$GITHUB_ENV"
+        # Compatibility alias for early proof workflows that asserted this
+        # helper-local name before the documented *_BIN contract existed.
+        echo "GF_REAPI_CREDENTIAL_HELPER=$dest" >> "$GITHUB_ENV"
+        echo "path=$dest" >> "$GITHUB_OUTPUT"
+        echo "::notice::gf-credhelper-install: verified and installed ${asset} (${actual})"
