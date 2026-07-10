@@ -7,8 +7,9 @@
 # Forbids repo-shaped / project-identity self-hosted labels (e.g.
 # `runs-on: dollhouse-farm-nix`, `chapel-nix`, `jesssullivan-nix-heavy`), bare
 # `self-hosted`, and drift smuggled into a fromJSON() fallback — while PASSing
-# shared labels (tinyland-nix, ...), GitHub-hosted labels (ubuntu-latest, ...),
-# and the legitimate dynamic `${{ fromJSON(vars.* || '["ubuntu-latest"]') }}`
+# org capability labels (tinyland-nix, great-falls-tool-bus-nix, ...),
+# GitHub-hosted labels (ubuntu-latest, ...), and the legitimate dynamic
+# `${{ fromJSON(vars.* || '["ubuntu-latest"]') }}`
 # indirection. Never crashes and never FAILs on a runs-on it cannot statically
 # resolve (pure needs-output / inputs / unresolvable matrix) — those WARN.
 #
@@ -225,6 +226,8 @@ def self_test
     ["tinyland-nix-kvm", :pass, "shared base label"],
     ["tinyland-nix-operator", :pass, "constructed: operator IS an allowed suffix"],
     ["tinyland-nix-darwin", :pass, "constructed-valid"],
+    ["great-falls-tool-bus-nix", :pass, "tenant org capability label"],
+    ["medical-massage-specialists-docker", :pass, "tenant org capability label"],
     ["ubuntu-latest", :pass, "hosted family"],
     ["macos-15", :pass, "hosted family"],
     ["dollhouse-farm-nix", :fail, "repo-shaped (empirical target)"],

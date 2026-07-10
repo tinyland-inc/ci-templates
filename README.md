@@ -237,7 +237,7 @@ from cluster DNS, so attach needs no new secret or infrastructure.
 The cache-backed lane is **hardened for deterministic, fail-closed enrollment**
 (TIN-2109): it validates the consumer's `tinyland.repo.json` against the schema,
 reads `enrollment.substrateMode` as the authoritative expected mode (a
-declared-vs-actual mismatch fails closed), rejects hosted / repo-shaped runner
+declared-vs-actual mismatch fails closed), rejects hosted / non-cluster runner
 fallback (no silent degrade to a GitHub-hosted build), and pins the contract-script
 fetch fallback to an immutable releasing tag. It also exports
 `GF_FLYWHEEL_PROFILE_STATE` from the resolved substrate mode so consumer

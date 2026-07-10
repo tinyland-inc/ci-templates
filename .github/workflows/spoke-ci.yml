@@ -191,7 +191,7 @@ jobs:
       # (b) Assert shared-cache attachment. Manifest-driven expected mode
       # (TIN-2109): authority order enrollment.substrateMode > substrate_mode
       # input > shared-cache-backed default. Runner labels are fed so the
-      # contract rejects hosted / repo-shaped fallback (no silent degrade).
+      # contract rejects hosted / non-cluster fallback (no silent degrade).
       - name: Assert shared-cache attachment (cache-backed lane)
         if: ${{ inputs.cache_backed }}
         shell: bash

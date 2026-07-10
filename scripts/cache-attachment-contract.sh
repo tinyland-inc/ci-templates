@@ -29,10 +29,12 @@
 #   - declared GF_BAZEL_SUBSTRATE_MODE disagreeing with endpoint presence
 #   - declared GF_FLYWHEEL_PROFILE_STATE contradicting the selected substrate
 #   - --strict with an empty BAZEL_REMOTE_CACHE
-#   - (TIN-2109) --strict on a hosted / repo-shaped runner: a missing substrate is a
-#     deterministic failure, never a silent degrade to a GitHub-hosted build. Gated by
-#     GF_BAZEL_RUNNER_LABELS; reject ubuntu-*/windows-*/macos-*/bare self-hosted and any
-#     repo-shaped <name>-nix* label. Override only with GF_BAZEL_ALLOW_HOSTED_RUNNER=true.
+#   - (TIN-2109/TIN-2353) --strict on a hosted / non-cluster runner: a missing
+#     substrate is a deterministic failure, never a silent degrade to a
+#     GitHub-hosted build. Gated by GF_BAZEL_RUNNER_LABELS; accept
+#     org-namespaced capability classes (`<org-pool>-nix|-nix-heavy|-nix-kvm|
+#     -nix-gpu|-docker|-dind`) and reject ubuntu-*/windows-*/macos-*/bare
+#     self-hosted labels. Override only with GF_BAZEL_ALLOW_HOSTED_RUNNER=true.
 #   - (TIN-2109) declared/effective mode executor-backed without the FULL executor
 #     contract: BAZEL_REMOTE_EXECUTOR + BAZEL_REMOTE_CACHE + a cluster runner class +
 #     a proof-artifact image digest (GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST). This contract
@@ -67,11 +69,12 @@ Environment:
                             uses one endpoint for both).
   GF_BAZEL_RUNNER_LABELS    Optional comma/space-separated runner labels. When set under
                             --strict the gate REJECTS hosted (ubuntu-*/windows-*/macos-*),
-                            bare self-hosted, and repo-shaped (<name>-nix*) labels so a
+                            bare self-hosted, and known repo-shaped fossils so a
                             missing substrate fails closed instead of degrading to a
-                            GitHub-hosted build. Cluster classes: tinyland-nix,
-                            tinyland-nix-heavy, tinyland-nix-kvm, tinyland-nix-gpu,
-                            tinyland-docker, tinyland-dind.
+                            GitHub-hosted build. Cluster classes are org-namespaced:
+                            <org-pool>-nix, -nix-heavy, -nix-kvm, -nix-gpu,
+                            -docker, or -dind (e.g. tinyland-nix,
+                            great-falls-tool-bus-nix).
   GF_BAZEL_ALLOW_HOSTED_RUNNER
                             Set true to bypass the hosted/repo-label rejection (explicit
                             escape hatch only; the shared lane never enables it).
@@ -157,17 +160,24 @@ endpoint_is_localhost() {
   esac
 }
 
-# --- TIN-2109: runner-class classification (reject hosted / repo-label fallback) ---
-# Cluster capability classes accepted for substrate-backed work. Anything else
-# (GitHub-hosted, bare self-hosted, or a repo-shaped <name>-nix* label) is a
-# silent-degrade vector and must fail closed in --strict.
+# --- TIN-2109/TIN-2353: runner-class classification (reject hosted fallback) ---
+# Cluster capability classes accepted for substrate-backed work are
+# org-namespaced. This is a syntax check; the runner-pool grant itself lives in
+# the operator/org overlay. Hosted, bare self-hosted, and known repo-label
+# fossils remain silent-degrade vectors and fail closed in --strict.
 runner_labels_raw="${GF_BAZEL_RUNNER_LABELS:-}"
 allow_hosted_runner="${GF_BAZEL_ALLOW_HOSTED_RUNNER:-false}"
 runner_class=""
 runner_reject_reason=""
 is_cluster_label() {
+  if [[ "$1" =~ ^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$ ]]; then
+    return 0
+  fi
+  return 1
+}
+is_known_repo_label_fossil() {
   case "$1" in
-  tinyland-nix | tinyland-nix-heavy | tinyland-nix-kvm | tinyland-nix-gpu | tinyland-docker | tinyland-dind)
+  dollhouse-farm-nix | chapel-nix | jesssullivan-nix-heavy | massageithaca-dind)
     return 0 ;;
   *) return 1 ;;
   esac
@@ -175,11 +185,16 @@ is_cluster_label() {
 classify_runner() {
   # Sets runner_class to the first cluster-class label found. If none, sets
   # runner_reject_reason to the first disqualifying label (hosted / bare
-  # self-hosted / repo-shaped), else leaves both empty (no labels supplied).
+  # self-hosted / known repo-label fossil), else leaves both empty (no labels
+  # supplied).
   local raw="$1"
   raw="${raw//,/ }"
   local label
   for label in ${raw}; do
+    if is_known_repo_label_fossil "${label}"; then
+      runner_reject_reason="known repo-shaped runner label '${label}' (not an org capability class)"
+      return 0
+    fi
     if is_cluster_label "${label}"; then
       runner_class="${label}"
       return 0
@@ -196,13 +211,13 @@ classify_runner() {
       return 0
       ;;
     *-nix | *-nix-* | *-docker | *-dind)
-      runner_reject_reason="repo-shaped runner label '${label}' (not a shared tinyland capability class)"
+      runner_reject_reason="runner label '${label}' does not match the org capability-class grammar"
       return 0
       ;;
     esac
   done
   if [[ -n ${raw// /} ]]; then
-    runner_reject_reason="no tinyland capability-class label in '${raw}'"
+    runner_reject_reason="no org capability-class label in '${raw}'"
   fi
 }
 if [[ -n ${runner_labels_raw} ]]; then
@@ -342,14 +357,14 @@ if [[ -n ${remote_executor} && -n ${remote_cache} &&
   exit 1
 fi
 
-# TIN-2109: reject hosted / repo-shaped runner fallback under --strict. A
+# TIN-2109/TIN-2353: reject hosted / non-cluster runner fallback under --strict. A
 # missing substrate must be a deterministic failure, never a silent degrade to a
 # GitHub-hosted build. Only enforced when runner labels are supplied AND --strict
 # is on, so non-cache-backed callers stay unaffected.
 if [[ ${STRICT} == "true" && -n ${runner_labels_raw} && -z ${runner_class} &&
   ${allow_hosted_runner} != "true" ]]; then
   echo
-  echo "ERROR: strict cache-backed lane refuses to run on ${runner_reject_reason:-a non-cluster runner}. The substrate must attach on a shared tinyland capability-class runner (tinyland-nix, tinyland-nix-heavy, tinyland-nix-kvm, tinyland-nix-gpu, tinyland-docker, tinyland-dind). Hosted/repo-label fallback is rejected; set GF_BAZEL_ALLOW_HOSTED_RUNNER=true only with explicit non-shared-lane justification."
+  echo "ERROR: strict cache-backed lane refuses to run on ${runner_reject_reason:-a non-cluster runner}. The substrate must attach on an org-namespaced capability-class runner (<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind). Hosted/non-cluster fallback is rejected; set GF_BAZEL_ALLOW_HOSTED_RUNNER=true only with explicit non-shared-lane justification."
   exit 1
 fi
 

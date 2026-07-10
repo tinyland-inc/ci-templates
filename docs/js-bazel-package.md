@@ -51,17 +51,17 @@ Meaning:
   - validate and publish on a documented shared GloriousFlywheel lane
   - pass a non-empty `shared_runner_labels_json`; an empty value is rejected
     because it usually means the caller repo variable is missing
-  - labels must include one of the shared Tinyland capability classes
+  - labels must include an org capability-class label
 - `repo_owned`
   - validate and publish on a repo/owner-scoped runner registration path
-  - workflow-facing labels still stay shared Tinyland capability classes
-  - labels must include one of the shared Tinyland capability classes
+  - workflow-facing labels still stay org capability classes
+  - labels must include an org capability-class label
 
 `repo_owned` is a trust and registration boundary, not permission to mint
-repo-shaped runner labels. GloriousFlywheel keeps runner labels capability-based
-(`tinyland-nix`, `tinyland-docker`, and related classes); owner/repo separation
-belongs in ARC registration identity, runner groups, GitHub App installation,
-and implementation-overlay policy.
+known repo-label fossils. GloriousFlywheel keeps runner labels capability-based
+(`tinyland-nix`, `great-falls-tool-bus-nix`, and related classes); owner/repo
+separation belongs in ARC registration identity, runner groups, GitHub App
+installation, and implementation-overlay policy.
 
 ### `workspace_mode`
 
@@ -142,10 +142,10 @@ TIN-2110 cache-first enrollment surface (TIN-1997 Option D, proven by GF#889).
   - the workflow exports `GF_FLYWHEEL_PROFILE_STATE` from the resolved substrate
     mode so consumer `flywheel-doctor` / `flywheel-verify` commands see the
     same machine-readable attachment state as CI
-  - the contract **rejects hosted / repo-shaped runner fallback**: the runner
+  - the contract **rejects hosted / non-cluster runner fallback**: the runner
     labels are inspected and a GitHub-hosted (`ubuntu-*`), bare `self-hosted`, or
-    repo-shaped (`<name>-nix*`) runner is a deterministic failure, never a silent
-    degrade to a hosted build (override only with
+    known repo-label fossil is a deterministic failure, never a silent degrade
+    to a hosted build (override only with
     `GF_BAZEL_ALLOW_HOSTED_RUNNER=true`)
   - the Bazel validation then runs
     `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
@@ -247,8 +247,9 @@ jobs:
 ```
 
 In that example, `PRIMARY_LINUX_RUNNER_LABELS_JSON` must resolve to a
-capability-shaped label set such as `["self-hosted","linux","tinyland-nix"]`.
-It must not resolve to a repo-shaped label. Pull-request validation remains
+capability-shaped label set such as `["self-hosted","linux","tinyland-nix"]`
+or `["self-hosted","linux","great-falls-tool-bus-nix"]`.
+It must not resolve to a known repo-label fossil. Pull-request validation remains
 safe for forks because publish jobs are still gated by tag/workflow policy and
 GitHub does not expose protected publish secrets to untrusted fork PRs.
 
@@ -286,8 +287,8 @@ jobs:
 - `compat` exists only to let existing consumers adopt the new template without
   breaking in one PR.
 - `runner_mode=repo_owned` must pass explicit `runner_labels_json` and that
-  label set must include a Tinyland capability class. It does not authorize
-  repo-shaped labels.
+  label set must include an org capability-class label. It does not authorize
+  known repo-label fossils.
 - `runner_mode=shared` uses `shared_runner_labels_json`. The workflow resolves
   the selected labels in a small hosted setup job, then passes simple JSON
   outputs into `runs-on` to avoid the complex inline expressions that previously

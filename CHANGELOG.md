@@ -7,6 +7,13 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Fixed
 
+- **Org-namespaced Flywheel runner guards** — `flywheel-bazel` and the
+  cache-attachment contract now consume the same TIN-2353 runner-class grammar
+  as `nix-setup` / `lanes.schema.json`, so tenant pools such as
+  `great-falls-tool-bus-nix` and `medical-massage-specialists-docker` are
+  treated as real cluster classes instead of being rejected by stale
+  tinyland-only downstream guards.
+
 - **Cloudflare Pages wrapper docs** — the consumer example now matches the
   first live downstream adoption (GFTB PR #28): callers pass job-level
   `contents: read` / `deployments: write`, use `secrets: inherit`, and do not

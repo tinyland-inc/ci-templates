@@ -188,6 +188,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
 
           runner_mode = os.environ.get("RUNNER_MODE") or "compat"
           publish_mode = os.environ.get("PUBLISH_MODE") or "same_runner"
@@ -221,21 +222,15 @@ jobs:
 
               return labels
 
-          tinyland_capability_labels = {
-              "tinyland-nix",
-              "tinyland-nix-heavy",
-              "tinyland-nix-kvm",
-              "tinyland-nix-gpu",
-              "tinyland-docker",
-              "tinyland-dind",
-          }
+          org_capability_label = re.compile(
+              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$"
+          )
 
-          def require_tinyland_capability(labels: list[str], name: str) -> None:
-              if tinyland_capability_labels.isdisjoint(labels):
-                  allowed = ", ".join(sorted(tinyland_capability_labels))
+          def require_org_capability(labels: list[str], name: str) -> None:
+              if not any(org_capability_label.fullmatch(label) for label in labels):
                   raise SystemExit(
-                      f"{name} must include a Tinyland capability-class label; "
-                      f"allowed capability labels: {allowed}"
+                      f"{name} must include an org capability-class label "
+                      "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind)"
                   )
 
           runner_labels = parse_labels("RUNNER_LABELS_JSON", '["ubuntu-latest"]')
@@ -255,9 +250,9 @@ jobs:
               raise SystemExit("runner_mode=repo_owned requires explicit runner_labels_json")
 
           if runner_mode == "repo_owned":
-              require_tinyland_capability(validate_runner_labels, "runner_labels_json")
+              require_org_capability(validate_runner_labels, "runner_labels_json")
           elif runner_mode == "shared":
-              require_tinyland_capability(validate_runner_labels, "shared_runner_labels_json")
+              require_org_capability(validate_runner_labels, "shared_runner_labels_json")
 
           if publish_mode == "hosted_exception":
               publish_runner_labels = ["ubuntu-latest"]
@@ -358,6 +353,7 @@ jobs:
             LABELS_JSON="$labels_json" LABELS_NAME="$labels_name" python3 - <<'PY'
           import json
           import os
+          import re
           import sys
 
           labels_name = os.environ["LABELS_NAME"]
@@ -368,19 +364,16 @@ jobs:
               print(f"{labels_name} must be a JSON array: {exc}", file=sys.stderr)
               raise SystemExit(1) from exc
 
-          capabilities = {
-              "tinyland-nix",
-              "tinyland-nix-heavy",
-              "tinyland-nix-kvm",
-              "tinyland-nix-gpu",
-              "tinyland-docker",
-              "tinyland-dind",
-          }
-          if not isinstance(labels, list) or capabilities.isdisjoint(labels):
-              allowed = ", ".join(sorted(capabilities))
+          org_capability_label = re.compile(
+              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$"
+          )
+          if not isinstance(labels, list) or not any(
+              isinstance(label, str) and org_capability_label.fullmatch(label)
+              for label in labels
+          ):
               print(
-                  f"{labels_name} must include a Tinyland capability-class label; "
-                  f"allowed capability labels: {allowed}",
+                  f"{labels_name} must include an org capability-class label "
+                  "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind)",
                   file=sys.stderr,
               )
               raise SystemExit(1)
@@ -709,7 +702,7 @@ jobs:
       # The contract's EXPECTED MODE is manifest-driven (TIN-2109): it is read
       # from enrollment.substrateMode in tinyland.repo.json (authoritative), not a
       # hard-coded workflow default. Runner labels are fed so the contract rejects
-      # hosted / repo-shaped runner fallback (no silent degrade).
+      # hosted / non-cluster runner fallback (no silent degrade).
       - name: Assert shared-cache attachment (cache-backed lane)
         if: ${{ inputs.cache_backed }}
         shell: bash
@@ -752,7 +745,7 @@ jobs:
           echo "::notice::cache-backed lane expected mode (manifest-driven): $GF_BAZEL_SUBSTRATE_MODE"
           echo "::notice::Flywheel profile state: $GF_FLYWHEEL_PROFILE_STATE"
 
-          # Feed runner labels so the contract rejects hosted / repo-shaped
+          # Feed runner labels so the contract rejects hosted / non-cluster
           # runner fallback. A missing substrate is a deterministic failure,
           # never a silent degrade to a GitHub-hosted build.
           export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"
