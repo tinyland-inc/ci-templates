@@ -108,7 +108,11 @@
 				"ci_templates": { "type": "string" },
 				"cache_rbe_authority": { "type": "string" },
 				"tofu_module_authority": { "type": "string" },
-				"package_registry": { "type": "string" }
+				"package_registry": { "type": "string" },
+				"artifact_registry": {
+					"type": "string",
+					"description": "Published-artifact serving-registry authority (signed, versioned RPM/OCI/file release artifacts served over dnf/podman/https via Pulp). DISTINCT from package_registry, which names the Bzlmod source-dependency registry (bazel-registry) at build/dep-graph time. artifact_registry is the release/serve layer added as a new rung on the TIN-737/TIN-1629 release-authority order — it does not move the others. See charter TIN-2718 §A4 and prompts/76-77. Optional and additive; existing manifests without it still validate."
+				}
 			}
 		},
 		"enrollment": {
