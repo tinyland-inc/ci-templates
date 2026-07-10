@@ -74,10 +74,10 @@ runs:
         else
           rc=""
           for label in ${RUNNER_LABELS//,/ }; do
-            case "$label" in
-              tinyland-nix|tinyland-nix-heavy|tinyland-nix-kvm|tinyland-nix-gpu|tinyland-docker|tinyland-dind)
-                rc="$label"; break ;;
-            esac
+            if [[ "$label" =~ ^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$ ]]; then
+              rc="$label"
+              break
+            fi
           done
         fi
         echo "runner_class=$rc" >> "$GITHUB_OUTPUT"
@@ -89,7 +89,7 @@ runs:
       if: inputs.config == 'flywheel-executor' && steps.probe.outputs.runner_class == ''
       shell: bash
       run: |
-        echo "::error::flywheel-executor requires a cluster runner (tinyland-nix*, tinyland-docker, tinyland-dind). Got runner.labels=${{ join(runner.labels, ',') }}"
+        echo "::error::flywheel-executor requires an org-namespaced cluster runner (<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind). Got runner.labels=${{ join(runner.labels, ',') }}"
         exit 1
 
     - name: Install vendored flywheel bazelrc

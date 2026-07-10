@@ -70,16 +70,16 @@ def check_js_bazel_package_runner_contract() -> int:
 
     required_workflow_snippets = [
         "runner_mode=repo_owned requires explicit runner_labels_json",
-        "must include a Tinyland capability-class label",
-        '"tinyland-nix"',
+        "must include an org capability-class label",
+        "org_capability_label = re.compile",
+        "nix|nix-heavy|nix-kvm|nix-gpu|docker|dind",
         '"tinyland-docker"',
-        '"tinyland-dind"',
         "runner_mode=shared requires shared_runner_labels_json",
     ]
     required_docs_snippets = [
         "`repo_owned` is a trust and registration boundary",
-        "workflow-facing labels still stay shared Tinyland capability classes",
-        "It must not resolve to a repo-shaped label.",
+        "workflow-facing labels still stay org capability classes",
+        "It must not resolve to a known repo-label fossil.",
         "forks because publish jobs are still gated by tag/workflow policy",
     ]
     forbidden_docs_snippets = [
@@ -289,7 +289,7 @@ def check_cache_backed_optin_contract() -> int:
     # TIN-2109: the contract script must DEFINE+ENFORCE the hardened gate behaviors.
     contract = contract_path.read_text(encoding="utf-8") if contract_path.exists() else ""
     required_contract_snippets = [
-        # hosted / repo-shaped runner rejection (no silent degrade)
+        # hosted / non-cluster runner rejection (no silent degrade)
         "GF_BAZEL_RUNNER_LABELS",
         "GF_BAZEL_ALLOW_HOSTED_RUNNER",
         "classify_runner",

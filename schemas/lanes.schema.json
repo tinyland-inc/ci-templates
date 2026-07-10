@@ -82,16 +82,14 @@
 	},
 	"$defs": {
 		"runnerClass": {
-			"enum": [
-				"tinyland-nix",
-				"tinyland-nix-heavy",
-				"tinyland-nix-kvm",
-				"tinyland-nix-gpu",
-				"tinyland-docker",
-				"tinyland-dind",
-				"ubuntu-latest"
+			"anyOf": [
+				{
+					"type": "string",
+					"pattern": "^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$"
+				},
+				{ "const": "ubuntu-latest" }
 			],
-			"description": "GitHub Actions runs-on label. Cluster classes require runner-pool ACL grant via tinyland-infra/modules/spoke/runner-binding. `ubuntu-latest` is permitted only for jobs whose entire purpose is a `gh api` call."
+			"description": "GitHub Actions runs-on label: an org-namespaced capability class — `<org-pool>` prefix + one of `-nix`, `-nix-heavy`, `-nix-kvm`, `-nix-gpu`, `-docker`, `-dind` (e.g. `tinyland-nix`, `great-falls-tool-bus-nix`) — or `ubuntu-latest`, which is permitted only for jobs whose entire purpose is a `gh api` call. Cluster classes require a runner-pool grant: tinyland pools via tinyland-infra/modules/spoke/runner-binding; tenant pools via the org's own infra stack (TIN-2353)."
 		},
 		"laneTrigger": {
 			"enum": ["pull_request", "merge_main", "release_tag", "manual"],

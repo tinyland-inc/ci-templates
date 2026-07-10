@@ -92,8 +92,8 @@ mode the gate enforces (additive + optional; existing manifests still validate):
 ```
 
 **2. Opt into the cache-backed lane** on the `js-bazel-package.yml` consumer
-call (runner_mode must resolve to a shared `tinyland-*` capability class — never
-`ubuntu-latest`, never a repo-shaped `<name>-nix` label):
+call (runner_mode must resolve to an org capability-class runner — never
+`ubuntu-latest`, never a known repo-label fossil such as `dollhouse-farm-nix`):
 
 ```yaml
 jobs:
@@ -114,9 +114,9 @@ What you get, deterministically:
   `cache-attachment-contract.sh --strict` as the expected mode. Declared
   `shared-cache-backed` + no cache attached ⇒ **declared-vs-actual mismatch,
   fail closed** (no silent local-only build);
-- a hosted (`ubuntu-*`), bare `self-hosted`, or repo-shaped (`<name>-nix*`)
-  runner is **rejected** — a missing substrate is a deterministic failure, never
-  a degrade to a GitHub-hosted build;
+- a hosted (`ubuntu-*`), bare `self-hosted`, or known repo-label fossil is
+  **rejected** — a missing substrate is a deterministic failure, never a degrade
+  to a GitHub-hosted build;
 - the fetch fallback for the contract script is pinned to the immutable releasing
   tag (`v2.5.1`), so a pure-consumer spoke gets a reproducible fetch.
 

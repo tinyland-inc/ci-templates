@@ -3,7 +3,7 @@ description: "Configure Nix and cache hints. Attic may be auto-detected on self-
 
 inputs:
   attic-server:
-    description: "Attic server URL (auto-detected on self-hosted via cluster DNS)"
+    description: "Attic server URL. Required on self-hosted runners unless ATTIC_SERVER is exported in the runner environment (org overlay / fleet env) — there is no baked default endpoint (TIN-2353)."
     default: ""
   attic-cache:
     description: "Attic cache name"
@@ -15,9 +15,11 @@ inputs:
 outputs:
   runner_class:
     description: |
-      First tinyland capability-class label found in `runner.labels`, or
-      empty string if none (e.g. github-hosted `ubuntu-latest`). Consumed
-      by `flywheel-bazel` to refuse executor mode off-cluster. See
+      First org-namespaced capability-class label found in `runner.labels`
+      (`<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind`, e.g.
+      `tinyland-nix`, `great-falls-tool-bus-nix`), or empty string if none
+      (e.g. github-hosted `ubuntu-latest`). Consumed by `flywheel-bazel` to
+      refuse executor mode off-cluster. See
       tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §6.
     value: ${{ steps.detect.outputs.runner_class }}
   attic_reachable:
@@ -40,26 +42,40 @@ runs:
         attic_reachable=false
         bazel_cache_reachable=false
 
-        # Resolve runner_class from runner.labels (passed via env)
+        # Resolve runner_class from runner.labels (passed via env). Capability
+        # classes are org-namespaced — `<org-pool>` + `-nix|-nix-heavy|-nix-kvm|
+        # -nix-gpu|-docker|-dind` (TIN-2353): match the class suffix, not a
+        # tinyland-only literal list, so tenant pools resolve too.
         for label in ${RUNNER_LABELS//,/ }; do
           case "$label" in
-            tinyland-nix|tinyland-nix-heavy|tinyland-nix-kvm|tinyland-nix-gpu|tinyland-docker|tinyland-dind)
+            *-nix|*-nix-heavy|*-nix-kvm|*-nix-gpu|*-docker|*-dind)
               runner_class="$label"; break ;;
           esac
         done
 
         if [ "${{ runner.environment }}" != "github-hosted" ]; then
           # Self-hosted ARC runners have cluster DNS access
+          # Endpoint authority lives with the org overlay / fleet runner env —
+          # no baked default endpoint (TIN-2353 acceptance #2). tinyland nix
+          # pools receive ATTIC_SERVER via fleet env (tofu arc-runner module,
+          # runner_type=="nix" only); other orgs export their own or pass the
+          # attic-server input. Unset degrades exactly like unreachable DNS
+          # (warning + attic_reachable=false) because docker/dind runner types
+          # never receive the fleet env and Attic is cache-optional for them —
+          # a hard failure here would break supported js-bazel-package lanes.
           ATTIC="${{ inputs.attic-server }}"
-          ATTIC_URL="${ATTIC:-${ATTIC_SERVER:-http://attic.nix-cache.svc.cluster.local:8080}}"
-
-          ATTIC_HOST=$(echo "$ATTIC_URL" | sed 's|https\?://||;s|:.*||')
-          if getent hosts "$ATTIC_HOST" >/dev/null 2>&1; then
-            echo "ATTIC_SERVER=$ATTIC_URL" >> "$GITHUB_ENV"
-            attic_reachable=true
-            echo "::notice::Attic cache reachable at $ATTIC_URL"
+          ATTIC_URL="${ATTIC:-${ATTIC_SERVER:-}}"
+          if [ -z "$ATTIC_URL" ]; then
+            echo "::warning::nix-setup: no Attic endpoint configured — pass the attic-server input or export ATTIC_SERVER in the runner environment (org overlay / fleet env). There is no baked default endpoint; running without Attic cache."
           else
-            echo "::warning::Attic cache DNS unreachable ($ATTIC_HOST) — running without cache"
+            ATTIC_HOST=$(echo "$ATTIC_URL" | sed 's|https\?://||;s|:.*||')
+            if getent hosts "$ATTIC_HOST" >/dev/null 2>&1; then
+              echo "ATTIC_SERVER=$ATTIC_URL" >> "$GITHUB_ENV"
+              attic_reachable=true
+              echo "::notice::Attic cache reachable at $ATTIC_URL"
+            else
+              echo "::warning::Attic cache DNS unreachable ($ATTIC_HOST) — running without cache"
+            fi
           fi
 
           BAZEL_URL="${{ inputs.bazel-cache }}"

@@ -48,6 +48,12 @@ echo "== happy paths (exit 0) =="
 run_case 0 "shared-cache attaches on cluster runner, declared shared-cache-backed" \
   BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed \
   GF_FLYWHEEL_PROFILE_STATE=shared-cache-backed GF_BAZEL_RUNNER_LABELS=tinyland-nix
+run_case 0 "shared-cache attaches on tenant org nix runner" \
+  BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed \
+  GF_FLYWHEEL_PROFILE_STATE=shared-cache-backed GF_BAZEL_RUNNER_LABELS=great-falls-tool-bus-nix
+run_case 0 "shared-cache attaches on tenant org docker runner" \
+  BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed \
+  GF_FLYWHEEL_PROFILE_STATE=shared-cache-backed GF_BAZEL_RUNNER_LABELS=medical-massage-specialists-docker
 # Back-compat: no runner labels supplied (pre-TIN-2109 callers).
 run_case 0 "shared-cache attaches, no runner labels supplied (back-compat)" \
   BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed
@@ -68,11 +74,13 @@ run_case 1 "declared shared-cache-backed but no cache attaches" \
 run_case 1 "declared compatibility-local-only but a cache IS attached" \
   BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=compatibility-local-only GF_BAZEL_RUNNER_LABELS=tinyland-nix
 
-echo "== hosted / repo-label fallback rejection (exit 1) =="
+echo "== hosted / non-cluster fallback rejection (exit 1) =="
 run_case 1 "hosted ubuntu-latest runner" \
   BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed GF_BAZEL_RUNNER_LABELS=ubuntu-latest
-run_case 1 "repo-shaped <name>-nix runner label" \
+run_case 1 "known repo-shaped runner label fossil" \
   BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed GF_BAZEL_RUNNER_LABELS=jesssullivan-nix-heavy
+run_case 1 "known dind repo-shaped runner label fossil" \
+  BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed GF_BAZEL_RUNNER_LABELS=massageithaca-dind
 run_case 1 "bare self-hosted label (no capability class)" \
   BAZEL_REMOTE_CACHE="${CACHE}" GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed GF_BAZEL_RUNNER_LABELS=self-hosted
 
