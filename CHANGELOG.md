@@ -5,7 +5,17 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.11.0] — 2026-07-10
+
 ### Added
+
+- **`gf-credhelper-install` composite action** — installs the released
+  `gf-reapi-credhelper` binary for the current runner platform from a pinned
+  GloriousFlywheel release, verifies a caller-supplied SHA-256 before the binary
+  reaches `PATH`, and exports `GF_REAPI_CREDENTIAL_HELPER_BIN` for
+  `flywheel-github-oidc-profile.sh` plus the compatibility alias
+  `GF_REAPI_CREDENTIAL_HELPER`. This is the reusable non-Nix consumer surface
+  for the TIN-2724 enforce-cell `:8980` proof path.
 
 - **`authorities.artifact_registry` manifest key** — new optional string
   authority in `schemas/tinyland-repo-manifest.schema.json`, distinct from
