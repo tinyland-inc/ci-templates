@@ -81,7 +81,7 @@ jobs:
       spoke_name: ${{ steps.load.outputs.spoke_name }}
       spoke_domain: ${{ steps.load.outputs.spoke_domain }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
       - id: load
         uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v2
@@ -100,7 +100,7 @@ jobs:
       image_ref: ${{ steps.build.outputs.image_ref }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Resolve image ref
         id: imgref
@@ -130,7 +130,7 @@ jobs:
     needs: [check-blahaj-token, lanes-load, publish-image]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
       - uses: tinyland-inc/ci-templates/.github/actions/lane-dispatch@v2
         with:
@@ -153,7 +153,7 @@ jobs:
         lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
     runs-on: tinyland-nix-kvm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - if: matrix.lane.e2e
         name: E2E against lane env
         run: |
@@ -167,7 +167,7 @@ jobs:
     needs: [check-blahaj-token, lanes-load]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
       - uses: tinyland-inc/ci-templates/.github/actions/lane-reap@v2
         with:
