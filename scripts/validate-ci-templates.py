@@ -175,6 +175,157 @@ def check_flywheel_reapi_proof_contract() -> int:
     return 0
 
 
+def check_immutable_release_contract() -> int:
+    action_path = ROOT / ".github/actions/immutable-release-verify/action.yml"
+    verifier_path = ROOT / "scripts/immutable-release-verify.sh"
+    selftest_path = ROOT / "scripts/immutable-release-verify-selftest.sh"
+    workflow_path = ROOT / ".github/workflows/js-bazel-package.yml"
+    release_path = ROOT / ".github/workflows/release.yml"
+    docs_path = ROOT / "docs/js-bazel-package.md"
+
+    paths = [
+        action_path,
+        verifier_path,
+        selftest_path,
+        workflow_path,
+        release_path,
+        docs_path,
+    ]
+    ok = True
+    for path in paths:
+        if not path.exists():
+            print(f"missing {path.relative_to(ROOT)}", file=sys.stderr)
+            ok = False
+    if not ok:
+        return 1
+
+    action = action_path.read_text(encoding="utf-8")
+    verifier = verifier_path.read_text(encoding="utf-8")
+    workflow = workflow_path.read_text(encoding="utf-8")
+    release = release_path.read_text(encoding="utf-8")
+    docs = docs_path.read_text(encoding="utf-8")
+
+    required_action_snippets = [
+        "mode:",
+        "expected-source-sha:",
+        "admin-token:",
+        "contents-token:",
+        "IMMUTABLE_RELEASE_ADMIN_TOKEN",
+        "scripts/immutable-release-verify.sh",
+    ]
+    required_verifier_snippets = [
+        'readonly API_VERSION="2026-03-10"',
+        "repos/${repository}/immutable-releases",
+        "git/ref/tags/${encoded_tag}",
+        "git/tags/${object_sha}",
+        '.enabled == true',
+        '.immutable == true',
+        "gh release verify",
+        "https://in-toto.io/attestation/release/v0.2",
+        "$predicate.repository",
+        "$predicate.tag",
+        ".digest[$digest_algorithm]",
+    ]
+    required_workflow_snippets = [
+        "require_immutable_release:",
+        "IMMUTABLE_RELEASE_ADMIN_TOKEN:",
+        "Verify immutable published release",
+        "inputs.require_immutable_release &&",
+        "mode: published",
+        "expected-source-sha: ${{ github.sha }}",
+        "immutable-release-verify@v2",
+    ]
+    required_release_snippets = [
+        "Require immutable release verifier token",
+        "Cut immutable version tag",
+        "Verify immutable release prepublish contract",
+        "mode: prepublish",
+        "Move floating major tag",
+        "Create GitHub Release",
+    ]
+    required_docs_snippets = [
+        "`require_immutable_release`",
+        "Administration read",
+        "`target_commitish`",
+        "`gh release verify`",
+    ]
+
+    for path, text, snippets in (
+        (action_path, action, required_action_snippets),
+        (verifier_path, verifier, required_verifier_snippets),
+        (workflow_path, workflow, required_workflow_snippets),
+        (release_path, release, required_release_snippets),
+        (docs_path, docs, required_docs_snippets),
+    ):
+        for snippet in snippets:
+            if snippet not in text:
+                print(
+                    f"{path.relative_to(ROOT)}: missing immutable-release snippet: {snippet}",
+                    file=sys.stderr,
+                )
+                ok = False
+
+    input_block = re.search(
+        r"\n      require_immutable_release:\n(?:.*\n)*?        default: (\w+)\n",
+        workflow,
+    )
+    if not input_block or input_block.group(1) != "false":
+        print(
+            f"{workflow_path.relative_to(ROOT)}: require_immutable_release must "
+            "declare default: false",
+            file=sys.stderr,
+        )
+        ok = False
+
+    secret_block = re.search(
+        r"\n      IMMUTABLE_RELEASE_ADMIN_TOKEN:\n(?:.*\n)*?        required: (\w+)\n",
+        workflow,
+    )
+    if not secret_block or secret_block.group(1) != "false":
+        print(
+            f"{workflow_path.relative_to(ROOT)}: immutable-release token secret "
+            "must stay optional for default-off callers",
+            file=sys.stderr,
+        )
+        ok = False
+
+    if "target_commitish" in verifier:
+        print(
+            f"{verifier_path.relative_to(ROOT)}: must not trust release.target_commitish",
+            file=sys.stderr,
+        )
+        ok = False
+    if verifier.count('api_get "$admin_token"') != 1:
+        print(
+            f"{verifier_path.relative_to(ROOT)}: Administration token must be isolated "
+            "to exactly one setting request",
+            file=sys.stderr,
+        )
+        ok = False
+
+    token_index = release.find("- name: Require immutable release verifier token")
+    tag_index = release.find("- name: Cut immutable version tag")
+    prepublish_index = release.find(
+        "- name: Verify immutable release prepublish contract"
+    )
+    floating_index = release.find("- name: Move floating major tag")
+    publish_index = release.find("- name: Create GitHub Release")
+    if not (
+        -1 < token_index < tag_index < prepublish_index < floating_index < publish_index
+    ):
+        print(
+            f"{release_path.relative_to(ROOT)}: immutable prepublish gate must run "
+            "after the exact version tag and before floating-tag/release publication",
+            file=sys.stderr,
+        )
+        ok = False
+
+    if not ok:
+        return 1
+    print("immutable-release verifier is default-off, token-isolated, and release-ordered")
+    return 0
+
+
 def check_cache_backed_optin_contract() -> int:
     """Guard the TIN-2110 opt-in cache-backed lane: default-off and cache-first.
 
@@ -363,6 +514,7 @@ def main() -> int:
             "manifest",
             "internal-refs",
             "js-bazel-runner-contract",
+            "immutable-release-contract",
             "flywheel-reapi-proof-contract",
             "cache-backed-optin-contract",
         ],
@@ -373,6 +525,8 @@ def main() -> int:
         return validate_manifest()
     if args.check == "js-bazel-runner-contract":
         return check_js_bazel_package_runner_contract()
+    if args.check == "immutable-release-contract":
+        return check_immutable_release_contract()
     if args.check == "flywheel-reapi-proof-contract":
         return check_flywheel_reapi_proof_contract()
     if args.check == "cache-backed-optin-contract":

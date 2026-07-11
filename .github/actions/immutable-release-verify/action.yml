@@ -1,0 +1,53 @@
+name: immutable-release-verify
+description: >-
+  Fail closed unless an exact Git tag is bound to the expected source under
+  GitHub immutable-release enforcement; published mode also verifies the
+  immutable Release and its cryptographic release attestation.
+
+inputs:
+  mode:
+    description: Verification mode, either prepublish or published.
+    required: true
+  repository:
+    description: GitHub repository in owner/name form.
+    required: true
+  tag:
+    description: Exact release tag to peel and verify.
+    required: true
+  expected-source-sha:
+    description: Expected peeled source commit SHA (SHA-1 or SHA-256).
+    required: true
+  admin-token:
+    description: >-
+      Short-lived GitHub App installation token scoped to Administration read
+      for the target repository. Used only for the immutable-release setting
+      request.
+    required: true
+  contents-token:
+    description: >-
+      GitHub token with Contents read for exact tag, Release, and release
+      attestation reads.
+    required: true
+
+outputs:
+  source-sha:
+    description: Peeled commit SHA verified for the exact tag.
+    value: ${{ steps.verify.outputs.source-sha }}
+  release-attestation-verified:
+    description: true only when published mode verifies the release attestation.
+    value: ${{ steps.verify.outputs.release-attestation-verified }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify immutable release contract
+      id: verify
+      shell: bash
+      env:
+        IMMUTABLE_RELEASE_MODE: ${{ inputs.mode }}
+        IMMUTABLE_RELEASE_REPOSITORY: ${{ inputs.repository }}
+        IMMUTABLE_RELEASE_TAG: ${{ inputs.tag }}
+        IMMUTABLE_RELEASE_EXPECTED_SOURCE_SHA: ${{ inputs.expected-source-sha }}
+        IMMUTABLE_RELEASE_ADMIN_TOKEN: ${{ inputs.admin-token }}
+        IMMUTABLE_RELEASE_CONTENTS_TOKEN: ${{ inputs.contents-token }}
+      run: ${{ github.action_path }}/../../../scripts/immutable-release-verify.sh

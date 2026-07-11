@@ -84,9 +84,11 @@ jobs:
           fi
           version="v${BASH_REMATCH[1]}"
           major="${version%%.*}"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "major=$major"     >> "$GITHUB_OUTPUT"
-          echo "is_release=true"  >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "major=$major"
+            echo "is_release=true"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify tag does not exist
         if: steps.detect.outputs.is_release == 'true'
@@ -114,7 +116,37 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Cut immutable + floating tags
+      - name: Require immutable release verifier token
+        if: steps.detect.outputs.is_release == 'true'
+        env:
+          IMMUTABLE_RELEASE_ADMIN_TOKEN: ${{ secrets.IMMUTABLE_RELEASE_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$IMMUTABLE_RELEASE_ADMIN_TOKEN" ]; then
+            echo "::error::IMMUTABLE_RELEASE_ADMIN_TOKEN is required for release commits"
+            exit 1
+          fi
+
+      - name: Cut immutable version tag
+        if: steps.detect.outputs.is_release == 'true'
+        run: |
+          set -euo pipefail
+          v="${{ steps.detect.outputs.version }}"
+          git tag -a "$v" -m "$v"
+          git push origin "$v"
+
+      - name: Verify immutable release prepublish contract
+        if: steps.detect.outputs.is_release == 'true'
+        uses: ./.github/actions/immutable-release-verify
+        with:
+          mode: prepublish
+          repository: ${{ github.repository }}
+          tag: ${{ steps.detect.outputs.version }}
+          expected-source-sha: ${{ github.sha }}
+          admin-token: ${{ secrets.IMMUTABLE_RELEASE_ADMIN_TOKEN }}
+          contents-token: ${{ github.token }}
+
+      - name: Move floating major tag
         if: steps.detect.outputs.is_release == 'true'
         run: |
           set -euo pipefail
@@ -124,10 +156,7 @@ jobs:
             git ls-remote --tags origin "refs/tags/$major" | awk '{print $1}'
           )"
 
-          git tag -a "$v" -m "$v"
           git tag -f -a "$major" -m "track $v"
-
-          git push origin "$v"
           if [ -n "$current_major_ref" ]; then
             git push origin "refs/tags/$major" \
               --force-with-lease="refs/tags/$major:$current_major_ref"

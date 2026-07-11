@@ -14,6 +14,13 @@ and may break without notice**.
 
 ## Release flow
 
+The release workflow requires repository immutable releases to be enabled and
+`IMMUTABLE_RELEASE_ADMIN_TOKEN` to contain a short-lived GitHub App installation
+token scoped to **Administration read** for this repository. The normal
+`GITHUB_TOKEN` handles Contents reads/writes but cannot read the immutable
+release setting. Do not substitute an owner PAT or broader administration
+credential.
+
 1. **Land all changes for the release on `main`** via squash-merged PRs.
    Each PR amends `## [Unreleased]` in `CHANGELOG.md`.
 2. **Pick the next version** per SemVer:
@@ -29,7 +36,10 @@ and may break without notice**.
    ### 3a. Workflow-driven (preferred)
 
    `release.yml`'s `tag-on-release-commit` job auto-tags when a
-   commit with subject `release: vX.Y.Z` lands on main.
+   commit with subject `release: vX.Y.Z` lands on main. It pushes the exact
+   version tag, runs the immutable-release verifier in `prepublish` mode, then
+   moves the floating major and creates the GitHub Release. A missing verifier
+   token fails before either tag is pushed.
 
    ```bash
    ver=v1.2.3
@@ -70,6 +80,16 @@ and may break without notice**.
    See CHANGELOG.md ## [${ver#v}] for the full Added/Changed list."
    git tag -f -a "v${ver%%.*}" "$target_sha" -m "track $ver"
    git push origin "$ver"
+
+   # Before running this block, supply both tokens from approved secret sources
+   # without printing them. The Administration token must be a short-lived,
+   # narrowly installed GitHub App token.
+   IMMUTABLE_RELEASE_MODE=prepublish \
+   IMMUTABLE_RELEASE_REPOSITORY=tinyland-inc/ci-templates \
+   IMMUTABLE_RELEASE_TAG="$ver" \
+   IMMUTABLE_RELEASE_EXPECTED_SOURCE_SHA="$target_sha" \
+   scripts/immutable-release-verify.sh
+
    git push origin "v${ver%%.*}" --force-with-lease
 
    # Extract just this version's CHANGELOG section for the GH Release:

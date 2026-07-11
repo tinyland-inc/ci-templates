@@ -150,6 +150,14 @@ on:
         description: "When true, publish jobs run on push tag events even when dry_run remains true for PRs and branches"
         type: boolean
         default: false
+      require_immutable_release:
+        description: >-
+          Opt-in (default false) publication gate. On real publish paths, require
+          immutable releases to be enabled, bind the exact tag to github.sha,
+          and require an immutable published Release with a valid release
+          attestation before package publication.
+        type: boolean
+        default: false
     secrets:
       NPM_TOKEN:
         description: "npmjs.com publish token"
@@ -165,6 +173,12 @@ on:
         required: false
       GH_TOKEN:
         description: "Fallback GitHub CLI token with read access to sibling tinyland-inc repositories"
+        required: false
+      IMMUTABLE_RELEASE_ADMIN_TOKEN:
+        description: >-
+          Short-lived GitHub App installation token scoped to Administration
+          read for this repository. Required only when
+          require_immutable_release is enabled on a real publish path.
         required: false
 
 jobs:
@@ -271,6 +285,17 @@ jobs:
                   file=output,
               )
           PY
+
+      - name: Verify immutable published release
+        if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+        uses: tinyland-inc/ci-templates/.github/actions/immutable-release-verify@v2
+        with:
+          mode: published
+          repository: ${{ github.repository }}
+          tag: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          expected-source-sha: ${{ github.sha }}
+          admin-token: ${{ secrets.IMMUTABLE_RELEASE_ADMIN_TOKEN }}
+          contents-token: ${{ github.token }}
 
   validate:
     needs: resolve-runner
