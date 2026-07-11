@@ -21,7 +21,7 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
   tag.
 - **Repo-shape manifest validation** via `repo-manifest-validate`.
 - **Immutable release verification** via `immutable-release-verify`, with
-  separate prepublish and published modes.
+  separate settings and published-attestation modes.
 - **Schema-validated `lanes.json` loading** via `lanes-load`.
 - **Blahaj `repository_dispatch` payload construction** via
   `lane-dispatch` / `lane-reap`.
@@ -108,7 +108,7 @@ contract self-test.
 | `secrets-scan` | TruffleHog + Gitleaks. |
 | **`inherit-scaffold-skills`** | Pull `plugins/scaffold-core` from `site.scaffold` at a pinned ref and materialize `.agents/skills` + `.claude/skills`. |
 | **`repo-manifest-validate`** | Validate `tinyland.repo.json` and optionally require repo roles such as `static-spoke`. |
-| **`immutable-release-verify`** | Require immutable-release enforcement and exact tag/source binding; published mode also verifies `release.immutable` and GitHub's release attestation. |
+| **`immutable-release-verify`** | Check immutable-release enforcement with isolated Administration-read authority, or verify a published immutable Release's exact tag/source attestation with Contents-read authority. |
 | **`flywheel-bazel`** | `bazelisk` wrapper with endpoint-free `--config=flywheel[-executor]`. Supplies cache/executor endpoints from runtime env or inputs. Refuses executor on non-cluster runners. |
 | **`lanes-load`** | Validate + load `.github/lanes.json`. Outputs matrix-ready `lanes_json`. |
 | **`lane-dispatch`** | Emit Blahaj `<spoke>-lane-env` provision payload. Supports `dry_run`. |

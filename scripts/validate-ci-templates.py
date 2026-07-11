@@ -40,16 +40,32 @@ def validate_manifest() -> int:
 
 def check_internal_refs() -> int:
     ok = True
-    action_pattern = re.compile(r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@v2\b")
+    action_pattern = re.compile(
+        r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@([^\s#]+)"
+    )
     main_pattern = re.compile(r"tinyland-inc/ci-templates/.*@main")
+    full_sha_pattern = re.compile(r"[0-9a-f]{40}")
 
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
-        for action in action_pattern.findall(text):
+        for action, ref in action_pattern.findall(text):
             action_yml = ROOT / ".github/actions" / action / "action.yml"
             if not action_yml.exists():
                 print(f"{rel}: missing internal action {action_yml.relative_to(ROOT)}", file=sys.stderr)
+                ok = False
+            if action == "immutable-release-verify":
+                if not full_sha_pattern.fullmatch(ref):
+                    print(
+                        f"{rel}: privileged immutable-release verifier must use a full commit SHA, got @{ref}",
+                        file=sys.stderr,
+                    )
+                    ok = False
+            elif ref != "v2":
+                print(
+                    f"{rel}: internal action {action} must use the coherent @v2 ref, got @{ref}",
+                    file=sys.stderr,
+                )
                 ok = False
         for line_no, line in enumerate(text.splitlines(), start=1):
             if main_pattern.search(line):
@@ -182,6 +198,8 @@ def check_immutable_release_contract() -> int:
     workflow_path = ROOT / ".github/workflows/js-bazel-package.yml"
     release_path = ROOT / ".github/workflows/release.yml"
     docs_path = ROOT / "docs/js-bazel-package.md"
+    releasing_path = ROOT / "RELEASING.md"
+    workflow_selftest_path = ROOT / "scripts/immutable-release-workflow-selftest.sh"
 
     paths = [
         action_path,
@@ -190,6 +208,8 @@ def check_immutable_release_contract() -> int:
         workflow_path,
         release_path,
         docs_path,
+        releasing_path,
+        workflow_selftest_path,
     ]
     ok = True
     for path in paths:
@@ -204,18 +224,27 @@ def check_immutable_release_contract() -> int:
     workflow = workflow_path.read_text(encoding="utf-8")
     release = release_path.read_text(encoding="utf-8")
     docs = docs_path.read_text(encoding="utf-8")
+    releasing = releasing_path.read_text(encoding="utf-8")
+    workflow_selftest = workflow_selftest_path.read_text(encoding="utf-8")
 
     required_action_snippets = [
         "mode:",
         "expected-source-sha:",
         "admin-token:",
         "contents-token:",
+        "verify-attempts:",
         "IMMUTABLE_RELEASE_ADMIN_TOKEN",
+        "IMMUTABLE_RELEASE_CONTENTS_TOKEN",
         "scripts/immutable-release-verify.sh",
     ]
     required_verifier_snippets = [
         'readonly API_VERSION="2026-03-10"',
         "repos/${repository}/immutable-releases",
+        "mode must be settings or published",
+        "settings mode does not accept a Contents token",
+        "published mode does not accept an Administration token",
+        "unset IMMUTABLE_RELEASE_ADMIN_TOKEN IMMUTABLE_RELEASE_CONTENTS_TOKEN GH_TOKEN",
+        "unset admin_token",
         "git/ref/tags/${encoded_tag}",
         "git/tags/${object_sha}",
         '.enabled == true',
@@ -225,29 +254,43 @@ def check_immutable_release_contract() -> int:
         "$predicate.repository",
         "$predicate.tag",
         ".digest[$digest_algorithm]",
+        "published release did not become immutable and attestable",
     ]
     required_workflow_snippets = [
         "require_immutable_release:",
-        "IMMUTABLE_RELEASE_ADMIN_TOKEN:",
+        "IMMUTABLE_RELEASE_APP_CLIENT_ID:",
+        "IMMUTABLE_RELEASE_APP_PRIVATE_KEY:",
+        "permissions:\n      contents: read",
+        "Require release:published for immutable publication",
+        "github.event_name == 'release' && github.event.action == 'published'",
+        "permission-administration: read",
+        "Mint Administration-read installation token",
+        "Verify immutable-release setting",
         "Verify immutable published release",
         "inputs.require_immutable_release &&",
+        "mode: settings",
         "mode: published",
         "expected-source-sha: ${{ github.sha }}",
-        "immutable-release-verify@v2",
     ]
     required_release_snippets = [
-        "Require immutable release verifier token",
-        "Cut immutable version tag",
-        "Verify immutable release prepublish contract",
-        "mode: prepublish",
-        "Move floating major tag",
-        "Create GitHub Release",
+        "immutable-release-settings:",
+        "permissions: {}",
+        "Verify immutable-release setting before mutation",
+        "Cut or reuse exact version tag",
+        "Create or reuse immutable GitHub Release",
+        "Verify published attestation and source binding",
+        "Move floating major after published verification",
+        "--verify-tag",
+        "Reusing exact $VERSION tag from an interrupted release attempt",
+        "retry is complete",
     ]
     required_docs_snippets = [
         "`require_immutable_release`",
         "Administration read",
+        "release:published",
         "`target_commitish`",
         "`gh release verify`",
+        "runtime",
     ]
 
     for path, text, snippets in (
@@ -277,17 +320,21 @@ def check_immutable_release_contract() -> int:
         )
         ok = False
 
-    secret_block = re.search(
-        r"\n      IMMUTABLE_RELEASE_ADMIN_TOKEN:\n(?:.*\n)*?        required: (\w+)\n",
-        workflow,
-    )
-    if not secret_block or secret_block.group(1) != "false":
-        print(
-            f"{workflow_path.relative_to(ROOT)}: immutable-release token secret "
-            "must stay optional for default-off callers",
-            file=sys.stderr,
+    for secret_name in (
+        "IMMUTABLE_RELEASE_APP_CLIENT_ID",
+        "IMMUTABLE_RELEASE_APP_PRIVATE_KEY",
+    ):
+        secret_block = re.search(
+            rf"\n      {secret_name}:\n(?:.*\n)*?        required: (\w+)\n",
+            workflow,
         )
-        ok = False
+        if not secret_block or secret_block.group(1) != "false":
+            print(
+                f"{workflow_path.relative_to(ROOT)}: {secret_name} must stay "
+                "optional for default-off callers",
+                file=sys.stderr,
+            )
+            ok = False
 
     if "target_commitish" in verifier:
         print(
@@ -303,22 +350,100 @@ def check_immutable_release_contract() -> int:
         )
         ok = False
 
-    token_index = release.find("- name: Require immutable release verifier token")
-    tag_index = release.find("- name: Cut immutable version tag")
-    prepublish_index = release.find(
-        "- name: Verify immutable release prepublish contract"
-    )
-    floating_index = release.find("- name: Move floating major tag")
-    publish_index = release.find("- name: Create GitHub Release")
-    if not (
-        -1 < token_index < tag_index < prepublish_index < floating_index < publish_index
-    ):
+    if "IMMUTABLE_RELEASE_ADMIN_TOKEN" in workflow or "IMMUTABLE_RELEASE_ADMIN_TOKEN" in release:
         print(
-            f"{release_path.relative_to(ROOT)}: immutable prepublish gate must run "
-            "after the exact version tag and before floating-tag/release publication",
+            "workflows must mint an installation token at runtime, not consume a stored token",
             file=sys.stderr,
         )
         ok = False
+
+    self_ref_pattern = re.compile(
+        r"tinyland-inc/ci-templates/\.github/actions/immutable-release-verify@([^\s]+)"
+    )
+    self_refs = self_ref_pattern.findall(workflow + "\n" + release)
+    if len(self_refs) != 4 or any(not re.fullmatch(r"[0-9a-f]{40}", ref) for ref in self_refs):
+        print(
+            "all four privileged self-action calls must use immutable full commit SHAs",
+            file=sys.stderr,
+        )
+        ok = False
+    elif len(set(self_refs)) != 1:
+        print("privileged self-action calls must pin one reviewed implementation", file=sys.stderr)
+        ok = False
+
+    app_ref_pattern = re.compile(r"actions/create-github-app-token@([^\s]+)")
+    app_refs = app_ref_pattern.findall(workflow + "\n" + release)
+    if len(app_refs) != 2 or any(not re.fullmatch(r"[0-9a-f]{40}", ref) for ref in app_refs):
+        print("runtime App-token mint actions must use immutable full commit SHAs", file=sys.stderr)
+        ok = False
+
+    resolve_block = workflow[workflow.find("  resolve-runner:") : workflow.find("  validate:")]
+    if "permissions:\n      contents: read" not in resolve_block or "packages: write" in resolve_block:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: verifier job must have Contents-read only and no package-write authority",
+            file=sys.stderr,
+        )
+        ok = False
+
+    settings_start = release.find("  immutable-release-settings:")
+    publish_start = release.find("  publish-version-release:")
+    verify_start = release.find("  verify-published-release:")
+    floating_start = release.find("  move-floating-major:")
+    settings_block = release[settings_start:publish_start]
+    publish_block = release[publish_start:verify_start]
+    verify_block = release[verify_start:floating_start]
+    if "permissions: {}" not in settings_block or "contents: write" in settings_block:
+        print("Administration verifier job must have no GITHUB_TOKEN write authority", file=sys.stderr)
+        ok = False
+    if "immutable-release-settings" not in publish_block or "contents: write" not in publish_block:
+        print("version-tag/Release mutation must depend on settings precheck", file=sys.stderr)
+        ok = False
+    if "publish-version-release" not in verify_block or "contents: read" not in verify_block:
+        print("published verifier must follow mutation with Contents-read only", file=sys.stderr)
+        ok = False
+    floating_block = release[floating_start:]
+    if "verify-published-release" not in floating_block or "contents: write" not in floating_block:
+        print("floating-major mutation must depend on published verification", file=sys.stderr)
+        ok = False
+
+    settings_index = release.find("- name: Verify immutable-release setting before mutation")
+    tag_index = release.find("- name: Cut or reuse exact version tag")
+    publish_index = release.find("- name: Create or reuse immutable GitHub Release")
+    verify_index = release.find("- name: Verify published attestation and source binding")
+    floating_index = release.find("- name: Move floating major after published verification")
+    if not (
+        -1 < settings_index < tag_index < publish_index < verify_index < floating_index
+    ):
+        print(
+            f"{release_path.relative_to(ROOT)}: release authority must advance "
+            "settings -> version tag -> Release -> published verify -> floating major",
+            file=sys.stderr,
+        )
+        ok = False
+
+    required_workflow_test_snippets = [
+        "tag push is rejected",
+        "manual branch publication is rejected",
+        "retry reuses exact version tag",
+        "conflicting existing version tag fails closed",
+        "retry reuses published Release",
+        "conflicting version tag cannot move floating major",
+    ]
+    for snippet in required_workflow_test_snippets:
+        if snippet not in workflow_selftest:
+            print(
+                f"{workflow_selftest_path.relative_to(ROOT)}: missing event/transaction test: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    for prose_path, prose in ((docs_path, docs),):
+        if "IMMUTABLE_RELEASE_ADMIN_TOKEN" in prose:
+            print(
+                f"{prose_path.relative_to(ROOT)}: stale stored installation-token guidance remains",
+                file=sys.stderr,
+            )
+            ok = False
 
     if not ok:
         return 1

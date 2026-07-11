@@ -15,11 +15,12 @@ and may break without notice**.
 ## Release flow
 
 The release workflow requires repository immutable releases to be enabled and
-`IMMUTABLE_RELEASE_ADMIN_TOKEN` to contain a short-lived GitHub App installation
-token scoped to **Administration read** for this repository. The normal
-`GITHUB_TOKEN` handles Contents reads/writes but cannot read the immutable
-release setting. Do not substitute an owner PAT or broader administration
-credential.
+two App custody secrets: `IMMUTABLE_RELEASE_APP_CLIENT_ID` and
+`IMMUTABLE_RELEASE_APP_PRIVATE_KEY`. It uses the approved runtime GitHub App
+mint to request a repository-scoped **Administration read** installation token,
+then revokes that token automatically at job teardown. Never store an
+installation token, substitute an owner PAT, or grant the App package/write
+authority for this check.
 
 1. **Land all changes for the release on `main`** via squash-merged PRs.
    Each PR amends `## [Unreleased]` in `CHANGELOG.md`.
@@ -35,11 +36,21 @@ credential.
 
    ### 3a. Workflow-driven (preferred)
 
-   `release.yml`'s `tag-on-release-commit` job auto-tags when a
-   commit with subject `release: vX.Y.Z` lands on main. It pushes the exact
-   version tag, runs the immutable-release verifier in `prepublish` mode, then
-   moves the floating major and creates the GitHub Release. A missing verifier
-   token fails before either tag is pushed.
+   `release.yml` detects a commit with subject `release: vX.Y.Z` on main, then
+   advances authority through separate jobs:
+
+   1. plan and validate any recoverable existing exact tag with Contents read
+   2. mint the short-lived App token and check immutable-release settings with
+      no `GITHUB_TOKEN` permissions
+   3. create or reuse the exact version tag and published GitHub Release
+   4. verify the immutable Release attestation and source binding with Contents
+      read
+   5. move the floating major last, with Contents write
+
+   An interrupted run is retryable only when an existing exact tag peels to the
+   same source and an existing Release is published, non-prerelease, and
+   tag-matched. Conflicts fail closed; the floating major cannot move before
+   published verification.
 
    ```bash
    ver=v1.2.3
@@ -47,7 +58,7 @@ credential.
    git add CHANGELOG.md
    git commit -m "release: $ver"
    git push origin main
-   # release.yml fires; auto-cuts $ver + moves @vMAJOR + creates GH Release.
+   # release.yml fires; publishes/verifies $ver, then moves @vMAJOR last.
    ```
 
    ### 3b. Manual fallback
@@ -62,10 +73,14 @@ credential.
      feature branch and rebase-merged into main yields a main HEAD
      without the release subject — `release.yml` doesn't fire.
 
-   Manual cut (matches what 3a's automation would have produced):
+   Manual cut follows the same order. Mint a short-lived Administration-read
+   installation token through the approved operator App/broker path into a
+   local shell variable without printing it. The normal authenticated `gh`
+   token supplies Contents reads/writes.
 
    ```bash
    ver=v1.2.3
+   major="${ver%%.*}"
    target_sha=$(git rev-parse origin/main)   # or a specific merge SHA
 
    # Make sure CHANGELOG.md already has the ## [X.Y.Z] section.
@@ -75,22 +90,17 @@ credential.
      exit 1
    }
 
+   # Before any tag or Release mutation:
+   IMMUTABLE_RELEASE_MODE=settings \
+   IMMUTABLE_RELEASE_REPOSITORY=tinyland-inc/ci-templates \
+   IMMUTABLE_RELEASE_ADMIN_TOKEN="$admin_token" \
+   scripts/immutable-release-verify.sh
+   unset admin_token
+
    git tag -a "$ver" "$target_sha" -m "$ver
 
    See CHANGELOG.md ## [${ver#v}] for the full Added/Changed list."
-   git tag -f -a "v${ver%%.*}" "$target_sha" -m "track $ver"
    git push origin "$ver"
-
-   # Before running this block, supply both tokens from approved secret sources
-   # without printing them. The Administration token must be a short-lived,
-   # narrowly installed GitHub App token.
-   IMMUTABLE_RELEASE_MODE=prepublish \
-   IMMUTABLE_RELEASE_REPOSITORY=tinyland-inc/ci-templates \
-   IMMUTABLE_RELEASE_TAG="$ver" \
-   IMMUTABLE_RELEASE_EXPECTED_SOURCE_SHA="$target_sha" \
-   scripts/immutable-release-verify.sh
-
-   git push origin "v${ver%%.*}" --force-with-lease
 
    # Extract just this version's CHANGELOG section for the GH Release:
    awk -v v="${ver#v}" '
@@ -100,8 +110,20 @@ credential.
    ' CHANGELOG.md > /tmp/release-notes.md
 
    gh release create "$ver" \
+     --verify-tag \
+     --target "$target_sha" \
      --title "$ver" \
      --notes-file /tmp/release-notes.md
+
+   IMMUTABLE_RELEASE_MODE=published \
+   IMMUTABLE_RELEASE_REPOSITORY=tinyland-inc/ci-templates \
+   IMMUTABLE_RELEASE_TAG="$ver" \
+   IMMUTABLE_RELEASE_EXPECTED_SOURCE_SHA="$target_sha" \
+   IMMUTABLE_RELEASE_CONTENTS_TOKEN="$GH_TOKEN" \
+   scripts/immutable-release-verify.sh
+
+   git tag -f -a "$major" "$target_sha" -m "track $ver"
+   git push origin "$major" --force-with-lease
    ```
 
    Verify with `gh release view "$ver"` and at least one downstream
@@ -130,9 +152,9 @@ credential.
 
 ## Composite-action internal refs
 
-Composite actions and reusable workflows that call sibling composites
-(e.g. `flywheel-bazel` calling `nix-setup`) MUST reference siblings by the
-current major tag, not `@main` or an older major:
+Ordinary composite actions and reusable workflows that call sibling composites
+(e.g. `flywheel-bazel` calling `nix-setup`) reference siblings by the current
+major tag, not `@main` or an older major:
 
 ```yaml
 uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
@@ -142,6 +164,11 @@ This ensures a `git checkout v2.0.0` of the repo exposes a coherent
 self-referential set of action versions. A v2 reusable workflow must not call
 v1 composites unless the migration guide explicitly documents that compatibility
 boundary.
+
+The privileged `immutable-release-verify` calls are the deliberate exception:
+they pin a full commit SHA so code receiving the Administration token or
+release-read token cannot move with `@v2`. Update both pinned calls together
+only after reviewing and committing the verifier implementation first.
 
 ## Flywheel endpoint discipline
 

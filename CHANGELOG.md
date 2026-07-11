@@ -8,14 +8,15 @@ Versioning: [SemVer 2.0](https://semver.org/).
 ### Added
 
 - **Immutable release verifier (TIN-2783)** — adds one reusable composite action
-  with `prepublish` and `published` modes. Both modes require GitHub API
-  `2026-03-10` to report immutable releases enabled and bind the exact peeled
-  tag to the expected source SHA; published mode additionally requires
-  `release.immutable=true` and verifies GitHub's release attestation repository,
-  tag, and source-digest binding without trusting `target_commitish`.
-  `js-bazel-package.yml` exposes the gate behind default-off
-  `require_immutable_release`, while this repository's release workflow runs the
-  prepublish check before moving the floating major or creating the Release.
+  with credential-separated `settings` and `published` modes. The settings mode
+  uses one runtime-minted, Administration-read GitHub App token for one API
+  request; published mode uses Contents-read authority to bind the immutable
+  Release, exact peeled tag, and verified release attestation to the expected
+  source SHA without trusting `target_commitish`. `js-bazel-package.yml` exposes
+  the gate behind default-off `require_immutable_release` and restricts opted-in
+  publication to `release:published`. This repository's release workflow checks
+  settings before mutation, publishes/reuses the exact version tag and Release,
+  verifies the resulting attestation, and moves the floating major last.
 
 ## [2.11.0] — 2026-07-10
 

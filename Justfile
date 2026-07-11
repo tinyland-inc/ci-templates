@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check immutable-release-contract-check immutable-release-selftest flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check immutable-release-contract-check immutable-release-selftest immutable-release-workflow-selftest flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -52,10 +52,14 @@ js-bazel-runner-contract-check:
 immutable-release-contract-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py immutable-release-contract
 
-# Prove prepublish/published happy paths and fail-closed release checks without
+# Prove settings/published happy paths and fail-closed release checks without
 # reading live settings, tags, releases, attestations, or credentials.
 immutable-release-selftest:
     cd {{ root }} && bash scripts/immutable-release-verify-selftest.sh
+
+# Exercise the actual embedded event, retry, and floating-tag transaction steps.
+immutable-release-workflow-selftest:
+    cd {{ root }} && bash scripts/immutable-release-workflow-selftest.sh
 
 # Ensure flywheel-reapi-proof keeps child-run correlation request-id based.
 flywheel-reapi-proof-contract-check:

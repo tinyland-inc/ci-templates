@@ -9,27 +9,22 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: release-${{ github.workflow }}
   cancel-in-progress: false
 
-# Two-mode workflow:
-#
-# 1. On pull_request to main: assert CHANGELOG.md `## [Unreleased]` is
-#    non-empty. PRs that add features/fixes/breaks MUST amend the
-#    Unreleased section per RELEASING.md.
-#
-# 2. On push to main: if the head commit's message starts with
-#    `release: vX.Y.Z`, cut the immutable tag and move the floating
-#    @vX major tag. This is the documented release flow; it does NOT
-#    auto-tag arbitrary merges.
+# Pull requests prove CHANGELOG discipline. A main-branch release commit then
+# advances authority through five jobs: read-only plan, Administration-read
+# settings precheck, version-tag/Release publication, read-only attestation
+# verification, and finally the floating-major move.
 
 jobs:
   changelog-gate:
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -37,6 +32,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Assert ## [Unreleased] is non-empty
         run: |
@@ -50,7 +46,6 @@ jobs:
             echo "::error::CHANGELOG.md missing"
             exit 1
           fi
-          # Extract the body between `## [Unreleased]` and the next `## [` header.
           body=$(awk '/^## \[Unreleased\]/{flag=1;next} /^## \[/{flag=0} flag' CHANGELOG.md \
                  | grep -vE '^\s*$' || true)
           if [ -z "$body" ]; then
@@ -59,27 +54,35 @@ jobs:
           fi
           echo "::notice::CHANGELOG.md [Unreleased] has $(echo "$body" | wc -l | tr -d ' ') line(s) of content"
 
-  tag-on-release-commit:
+  release-plan:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    outputs:
+      is_release: ${{ steps.detect.outputs.is_release }}
+      version: ${{ steps.detect.outputs.version }}
+      major: ${{ steps.detect.outputs.major }}
+      source_sha: ${{ steps.detect.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
-          # Use the workflow GITHUB_TOKEN; sufficient to push tags via the
-          # contents:write permission above.
-          token: ${{ github.token }}
+          persist-credentials: false
 
       - name: Detect release commit
         id: detect
+        env:
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          subject=$(git log -1 --pretty=%s "${{ github.sha }}")
+          subject=$(git log -1 --pretty=%s "$SOURCE_SHA")
           echo "subject: $subject"
           if [[ ! "$subject" =~ ^release:\ v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "::notice::head commit is not a release commit; skipping tag cut"
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::head commit is not a release commit; skipping release cut"
+            echo "is_release=false" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           version="v${BASH_REMATCH[1]}"
@@ -87,97 +90,200 @@ jobs:
           {
             echo "version=$version"
             echo "major=$major"
+            echo "source_sha=$SOURCE_SHA"
             echo "is_release=true"
-          } >> "$GITHUB_OUTPUT"
+          } >>"$GITHUB_OUTPUT"
 
-      - name: Verify tag does not exist
+      - name: Verify release metadata and recoverable tag state
         if: steps.detect.outputs.is_release == 'true'
+        env:
+          VERSION: ${{ steps.detect.outputs.version }}
+          EXPECTED_SOURCE_SHA: ${{ steps.detect.outputs.source_sha }}
         run: |
           set -euo pipefail
-          if git rev-parse -q --verify "refs/tags/${{ steps.detect.outputs.version }}" >/dev/null; then
-            echo "::error::Tag ${{ steps.detect.outputs.version }} already exists. RELEASING.md: never reuse a tag."
+          version_without_v="${VERSION#v}"
+          if ! grep -qE "^## \[${version_without_v}\]" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::Missing ## [${version_without_v}] section. Move ## [Unreleased] contents before releasing."
             exit 1
           fi
 
-      - name: Verify CHANGELOG.md has a section for this version
-        if: steps.detect.outputs.is_release == 'true'
-        run: |
-          set -euo pipefail
-          v="${{ steps.detect.outputs.version }}"
-          v_stripped="${v#v}"
-          if ! grep -qE "^## \[${v_stripped}\]" CHANGELOG.md; then
-            echo "::error file=CHANGELOG.md::Missing ## [${v_stripped}] section. Move ## [Unreleased] contents before tagging."
-            exit 1
+          existing_ref="$(git ls-remote --tags origin "refs/tags/$VERSION" | awk 'NR == 1 {print $1}')"
+          if [ -n "$existing_ref" ]; then
+            git fetch --force --no-tags origin "refs/tags/$VERSION:refs/tags/$VERSION"
+            existing_source="$(git rev-list -n 1 "$VERSION")"
+            if [ "$existing_source" != "$EXPECTED_SOURCE_SHA" ]; then
+              echo "::error::Existing $VERSION peels to $existing_source, expected $EXPECTED_SOURCE_SHA; never reuse a release tag."
+              exit 1
+            fi
+            echo "::notice::$VERSION already binds the expected source; this release attempt is recoverable."
           fi
+
+  immutable-release-settings:
+    needs: release-plan
+    if: needs.release-plan.outputs.is_release == 'true'
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mint Administration-read installation token
+        id: admin-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ secrets.IMMUTABLE_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.IMMUTABLE_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-administration: read
+
+      - name: Verify immutable-release setting before mutation
+        uses: tinyland-inc/ci-templates/.github/actions/immutable-release-verify@6ce6ad1b6b9d2a3f40c3c05a28fd50fbaed894a3
+        with:
+          mode: settings
+          repository: ${{ github.repository }}
+          admin-token: ${{ steps.admin-token.outputs.token }}
+
+  publish-version-release:
+    needs:
+      - release-plan
+      - immutable-release-settings
+    if: needs.release-plan.outputs.is_release == 'true'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release-plan.outputs.source_sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
 
       - name: Configure git identity
-        if: steps.detect.outputs.is_release == 'true'
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Require immutable release verifier token
-        if: steps.detect.outputs.is_release == 'true'
+      - name: Cut or reuse exact version tag
         env:
-          IMMUTABLE_RELEASE_ADMIN_TOKEN: ${{ secrets.IMMUTABLE_RELEASE_ADMIN_TOKEN }}
+          VERSION: ${{ needs.release-plan.outputs.version }}
+          EXPECTED_SOURCE_SHA: ${{ needs.release-plan.outputs.source_sha }}
         run: |
           set -euo pipefail
-          if [ -z "$IMMUTABLE_RELEASE_ADMIN_TOKEN" ]; then
-            echo "::error::IMMUTABLE_RELEASE_ADMIN_TOKEN is required for release commits"
+          existing_ref="$(git ls-remote --tags origin "refs/tags/$VERSION" | awk 'NR == 1 {print $1}')"
+          if [ -n "$existing_ref" ]; then
+            git fetch --force --no-tags origin "refs/tags/$VERSION:refs/tags/$VERSION"
+            existing_source="$(git rev-list -n 1 "$VERSION")"
+            if [ "$existing_source" != "$EXPECTED_SOURCE_SHA" ]; then
+              echo "::error::Existing $VERSION peels to $existing_source, expected $EXPECTED_SOURCE_SHA; never reuse a release tag."
+              exit 1
+            fi
+            echo "::notice::Reusing exact $VERSION tag from an interrupted release attempt."
+            exit 0
+          fi
+
+          git tag -a "$VERSION" "$EXPECTED_SOURCE_SHA" -m "$VERSION"
+          git push origin "refs/tags/$VERSION"
+
+      - name: Create or reuse immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release-plan.outputs.version }}
+          EXPECTED_SOURCE_SHA: ${{ needs.release-plan.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          existing_release=""
+          if existing_release="$(gh release view "$VERSION" --json tagName,isDraft,isPrerelease 2>/dev/null)"; then
+            if ! jq -e --arg tag "$VERSION" '
+              .tagName == $tag and .isDraft == false and .isPrerelease == false
+            ' >/dev/null <<<"$existing_release"; then
+              echo "::error::Existing Release for $VERSION is draft, prerelease, or tag-mismatched."
+              exit 1
+            fi
+            echo "::notice::Reusing published Release from an interrupted release attempt."
+            exit 0
+          fi
+
+          notes_file="${RUNNER_TEMP}/release-notes-${VERSION}.md"
+          version_without_v="${VERSION#v}"
+          awk -v version="$version_without_v" '
+            $0 ~ "^## \\[" version "\\]" {flag=1; next}
+            /^## \[/ && flag {exit}
+            flag {print}
+          ' CHANGELOG.md >"$notes_file"
+          gh release create "$VERSION" \
+            --verify-tag \
+            --target "$EXPECTED_SOURCE_SHA" \
+            --title "$VERSION" \
+            --notes-file "$notes_file"
+
+  verify-published-release:
+    needs:
+      - release-plan
+      - publish-version-release
+    if: needs.release-plan.outputs.is_release == 'true'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify published attestation and source binding
+        uses: tinyland-inc/ci-templates/.github/actions/immutable-release-verify@6ce6ad1b6b9d2a3f40c3c05a28fd50fbaed894a3
+        with:
+          mode: published
+          repository: ${{ github.repository }}
+          tag: ${{ needs.release-plan.outputs.version }}
+          expected-source-sha: ${{ needs.release-plan.outputs.source_sha }}
+          contents-token: ${{ github.token }}
+
+  move-floating-major:
+    needs:
+      - release-plan
+      - verify-published-release
+    if: needs.release-plan.outputs.is_release == 'true'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release-plan.outputs.source_sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Move floating major after published verification
+        env:
+          VERSION: ${{ needs.release-plan.outputs.version }}
+          MAJOR_TAG: ${{ needs.release-plan.outputs.major }}
+          EXPECTED_SOURCE_SHA: ${{ needs.release-plan.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin "refs/tags/$VERSION:refs/tags/$VERSION"
+          version_source="$(git rev-list -n 1 "$VERSION")"
+          if [ "$version_source" != "$EXPECTED_SOURCE_SHA" ]; then
+            echo "::error::$VERSION peels to $version_source, expected $EXPECTED_SOURCE_SHA."
             exit 1
           fi
 
-      - name: Cut immutable version tag
-        if: steps.detect.outputs.is_release == 'true'
-        run: |
-          set -euo pipefail
-          v="${{ steps.detect.outputs.version }}"
-          git tag -a "$v" -m "$v"
-          git push origin "$v"
-
-      - name: Verify immutable release prepublish contract
-        if: steps.detect.outputs.is_release == 'true'
-        uses: ./.github/actions/immutable-release-verify
-        with:
-          mode: prepublish
-          repository: ${{ github.repository }}
-          tag: ${{ steps.detect.outputs.version }}
-          expected-source-sha: ${{ github.sha }}
-          admin-token: ${{ secrets.IMMUTABLE_RELEASE_ADMIN_TOKEN }}
-          contents-token: ${{ github.token }}
-
-      - name: Move floating major tag
-        if: steps.detect.outputs.is_release == 'true'
-        run: |
-          set -euo pipefail
-          v="${{ steps.detect.outputs.version }}"
-          major="${{ steps.detect.outputs.major }}"
-          current_major_ref="$(
-            git ls-remote --tags origin "refs/tags/$major" | awk '{print $1}'
-          )"
-
-          git tag -f -a "$major" -m "track $v"
+          current_major_ref="$(git ls-remote --tags origin "refs/tags/$MAJOR_TAG" | awk 'NR == 1 {print $1}')"
           if [ -n "$current_major_ref" ]; then
-            git push origin "refs/tags/$major" \
-              --force-with-lease="refs/tags/$major:$current_major_ref"
-          else
-            git push origin "refs/tags/$major"
+            git fetch --force --no-tags origin "refs/tags/$MAJOR_TAG:refs/tags/$MAJOR_TAG"
+            current_major_source="$(git rev-list -n 1 "$MAJOR_TAG")"
+            if [ "$current_major_source" = "$EXPECTED_SOURCE_SHA" ]; then
+              echo "::notice::$MAJOR_TAG already tracks $VERSION; retry is complete."
+              exit 0
+            fi
           fi
 
-      - name: Create GitHub Release
-        if: steps.detect.outputs.is_release == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          v="${{ steps.detect.outputs.version }}"
-          v_stripped="${v#v}"
-
-          # Extract just this version's CHANGELOG section as release notes.
-          notes=$(awk -v ver="$v_stripped" '
-            $0 ~ "^## \\[" ver "\\]" {flag=1; next}
-            /^## \[/ && flag {exit}
-            flag {print}
-          ' CHANGELOG.md)
-
-          gh release create "$v" --title "$v" --notes "$notes"
+          git tag -f -a "$MAJOR_TAG" "$EXPECTED_SOURCE_SHA" -m "track $VERSION"
+          if [ -n "$current_major_ref" ]; then
+            git push origin "refs/tags/$MAJOR_TAG" \
+              --force-with-lease="refs/tags/$MAJOR_TAG:$current_major_ref"
+          else
+            git push origin "refs/tags/$MAJOR_TAG"
+          fi
