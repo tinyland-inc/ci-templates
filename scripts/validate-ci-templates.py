@@ -221,6 +221,7 @@ def check_immutable_release_contract() -> int:
 
     action = action_path.read_text(encoding="utf-8")
     verifier = verifier_path.read_text(encoding="utf-8")
+    selftest = selftest_path.read_text(encoding="utf-8")
     workflow = workflow_path.read_text(encoding="utf-8")
     release = release_path.read_text(encoding="utf-8")
     docs = docs_path.read_text(encoding="utf-8")
@@ -247,6 +248,7 @@ def check_immutable_release_contract() -> int:
         "unset admin_token",
         "git/ref/tags/${encoded_tag}",
         "git/tags/${object_sha}",
+        'ref_object_sha="$object_sha"',
         '.enabled == true',
         '.immutable == true',
         "gh release verify",
@@ -254,13 +256,14 @@ def check_immutable_release_contract() -> int:
         "$predicate.repository",
         "$predicate.tag",
         ".digest[$digest_algorithm]",
+        "direct tag ref object $ref_object_sha",
         "published release did not become immutable and attestable",
     ]
     required_workflow_snippets = [
         "require_immutable_release:",
         "IMMUTABLE_RELEASE_APP_CLIENT_ID:",
         "IMMUTABLE_RELEASE_APP_PRIVATE_KEY:",
-        "permissions:\n      contents: read",
+        "attestations: read",
         "Require release:published for immutable publication",
         "github.event_name == 'release' && github.event.action == 'published'",
         "permission-administration: read",
@@ -280,9 +283,11 @@ def check_immutable_release_contract() -> int:
         "Create or reuse immutable GitHub Release",
         "Verify published attestation and source binding",
         "Move floating major after published verification",
+        "queue: max",
         "--verify-tag",
         "Reusing exact $VERSION tag from an interrupted release attempt",
         "retry is complete",
+        "refusing rollback to $VERSION",
     ]
     required_docs_snippets = [
         "`require_immutable_release`",
@@ -290,7 +295,13 @@ def check_immutable_release_contract() -> int:
         "release:published",
         "`target_commitish`",
         "`gh release verify`",
+        "attestations: read",
         "runtime",
+    ]
+    required_releasing_snippets = [
+        "Attestations read",
+        "queue: max",
+        "refuses to move the floating major backward",
     ]
 
     for path, text, snippets in (
@@ -299,6 +310,7 @@ def check_immutable_release_contract() -> int:
         (workflow_path, workflow, required_workflow_snippets),
         (release_path, release, required_release_snippets),
         (docs_path, docs, required_docs_snippets),
+        (releasing_path, releasing, required_releasing_snippets),
     ):
         for snippet in snippets:
             if snippet not in text:
@@ -378,9 +390,13 @@ def check_immutable_release_contract() -> int:
         ok = False
 
     resolve_block = workflow[workflow.find("  resolve-runner:") : workflow.find("  validate:")]
-    if "permissions:\n      contents: read" not in resolve_block or "packages: write" in resolve_block:
+    if (
+        "attestations: read" not in resolve_block
+        or "contents: read" not in resolve_block
+        or "packages: write" in resolve_block
+    ):
         print(
-            f"{workflow_path.relative_to(ROOT)}: verifier job must have Contents-read only and no package-write authority",
+            f"{workflow_path.relative_to(ROOT)}: verifier job must have Attestations/Contents read only and no package-write authority",
             file=sys.stderr,
         )
         ok = False
@@ -398,12 +414,39 @@ def check_immutable_release_contract() -> int:
     if "immutable-release-settings" not in publish_block or "contents: write" not in publish_block:
         print("version-tag/Release mutation must depend on settings precheck", file=sys.stderr)
         ok = False
-    if "publish-version-release" not in verify_block or "contents: read" not in verify_block:
-        print("published verifier must follow mutation with Contents-read only", file=sys.stderr)
+    if (
+        "publish-version-release" not in verify_block
+        or "attestations: read" not in verify_block
+        or "contents: read" not in verify_block
+    ):
+        print(
+            "published verifier must follow mutation with Attestations/Contents read only",
+            file=sys.stderr,
+        )
         ok = False
     floating_block = release[floating_start:]
     if "verify-published-release" not in floating_block or "contents: write" not in floating_block:
         print("floating-major mutation must depend on published verification", file=sys.stderr)
+        ok = False
+    if "refusing rollback to $VERSION" not in floating_block:
+        print("floating-major mutation must reject cross-version rollback", file=sys.stderr)
+        ok = False
+
+    checkout_refs = re.findall(r"actions/checkout@([^\s]+)", release)
+    expected_checkout_ref = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+    if len(checkout_refs) != 4 or any(ref != expected_checkout_ref for ref in checkout_refs):
+        print(
+            f"{release_path.relative_to(ROOT)}: all release checkouts must pin "
+            f"the reviewed {expected_checkout_ref} commit",
+            file=sys.stderr,
+        )
+        ok = False
+
+    if "queue: max" not in release or "cancel-in-progress: true" in release:
+        print(
+            f"{release_path.relative_to(ROOT)}: release concurrency must retain pending runs without cancelling active transactions",
+            file=sys.stderr,
+        )
         ok = False
 
     settings_index = release.find("- name: Verify immutable-release setting before mutation")
@@ -428,11 +471,26 @@ def check_immutable_release_contract() -> int:
         "conflicting existing version tag fails closed",
         "retry reuses published Release",
         "conflicting version tag cannot move floating major",
+        "older release rerun cannot roll floating major backward",
+        "durable queue",
     ]
     for snippet in required_workflow_test_snippets:
         if snippet not in workflow_selftest:
             print(
                 f"{workflow_selftest_path.relative_to(ROOT)}: missing event/transaction test: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    required_verifier_test_snippets = [
+        "annotated tag binds direct ref object and peels to expected commit",
+        "attestation-peeled-digest",
+        "direct tag ref object aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ]
+    for snippet in required_verifier_test_snippets:
+        if snippet not in selftest:
+            print(
+                f"{selftest_path.relative_to(ROOT)}: missing direct-ref attestation test: {snippet}",
                 file=sys.stderr,
             )
             ok = False

@@ -44,13 +44,17 @@ authority for this check.
       no `GITHUB_TOKEN` permissions
    3. create or reuse the exact version tag and published GitHub Release
    4. verify the immutable Release attestation and source binding with Contents
-      read
+      read plus Attestations read
    5. move the floating major last, with Contents write
 
    An interrupted run is retryable only when an existing exact tag peels to the
    same source and an existing Release is published, non-prerelease, and
    tag-matched. Conflicts fail closed; the floating major cannot move before
-   published verification.
+   published verification. Workflow concurrency uses `queue: max` so a newer
+   pending push does not replace an older pending release run. GitHub does not
+   guarantee dispatch order, so the final step also compares semantic versions
+   and refuses to move the floating major backward when an older run starts or
+   is re-run later.
 
    ```bash
    ver=v1.2.3
@@ -121,6 +125,8 @@ authority for this check.
    IMMUTABLE_RELEASE_EXPECTED_SOURCE_SHA="$target_sha" \
    IMMUTABLE_RELEASE_CONTENTS_TOKEN="$GH_TOKEN" \
    scripts/immutable-release-verify.sh
+
+   # GH_TOKEN needs Contents read plus Attestations read for this verification.
 
    git tag -f -a "$major" "$target_sha" -m "track $ver"
    git push origin "$major" --force-with-lease

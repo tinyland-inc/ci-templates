@@ -48,6 +48,36 @@ expect_status() {
   fi
 }
 
+check_workflow_policy() {
+  ruby -ryaml -e '
+    release = YAML.load_file(ARGV.fetch(0))
+    package = YAML.load_file(ARGV.fetch(1))
+
+    concurrency = release.fetch("concurrency")
+    abort("release concurrency must retain the supported maximum pending queue") unless concurrency["queue"] == "max"
+    abort("release concurrency must not cancel an in-progress transaction") if concurrency["cancel-in-progress"] == true
+
+    release_jobs = release.fetch("jobs")
+    verify_permissions = release_jobs.fetch("verify-published-release").fetch("permissions")
+    abort("release verifier permissions drifted") unless verify_permissions == {
+      "attestations" => "read",
+      "contents" => "read",
+    }
+
+    package_permissions = package.fetch("jobs").fetch("resolve-runner").fetch("permissions")
+    abort("package verifier permissions drifted") unless package_permissions == {
+      "attestations" => "read",
+      "contents" => "read",
+    }
+
+    expected_checkout = "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+    %w[publish-version-release move-floating-major].each do |job_name|
+      checkout = release_jobs.fetch(job_name).fetch("steps").find { |step| step.key?("uses") }
+      abort("#{job_name} checkout is not pinned to the reviewed SHA") unless checkout["uses"] == expected_checkout
+    end
+  ' "$release_workflow" "$package_workflow"
+}
+
 run_event() {
   env \
     EVENT_NAME="$1" \
@@ -57,6 +87,10 @@ run_event() {
     RELEASE_TAG="$5" \
     bash -c "$event_guard"
 }
+
+echo "== workflow privilege and concurrency policy =="
+expect_status 0 "verifier permissions, durable queue, and write-job pins are exact" \
+  check_workflow_policy
 
 echo "== immutable publication event matrix =="
 expect_status 0 "release:published with matching tag is accepted" \
@@ -170,6 +204,19 @@ major_ref_after="$(git --git-dir="$tmp/remote.git" rev-parse refs/tags/v1)"
 expect_status 1 "conflicting version tag cannot move floating major" \
   run_major_step v9.9.9 "$release_sha"
 [[ "$(git --git-dir="$tmp/remote.git" rev-parse refs/tags/v1)" == "$major_ref_before" ]]
+
+printf 'newer release\n' >>"$tmp/work/state"
+git -C "$tmp/work" commit -qam newer-release
+newer_release_sha="$(git -C "$tmp/work" rev-parse HEAD)"
+expect_status 0 "newer exact version tag is created" \
+  run_version_step v1.3.0 "$newer_release_sha"
+expect_status 0 "newer verified release advances floating major" \
+  run_major_step v1.3.0 "$newer_release_sha"
+newer_major_ref="$(git --git-dir="$tmp/remote.git" rev-parse refs/tags/v1)"
+expect_status 1 "older release rerun cannot roll floating major backward" \
+  run_major_step v1.2.3 "$release_sha"
+[[ "$(git --git-dir="$tmp/remote.git" rev-parse refs/tags/v1)" == "$newer_major_ref" ]]
+[[ "$(git --git-dir="$tmp/remote.git" rev-list -n 1 v1)" == "$newer_release_sha" ]]
 
 echo
 echo "immutable-release workflow self-test: $pass passed, $fail failed"

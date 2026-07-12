@@ -115,6 +115,7 @@ object_sha="$(jq -er '.object.sha | select(type == "string")' <<<"$object_json")
   die "tag ref response is missing object.sha"
 object_sha="$(normalize_sha "$object_sha")"
 validate_sha "$object_sha" || die "tag ref returned an invalid object SHA"
+ref_object_sha="$object_sha"
 
 depth=0
 seen_tag_objects=""
@@ -144,17 +145,18 @@ done
   die "refs/tags/$tag peels to unsupported Git object type: $object_type"
 [[ "$object_sha" == "$expected_source_sha" ]] ||
   die "refs/tags/$tag peels to $object_sha, expected $expected_source_sha"
-printf '::notice::exact tag binding verified (tag=%s, source_sha=%s)\n' \
-  "$tag" "$object_sha"
+source_sha="$object_sha"
+printf '::notice::exact tag binding verified (tag=%s, ref_object_sha=%s, source_sha=%s)\n' \
+  "$tag" "$ref_object_sha" "$source_sha"
 
 if ! gh release verify --help >/dev/null 2>&1; then
   die "installed GitHub CLI does not support cryptographic release-attestation verification"
 fi
 
-case "${#object_sha}" in
+case "${#ref_object_sha}" in
   40) digest_algorithm="sha1" ;;
   64) digest_algorithm="sha256" ;;
-  *) die "unsupported peeled commit digest length" ;;
+  *) die "unsupported tag ref object digest length" ;;
 esac
 
 release_endpoint="repos/${repository}/releases/tags/${encoded_tag}"
@@ -186,7 +188,7 @@ for ((attempt = 1; attempt <= verify_attempts; attempt++)); do
       --arg repository "$repository" \
       --arg tag "$tag" \
       --arg digest_algorithm "$digest_algorithm" \
-      --arg source_sha "$object_sha" '
+      --arg ref_object_sha "$ref_object_sha" '
         .verificationResult.statement as $statement
         | ($statement.predicate // {}) as $predicate
         | ($predicate.purl // "") as $purl
@@ -197,10 +199,10 @@ for ((attempt = 1; attempt <= verify_attempts; attempt++)); do
           and any(
             $statement.subject[]?;
             ((.uri // "") == $purl)
-            and ((.digest[$digest_algorithm] // "" | ascii_downcase) == $source_sha)
+            and ((.digest[$digest_algorithm] // "" | ascii_downcase) == $ref_object_sha)
           )
       ' >/dev/null <<<"$attestation_json"; then
-      die "verified release attestation does not bind $repository@$tag to peeled source $object_sha"
+      die "verified release attestation does not bind $repository@$tag to direct tag ref object $ref_object_sha"
     else
       attestation_verified="true"
       break
@@ -217,11 +219,11 @@ done
 [[ "$attestation_verified" == "true" ]] ||
   die "published release did not become immutable and attestable after $verify_attempts attempt(s): $last_retry_error"
 printf '::notice::release attestation binding verified (repository=%s, tag=%s, source_sha=%s)\n' \
-  "$repository" "$tag" "$object_sha"
+  "$repository" "$tag" "$source_sha"
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
-    printf 'source-sha=%s\n' "$object_sha"
+    printf 'source-sha=%s\n' "$source_sha"
     printf 'release-attestation-verified=%s\n' "$attestation_verified"
   } >>"$GITHUB_OUTPUT"
 fi

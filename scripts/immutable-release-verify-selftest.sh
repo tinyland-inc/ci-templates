@@ -108,12 +108,14 @@ if [[ "$1" == "release" && "$2" == "verify" ]]; then
 
   attested_repo="octo/example"
   attested_tag="v1.2.3"
-  attested_sha="$sha1"
+  attested_sha="$tag_object_sha"
   digest_algorithm="sha1"
   case "$scenario" in
+    lightweight) attested_sha="$sha1" ;;
     attestation-repo-mismatch) attested_repo="octo/other" ;;
     attestation-tag-mismatch) attested_tag="v9.9.9" ;;
     attestation-digest-mismatch) attested_sha="$sha1_other" ;;
+    attestation-peeled-digest) attested_sha="$sha1" ;;
     sha256)
       attested_sha="$sha256"
       digest_algorithm="sha256"
@@ -224,7 +226,7 @@ run_case 1 "immutable-release setting API failure" settings setting-api-failure 
 echo "== published happy and retry paths =="
 run_case 0 "published accepts a lightweight exact tag" published lightweight \
   "release attestation binding verified"
-run_case 0 "published peels an annotated exact tag" published published \
+run_case 0 "annotated tag binds direct ref object and peels to expected commit" published published \
   "release attestation binding verified"
 run_case 0 "published supports SHA-256 repositories" published sha256 \
   "release attestation binding verified"
@@ -252,6 +254,8 @@ run_case 1 "attestation tag binding differs" published attestation-tag-mismatch 
   "does not bind octo/example@v1.2.3"
 run_case 1 "attestation source digest differs" published attestation-digest-mismatch \
   "does not bind octo/example@v1.2.3"
+run_case 1 "annotated attestation cannot substitute peeled commit for direct ref object" published attestation-peeled-digest \
+  "direct tag ref object aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 echo
 echo "immutable-release verifier self-test: $pass passed, $fail failed"

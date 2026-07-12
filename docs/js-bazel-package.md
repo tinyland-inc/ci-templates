@@ -127,23 +127,26 @@ come from a `release:published` event with a matching tag ref. Tag pushes,
 manual branch runs, and mismatched release/ref payloads fail closed before the
 publish jobs; pull requests and dry-runs do not need the App credential.
 
-The Contents-read `resolve-runner` job first mints a repository-scoped
-installation token at runtime through the approved GitHub App pattern. The
-`settings` invocation receives only that Administration-read token and performs
-exactly one setting request. A separate `published` invocation receives only the
-job's Contents-read `GITHUB_TOKEN`. Validation and both publication jobs depend
-on this gate. It fails closed unless all of the following are true:
+The Contents- and Attestations-read `resolve-runner` job first mints a
+repository-scoped installation token at runtime through the approved GitHub App
+pattern. The `settings` invocation receives only that Administration-read token
+and performs exactly one setting request. A separate `published` invocation
+receives only the job's read-only `GITHUB_TOKEN`. Validation and both
+publication jobs depend on this gate. It fails closed unless all of the
+following are true:
 
 - the run is attached to an exact tag ref and GitHub reports that tag's peeled
   commit as `github.sha`
 - `GET /repos/{owner}/{repo}/immutable-releases`, using GitHub API version
   `2026-03-10`, reports `enabled: true`
-- the exact tag ref peels through any annotated tag objects to `github.sha`
+- the exact tag ref peels through any annotated tag objects to `github.sha`,
+  while retaining the direct ref object digest used by GitHub's release
+  attestation
 - the published Release exists for that exact tag and reports
   `immutable: true`
 - `gh release verify` cryptographically verifies GitHub's release attestation,
-  and the verified statement binds the same repository, exact tag, and peeled
-  source digest
+  and the verified statement binds the same repository, exact tag, and direct
+  tag-ref object digest
 
 Supply `IMMUTABLE_RELEASE_APP_CLIENT_ID` and
 `IMMUTABLE_RELEASE_APP_PRIVATE_KEY` from the approved App custody path. Do not
@@ -151,8 +154,9 @@ store an installation token. The workflow pins `actions/create-github-app-token`
 to a full commit SHA, requests only **Administration read** for the caller
 repository, and lets the action revoke the short-lived token when the job ends.
 The verifier unsets the App token before any later `git`, `jq`, or `gh` child
-process. The job explicitly has `contents: read`, never `packages: write`; the
-separate package publication jobs retain only the caller authority they need.
+process. The job explicitly has `contents: read` plus `attestations: read`,
+never `packages: write`; the separate package publication jobs retain only the
+caller authority they need.
 
 ```yaml
 on:
@@ -160,6 +164,7 @@ on:
     types: [published]
 
 permissions:
+  attestations: read
   contents: read
   packages: write
 
@@ -180,13 +185,15 @@ GitHub's Release REST response exposes `immutable`, but it does not expose the
 attested source commit as a release field. `target_commitish` may be a branch or
 other creation hint and is not evidence that the current exact tag still binds
 the expected source, so the verifier never trusts it. Published mode instead
-peels the tag independently and checks the cryptographically verified release
-attestation's repository/tag predicate and release-subject digest. If the
-installed GitHub CLI lacks `gh release verify`, or GitHub has not made a valid
-release attestation available after the bounded retry window, published mode
-fails closed; there is no weaker `target_commitish` fallback. Re-running an
-interrupted publication is safe: the exact tag and Release must already match,
-and the floating major is never part of this reusable package workflow.
+proves both links: the exact tag peels to the expected commit, and the
+cryptographically verified release attestation binds the repository/tag
+predicate plus the direct tag-ref object digest. For a lightweight tag those
+digests are the same; for an annotated tag they are deliberately different. If
+the installed GitHub CLI lacks `gh release verify`, or GitHub has not made a
+valid release attestation available after the bounded retry window, published
+mode fails closed; there is no weaker `target_commitish` fallback. Re-running
+an interrupted publication is safe: the exact tag and Release must already
+match, and the floating major is never part of this reusable package workflow.
 
 ### `cache_backed`
 

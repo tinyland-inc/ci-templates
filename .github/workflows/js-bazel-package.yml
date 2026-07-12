@@ -188,6 +188,7 @@ on:
 jobs:
   resolve-runner:
     permissions:
+      attestations: read
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
