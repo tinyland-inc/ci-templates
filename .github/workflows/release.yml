@@ -8,6 +8,12 @@ on:
       - "!CHANGELOG.md"
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact SemVer release tag to cut from the selected main commit (vMAJOR.MINOR.PATCH)"
+        required: true
+        type: string
 
 permissions: {}
 
@@ -58,7 +64,9 @@ jobs:
           echo "::notice::CHANGELOG.md [Unreleased] has $(echo "$body" | wc -l | tr -d ' ') line(s) of content"
 
   release-plan:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -78,17 +86,28 @@ jobs:
       - name: Detect release commit
         id: detect
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_VERSION: ${{ inputs.version }}
           SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          subject=$(git log -1 --pretty=%s "$SOURCE_SHA")
-          echo "subject: $subject"
-          if [[ ! "$subject" =~ ^release:\ v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "::notice::head commit is not a release commit; skipping release cut"
-            echo "is_release=false" >>"$GITHUB_OUTPUT"
-            exit 0
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [[ ! "$REQUESTED_VERSION" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "::error::manual release version must match vMAJOR.MINOR.PATCH"
+              exit 1
+            fi
+            version="$REQUESTED_VERSION"
+            echo "manual release dispatch: $version at $SOURCE_SHA"
+          else
+            subject=$(git log -1 --pretty=%s "$SOURCE_SHA")
+            echo "subject: $subject"
+            if [[ ! "$subject" =~ ^release:\ v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "::notice::head commit is not a release commit; skipping release cut"
+              echo "is_release=false" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            version="v${BASH_REMATCH[1]}"
           fi
-          version="v${BASH_REMATCH[1]}"
           major="${version%%.*}"
           {
             echo "version=$version"
@@ -124,10 +143,18 @@ jobs:
   immutable-release-settings:
     needs: release-plan
     if: needs.release-plan.outputs.is_release == 'true'
-    permissions: {}
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout reviewed verifier source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release-plan.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Mint Administration-read installation token
         id: admin-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
@@ -139,7 +166,7 @@ jobs:
           permission-administration: read
 
       - name: Verify immutable-release setting before mutation
-        uses: tinyland-inc/ci-templates/.github/actions/immutable-release-verify@6ce6ad1b6b9d2a3f40c3c05a28fd50fbaed894a3
+        uses: ./.github/actions/immutable-release-verify
         with:
           mode: settings
           repository: ${{ github.repository }}
@@ -230,8 +257,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout reviewed verifier source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release-plan.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Verify published attestation and source binding
-        uses: tinyland-inc/ci-templates/.github/actions/immutable-release-verify@6ce6ad1b6b9d2a3f40c3c05a28fd50fbaed894a3
+        uses: ./.github/actions/immutable-release-verify
         with:
           mode: published
           repository: ${{ github.repository }}
@@ -267,6 +301,16 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ needs.release-plan.outputs.source_sha }}
         run: |
           set -euo pipefail
+          if [ "${VERSION%%.*}" != "$MAJOR_TAG" ]; then
+            echo "::error::candidate $VERSION does not belong to floating tag $MAJOR_TAG."
+            exit 1
+          fi
+
+          version_ref="$(git ls-remote --refs --tags origin "refs/tags/$VERSION" | awk 'NR == 1 {print $1}')"
+          if [ -z "$version_ref" ]; then
+            echo "::error::Exact release tag $VERSION does not exist remotely."
+            exit 1
+          fi
           git fetch --force --no-tags origin "refs/tags/$VERSION:refs/tags/$VERSION"
           version_source="$(git rev-list -n 1 "$VERSION")"
           if [ "$version_source" != "$EXPECTED_SOURCE_SHA" ]; then
@@ -274,15 +318,10 @@ jobs:
             exit 1
           fi
 
-          current_major_ref="$(git ls-remote --tags origin "refs/tags/$MAJOR_TAG" | awk 'NR == 1 {print $1}')"
+          current_major_ref="$(git ls-remote --refs --tags origin "refs/tags/$MAJOR_TAG" | awk 'NR == 1 {print $1}')"
           if [ -n "$current_major_ref" ]; then
             git fetch --force --no-tags origin "refs/tags/$MAJOR_TAG:refs/tags/$MAJOR_TAG"
             current_major_source="$(git rev-list -n 1 "$MAJOR_TAG")"
-            if [ "$current_major_source" = "$EXPECTED_SOURCE_SHA" ]; then
-              echo "::notice::$MAJOR_TAG already tracks $VERSION; retry is complete."
-              exit 0
-            fi
-
             if [ "$(git cat-file -t "$MAJOR_TAG")" != "tag" ]; then
               echo "::error::$MAJOR_TAG is not an annotated workflow-owned tag; refusing to replace unknown state."
               exit 1
@@ -293,6 +332,21 @@ jobs:
               exit 1
             fi
             current_version="${BASH_REMATCH[1]}"
+            if [ "${current_version%%.*}" != "$MAJOR_TAG" ]; then
+              echo "::error::$MAJOR_TAG annotation references cross-major $current_version; refusing to replace forged state."
+              exit 1
+            fi
+            current_version_ref="$(git ls-remote --refs --tags origin "refs/tags/$current_version" | awk 'NR == 1 {print $1}')"
+            if [ -z "$current_version_ref" ]; then
+              echo "::error::$MAJOR_TAG references missing exact tag $current_version; refusing to trust annotation text."
+              exit 1
+            fi
+            git fetch --force --no-tags origin "refs/tags/$current_version:refs/tags/$current_version"
+            current_version_source="$(git rev-list -n 1 "$current_version")"
+            if [ "$current_version_source" != "$current_major_source" ]; then
+              echo "::error::$MAJOR_TAG peels to $current_major_source but $current_version peels to $current_version_source; refusing forged state."
+              exit 1
+            fi
             version_relation="$(
               CURRENT_VERSION="$current_version" CANDIDATE_VERSION="$VERSION" python3 - <<'PY'
           import os
@@ -317,8 +371,8 @@ jobs:
                 exit 1
                 ;;
               same)
-                echo "::error::$MAJOR_TAG claims $VERSION but points to $current_major_source, expected $EXPECTED_SOURCE_SHA."
-                exit 1
+                echo "::notice::$MAJOR_TAG already tracks $VERSION; retry is complete."
+                exit 0
                 ;;
               older) ;;
               *)

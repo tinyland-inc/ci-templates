@@ -44,7 +44,6 @@ def check_internal_refs() -> int:
         r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@([^\s#]+)"
     )
     main_pattern = re.compile(r"tinyland-inc/ci-templates/.*@main")
-    full_sha_pattern = re.compile(r"[0-9a-f]{40}")
 
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
@@ -55,12 +54,12 @@ def check_internal_refs() -> int:
                 print(f"{rel}: missing internal action {action_yml.relative_to(ROOT)}", file=sys.stderr)
                 ok = False
             if action == "immutable-release-verify":
-                if not full_sha_pattern.fullmatch(ref):
-                    print(
-                        f"{rel}: privileged immutable-release verifier must use a full commit SHA, got @{ref}",
-                        file=sys.stderr,
-                    )
-                    ok = False
+                print(
+                    f"{rel}: privileged immutable-release verifier must use its "
+                    "reviewed local checkout, not a remote self-reference",
+                    file=sys.stderr,
+                )
+                ok = False
             elif ref != "v2":
                 print(
                     f"{rel}: internal action {action} must use the coherent @v2 ref, got @{ref}",
@@ -263,8 +262,13 @@ def check_immutable_release_contract() -> int:
         "require_immutable_release:",
         "IMMUTABLE_RELEASE_APP_CLIENT_ID:",
         "IMMUTABLE_RELEASE_APP_PRIVATE_KEY:",
+        "actions: read",
         "attestations: read",
         "Require release:published for immutable publication",
+        "Resolve reviewed immutable-release verifier source",
+        ".referenced_workflows[]?",
+        "steps.immutable-release-source.outputs.sha",
+        "./.ci-templates-immutable-release/.github/actions/immutable-release-verify",
         "github.event_name == 'release' && github.event.action == 'published'",
         "permission-administration: read",
         "Mint Administration-read installation token",
@@ -283,8 +287,11 @@ def check_immutable_release_contract() -> int:
         "Create or reuse immutable GitHub Release",
         "Verify published attestation and source binding",
         "Move floating major after published verification",
+        "workflow_dispatch:",
         "queue: max",
         "--verify-tag",
+        "references missing exact tag $current_version",
+        '--force-with-lease="refs/tags/$MAJOR_TAG:$current_major_ref"',
         "Reusing exact $VERSION tag from an interrupted release attempt",
         "retry is complete",
         "refusing rollback to $VERSION",
@@ -302,6 +309,7 @@ def check_immutable_release_contract() -> int:
         "Attestations read",
         "queue: max",
         "refuses to move the floating major backward",
+        "gh workflow run release.yml",
     ]
 
     for path, text, snippets in (
@@ -369,18 +377,43 @@ def check_immutable_release_contract() -> int:
         )
         ok = False
 
-    self_ref_pattern = re.compile(
+    remote_self_ref_pattern = re.compile(
         r"tinyland-inc/ci-templates/\.github/actions/immutable-release-verify@([^\s]+)"
     )
-    self_refs = self_ref_pattern.findall(workflow + "\n" + release)
-    if len(self_refs) != 4 or any(not re.fullmatch(r"[0-9a-f]{40}", ref) for ref in self_refs):
+    remote_self_refs = remote_self_ref_pattern.findall(workflow + "\n" + release)
+    if remote_self_refs:
         print(
-            "all four privileged self-action calls must use immutable full commit SHAs",
+            "privileged verifier calls must execute the reviewed local action tree, "
+            "not a remote self-pin that can become stale",
             file=sys.stderr,
         )
         ok = False
-    elif len(set(self_refs)) != 1:
-        print("privileged self-action calls must pin one reviewed implementation", file=sys.stderr)
+
+    local_package_ref = (
+        "uses: ./.ci-templates-immutable-release/.github/actions/immutable-release-verify"
+    )
+    local_release_ref = "uses: ./.github/actions/immutable-release-verify"
+    if workflow.count(local_package_ref) != 2 or release.count(local_release_ref) != 2:
+        print(
+            "all four privileged verifier calls must use their exact reviewed local trees",
+            file=sys.stderr,
+        )
+        ok = False
+
+    source_index = workflow.find("- name: Resolve reviewed immutable-release verifier source")
+    source_checkout_index = workflow.find(
+        "- name: Checkout reviewed immutable-release verifier tree"
+    )
+    package_mint_index = workflow.find("- name: Mint Administration-read installation token")
+    package_verify_index = workflow.find("- name: Verify immutable-release setting")
+    if not (
+        -1 < source_index < source_checkout_index < package_mint_index < package_verify_index
+    ):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: reviewed verifier source must resolve and "
+            "checkout before any privileged token is minted",
+            file=sys.stderr,
+        )
         ok = False
 
     app_ref_pattern = re.compile(r"actions/create-github-app-token@([^\s]+)")
@@ -391,12 +424,14 @@ def check_immutable_release_contract() -> int:
 
     resolve_block = workflow[workflow.find("  resolve-runner:") : workflow.find("  validate:")]
     if (
-        "attestations: read" not in resolve_block
+        "actions: read" not in resolve_block
+        or "attestations: read" not in resolve_block
         or "contents: read" not in resolve_block
         or "packages: write" in resolve_block
     ):
         print(
-            f"{workflow_path.relative_to(ROOT)}: verifier job must have Attestations/Contents read only and no package-write authority",
+            f"{workflow_path.relative_to(ROOT)}: verifier job must have "
+            "Actions/Attestations/Contents read only and no package-write authority",
             file=sys.stderr,
         )
         ok = False
@@ -408,8 +443,11 @@ def check_immutable_release_contract() -> int:
     settings_block = release[settings_start:publish_start]
     publish_block = release[publish_start:verify_start]
     verify_block = release[verify_start:floating_start]
-    if "permissions: {}" not in settings_block or "contents: write" in settings_block:
-        print("Administration verifier job must have no GITHUB_TOKEN write authority", file=sys.stderr)
+    if "contents: read" not in settings_block or "contents: write" in settings_block:
+        print(
+            "Administration verifier job must have only read authority for its reviewed checkout",
+            file=sys.stderr,
+        )
         ok = False
     if "immutable-release-settings" not in publish_block or "contents: write" not in publish_block:
         print("version-tag/Release mutation must depend on settings precheck", file=sys.stderr)
@@ -434,9 +472,20 @@ def check_immutable_release_contract() -> int:
 
     checkout_refs = re.findall(r"actions/checkout@([^\s]+)", release)
     expected_checkout_ref = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
-    if len(checkout_refs) != 4 or any(ref != expected_checkout_ref for ref in checkout_refs):
+    if len(checkout_refs) != 6 or any(ref != expected_checkout_ref for ref in checkout_refs):
         print(
             f"{release_path.relative_to(ROOT)}: all release checkouts must pin "
+            f"the reviewed {expected_checkout_ref} commit",
+            file=sys.stderr,
+        )
+        ok = False
+
+    package_checkout_refs = re.findall(r"actions/checkout@([^\s]+)", workflow)
+    if len(package_checkout_refs) != 2 or any(
+        ref != expected_checkout_ref for ref in package_checkout_refs
+    ):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: package and verifier checkouts must pin "
             f"the reviewed {expected_checkout_ref} commit",
             file=sys.stderr,
         )
@@ -465,13 +514,21 @@ def check_immutable_release_contract() -> int:
         ok = False
 
     required_workflow_test_snippets = [
+        "stale pinned verifier action tree is rejected",
+        "stale checked-out verifier action tree is rejected",
+        "run metadata resolves the reviewed reusable-workflow tree",
         "tag push is rejected",
         "manual branch publication is rejected",
+        "manual fallback dispatch selects an exact version and source",
+        "manual fallback rejects a non-SemVer version",
         "retry reuses exact version tag",
         "conflicting existing version tag fails closed",
         "retry reuses published Release",
         "conflicting version tag cannot move floating major",
         "older release rerun cannot roll floating major backward",
+        "forged annotation cannot name a missing exact tag",
+        "forged annotation cannot borrow a mismatched exact tag",
+        "manual fallback cannot move the floating major backward",
         "durable queue",
     ]
     for snippet in required_workflow_test_snippets:

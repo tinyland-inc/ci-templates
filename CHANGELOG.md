@@ -19,7 +19,15 @@ Versioning: [SemVer 2.0](https://semver.org/).
   mutation, publishes/reuses the exact version tag and Release, verifies the
   resulting attestation, retains pending runs with GitHub's supported maximum
   concurrency queue, and moves the floating major last only when that move is
-  SemVer-monotonic.
+  SemVer-monotonic. Privileged verifier calls execute from the exact reviewed
+  workflow source instead of a stale remote self-pin: release jobs use the
+  planned source SHA, while the reusable package workflow resolves its commit
+  from authenticated `referenced_workflows` run metadata. Floating-major
+  movement now proves the annotation's exact tag exists, belongs to the same
+  major, and peels to the current major-tag commit before comparing versions.
+  The manual fallback dispatches this same transaction from `main`, including
+  its explicit remote tag lease, rather than duplicating tag and Release
+  mutations in an operator shell.
 
 ## [2.11.0] — 2026-07-10
 

@@ -65,7 +65,7 @@ authority for this check.
    # release.yml fires; publishes/verifies $ver, then moves @vMAJOR last.
    ```
 
-   ### 3b. Manual fallback
+   ### 3b. Manual dispatch fallback
 
    Use when 3a's "push to main" doesn't work in your environment:
 
@@ -77,60 +77,40 @@ authority for this check.
      feature branch and rebase-merged into main yields a main HEAD
      without the release subject — `release.yml` doesn't fire.
 
-   Manual cut follows the same order. Mint a short-lived Administration-read
-   installation token through the approved operator App/broker path into a
-   local shell variable without printing it. The normal authenticated `gh`
-   token supplies Contents reads/writes.
+   Dispatch the same release workflow from `main` with the exact version. This
+   is not a second implementation: it enters the same settings check, exact-tag
+   and Release publication, Attestations read verification, and floating-major
+   compare-and-swap jobs as 3a. No App token, tag, or Release is created from the
+   operator shell.
 
    ```bash
+   set -euo pipefail
    ver=v1.2.3
-   major="${ver%%.*}"
-   target_sha=$(git rev-parse origin/main)   # or a specific merge SHA
-
-   # Make sure CHANGELOG.md already has the ## [X.Y.Z] section.
-   # If not, land that via a normal PR first.
-   grep -qE "^## \\[${ver#v}\\]" CHANGELOG.md || {
-     echo "CHANGELOG.md missing ## [${ver#v}] section — land that PR first"
+   run_url="$(
+     gh workflow run release.yml \
+       --repo tinyland-inc/ci-templates \
+       --ref main \
+       --raw-field "version=$ver"
+   )"
+   run_id="${run_url##*/}"
+   [[ "$run_id" =~ ^[0-9]+$ ]] || {
+     echo "release dispatch did not return a run URL: $run_url" >&2
      exit 1
    }
-
-   # Before any tag or Release mutation:
-   IMMUTABLE_RELEASE_MODE=settings \
-   IMMUTABLE_RELEASE_REPOSITORY=tinyland-inc/ci-templates \
-   IMMUTABLE_RELEASE_ADMIN_TOKEN="$admin_token" \
-   scripts/immutable-release-verify.sh
-   unset admin_token
-
-   git tag -a "$ver" "$target_sha" -m "$ver
-
-   See CHANGELOG.md ## [${ver#v}] for the full Added/Changed list."
-   git push origin "$ver"
-
-   # Extract just this version's CHANGELOG section for the GH Release:
-   awk -v v="${ver#v}" '
-     $0 ~ "^## \\[" v "\\]" {flag=1; next}
-     /^## \[/ && flag {exit}
-     flag {print}
-   ' CHANGELOG.md > /tmp/release-notes.md
-
-   gh release create "$ver" \
-     --verify-tag \
-     --target "$target_sha" \
-     --title "$ver" \
-     --notes-file /tmp/release-notes.md
-
-   IMMUTABLE_RELEASE_MODE=published \
-   IMMUTABLE_RELEASE_REPOSITORY=tinyland-inc/ci-templates \
-   IMMUTABLE_RELEASE_TAG="$ver" \
-   IMMUTABLE_RELEASE_EXPECTED_SOURCE_SHA="$target_sha" \
-   IMMUTABLE_RELEASE_CONTENTS_TOKEN="$GH_TOKEN" \
-   scripts/immutable-release-verify.sh
-
-   # GH_TOKEN needs Contents read plus Attestations read for this verification.
-
-   git tag -f -a "$major" "$target_sha" -m "track $ver"
-   git push origin "$major" --force-with-lease
+   gh run watch "$run_id" \
+     --repo tinyland-inc/ci-templates \
+     --compact \
+     --exit-status
    ```
+
+   The dispatch job is accepted only from `refs/heads/main`, the version input
+   must match `vMAJOR.MINOR.PATCH`, and `CHANGELOG.md` at that exact main commit
+   must contain the matching section. The shared floating-major step proves the
+   annotation's referenced exact tag exists, belongs to the same major, and
+   peels to the current `vMAJOR` commit before comparing versions. Movement uses
+   the remote tag object captured by `git ls-remote` as the explicit
+   `--force-with-lease=refs/tags/vMAJOR:<object>` expectation; a concurrent move
+   or backward request fails closed.
 
    Verify with `gh release view "$ver"` and at least one downstream
    spoke bumping its `@v...` pin.
@@ -171,10 +151,14 @@ self-referential set of action versions. A v2 reusable workflow must not call
 v1 composites unless the migration guide explicitly documents that compatibility
 boundary.
 
-The privileged `immutable-release-verify` calls are the deliberate exception:
-they pin a full commit SHA so code receiving the Administration token or
-release-read token cannot move with `@v2`. Update both pinned calls together
-only after reviewing and committing the verifier implementation first.
+The privileged `immutable-release-verify` calls are the deliberate exception.
+They do not use a remote self-reference because a workflow cannot embed its own
+future commit SHA without a circular update. Release jobs check out the planned
+main source SHA and invoke the local verifier action. The reusable package
+workflow reads its resolved workflow SHA from the authenticated run API's
+`referenced_workflows` record, checks out that exact ci-templates tree, and then
+invokes the local action. Validation rejects remote verifier self-pins and any
+checkout that is not tied to those reviewed source SHAs.
 
 ## Flywheel endpoint discipline
 

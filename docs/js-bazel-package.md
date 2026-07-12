@@ -127,13 +127,17 @@ come from a `release:published` event with a matching tag ref. Tag pushes,
 manual branch runs, and mismatched release/ref payloads fail closed before the
 publish jobs; pull requests and dry-runs do not need the App credential.
 
-The Contents- and Attestations-read `resolve-runner` job first mints a
+The Actions-, Contents-, and Attestations-read `resolve-runner` job first reads
+the authenticated workflow-run record and selects the one
+`referenced_workflows` entry for this reusable workflow. It checks out the
+ci-templates verifier tree at that resolved commit, then mints a
 repository-scoped installation token at runtime through the approved GitHub App
-pattern. The `settings` invocation receives only that Administration-read token
-and performs exactly one setting request. A separate `published` invocation
-receives only the job's read-only `GITHUB_TOKEN`. Validation and both
-publication jobs depend on this gate. It fails closed unless all of the
-following are true:
+pattern. This avoids a stale remote self-action pin without requiring the
+workflow to embed its own impossible future commit SHA. The `settings`
+invocation receives only that Administration-read token and performs exactly
+one setting request. A separate `published` invocation receives only the job's
+read-only `GITHUB_TOKEN`. Validation and both publication jobs depend on this
+gate. It fails closed unless all of the following are true:
 
 - the run is attached to an exact tag ref and GitHub reports that tag's peeled
   commit as `github.sha`
@@ -154,9 +158,10 @@ store an installation token. The workflow pins `actions/create-github-app-token`
 to a full commit SHA, requests only **Administration read** for the caller
 repository, and lets the action revoke the short-lived token when the job ends.
 The verifier unsets the App token before any later `git`, `jq`, or `gh` child
-process. The job explicitly has `contents: read` plus `attestations: read`,
-never `packages: write`; the separate package publication jobs retain only the
-caller authority they need.
+process. The job explicitly has `actions: read`, `contents: read`, and
+`attestations: read`, never `packages: write`; the separate package publication
+jobs retain only the caller authority they need. Callers must grant those three
+read permissions because a reusable workflow cannot elevate the caller token.
 
 ```yaml
 on:
@@ -164,6 +169,7 @@ on:
     types: [published]
 
 permissions:
+  actions: read
   attestations: read
   contents: read
   packages: write

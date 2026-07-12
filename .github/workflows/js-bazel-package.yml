@@ -188,6 +188,7 @@ on:
 jobs:
   resolve-runner:
     permissions:
+      actions: read
       attestations: read
       contents: read
     runs-on: ubuntu-latest
@@ -313,6 +314,52 @@ jobs:
             exit 1
           fi
 
+      - name: Resolve reviewed immutable-release verifier source
+        id: immutable-release-source
+        if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EXPECTED_WORKFLOW: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml
+        run: |
+          set -euo pipefail
+          run_json="$(gh api --method GET "repos/$RUN_REPOSITORY/actions/runs/$RUN_ID")"
+          if ! verifier_sha="$(
+              jq -er --arg workflow "$EXPECTED_WORKFLOW" '
+                [
+                  .referenced_workflows[]?
+                  | select((.path // "") | startswith($workflow + "@"))
+                  | .sha
+                  | ascii_downcase
+                ]
+                | unique
+                | if length == 1 then .[0]
+                  elif length == 0 then error("reviewed reusable workflow source is absent")
+                  else error("reviewed reusable workflow source is ambiguous")
+                  end
+              ' <<<"$run_json"
+            )"; then
+            echo "::error::cannot resolve the reviewed reusable workflow source from run metadata"
+            exit 1
+          fi
+          if [[ ! "$verifier_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::resolved reusable workflow source is not a full commit SHA"
+            exit 1
+          fi
+          echo "sha=$verifier_sha" >>"$GITHUB_OUTPUT"
+
+      - name: Checkout reviewed immutable-release verifier tree
+        if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: tinyland-inc/ci-templates
+          ref: ${{ steps.immutable-release-source.outputs.sha }}
+          path: .ci-templates-immutable-release
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Mint Administration-read installation token
         id: immutable-release-admin-token
         if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
@@ -326,7 +373,7 @@ jobs:
 
       - name: Verify immutable-release setting
         if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
-        uses: tinyland-inc/ci-templates/.github/actions/immutable-release-verify@6ce6ad1b6b9d2a3f40c3c05a28fd50fbaed894a3
+        uses: ./.ci-templates-immutable-release/.github/actions/immutable-release-verify
         with:
           mode: settings
           repository: ${{ github.repository }}
@@ -334,7 +381,7 @@ jobs:
 
       - name: Verify immutable published release
         if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
-        uses: tinyland-inc/ci-templates/.github/actions/immutable-release-verify@6ce6ad1b6b9d2a3f40c3c05a28fd50fbaed894a3
+        uses: ./.ci-templates-immutable-release/.github/actions/immutable-release-verify
         with:
           mode: published
           repository: ${{ github.repository }}
