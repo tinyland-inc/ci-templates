@@ -147,7 +147,15 @@ on:
         type: boolean
         default: true
       publish_on_tag:
-        description: "When true, publish jobs run on push tag events even when dry_run remains true for PRs and branches"
+        description: "Legacy non-immutable mode: publish on push tag events even when dry_run remains true"
+        type: boolean
+        default: false
+      require_immutable_release:
+        description: >-
+          Opt-in (default false) publication gate. Real publication must run
+          from release:published; require immutable releases to be enabled,
+          bind the exact tag to github.sha, and verify the published Release
+          attestation before package publication.
         type: boolean
         default: false
     secrets:
@@ -166,9 +174,23 @@ on:
       GH_TOKEN:
         description: "Fallback GitHub CLI token with read access to sibling tinyland-inc repositories"
         required: false
+      IMMUTABLE_RELEASE_APP_CLIENT_ID:
+        description: >-
+          Client ID for the narrowly installed GitHub App used to mint a
+          repository-scoped Administration-read token at job start.
+        required: false
+      IMMUTABLE_RELEASE_APP_PRIVATE_KEY:
+        description: >-
+          Private key for the narrowly installed GitHub App. The workflow mints
+          and revokes a short-lived token; never store an installation token.
+        required: false
 
 jobs:
   resolve-runner:
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -271,6 +293,101 @@ jobs:
                   file=output,
               )
           PY
+
+      - name: Require release:published for immutable publication
+        if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "release" ] || [ "$EVENT_ACTION" != "published" ]; then
+            echo "::error::require_immutable_release permits real publication only from release:published, never tag push or manual branch runs."
+            exit 1
+          fi
+          if [ "$REF_TYPE" != "tag" ] || [ -z "$RELEASE_TAG" ] || [ "$REF_NAME" != "$RELEASE_TAG" ]; then
+            echo "::error::release event tag/ref mismatch: ref=$REF_NAME release=$RELEASE_TAG"
+            exit 1
+          fi
+
+      - name: Resolve reviewed immutable-release verifier source
+        id: immutable-release-source
+        if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EXPECTED_WORKFLOW: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml
+        run: |
+          set -euo pipefail
+          run_json="$(gh api --method GET "repos/$RUN_REPOSITORY/actions/runs/$RUN_ID")"
+          if ! verifier_sha="$(
+              jq -er --arg workflow "$EXPECTED_WORKFLOW" '
+                [
+                  .referenced_workflows[]?
+                  | select((.path // "") | startswith($workflow + "@"))
+                  | .sha
+                  | ascii_downcase
+                ]
+                | unique
+                | if length == 1 then .[0]
+                  elif length == 0 then error("reviewed reusable workflow source is absent")
+                  else error("reviewed reusable workflow source is ambiguous")
+                  end
+              ' <<<"$run_json"
+            )"; then
+            echo "::error::cannot resolve the reviewed reusable workflow source from run metadata"
+            exit 1
+          fi
+          if [[ ! "$verifier_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::resolved reusable workflow source is not a full commit SHA"
+            exit 1
+          fi
+          echo "sha=$verifier_sha" >>"$GITHUB_OUTPUT"
+
+      - name: Checkout reviewed immutable-release verifier tree
+        if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: tinyland-inc/ci-templates
+          ref: ${{ steps.immutable-release-source.outputs.sha }}
+          path: .ci-templates-immutable-release
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Mint Administration-read installation token
+        id: immutable-release-admin-token
+        if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ secrets.IMMUTABLE_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.IMMUTABLE_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-administration: read
+
+      - name: Verify immutable-release setting
+        if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+        uses: ./.ci-templates-immutable-release/.github/actions/immutable-release-verify
+        with:
+          mode: settings
+          repository: ${{ github.repository }}
+          admin-token: ${{ steps.immutable-release-admin-token.outputs.token }}
+
+      - name: Verify immutable published release
+        if: ${{ inputs.require_immutable_release && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+        uses: ./.ci-templates-immutable-release/.github/actions/immutable-release-verify
+        with:
+          mode: published
+          repository: ${{ github.repository }}
+          tag: ${{ github.event.release.tag_name }}
+          expected-source-sha: ${{ github.sha }}
+          contents-token: ${{ github.token }}
 
   validate:
     needs: resolve-runner
@@ -858,7 +975,7 @@ jobs:
     needs:
       - resolve-runner
       - validate
-    if: ${{ inputs.npm_publish_mode != 'disabled' && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+    if: ${{ inputs.npm_publish_mode != 'disabled' && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) && (!inputs.require_immutable_release || (github.event_name == 'release' && github.event.action == 'published')) }}
     runs-on: ${{ fromJson(needs.resolve-runner.outputs.publish_runner_labels_json) }}
     timeout-minutes: 20
     steps:
@@ -969,7 +1086,7 @@ jobs:
     needs:
       - resolve-runner
       - validate
-    if: ${{ inputs.github_package_name != '' && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
+    if: ${{ inputs.github_package_name != '' && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) && (!inputs.require_immutable_release || (github.event_name == 'release' && github.event.action == 'published')) }}
     runs-on: ${{ fromJson(needs.resolve-runner.outputs.publish_runner_labels_json) }}
     timeout-minutes: 20
     steps:

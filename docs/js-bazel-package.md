@@ -118,6 +118,89 @@ Meaning:
   - use this for Bazel-first packages whose release authority is GitHub
     tag/release, GitHub Packages, and the Tinyland Bazel registry
 
+### `require_immutable_release`
+
+Opt-in (default `false`) release-integrity gate. Non-opted callers retain the
+existing validation and publication path. When set to `true`, the gate runs
+only when the workflow would perform a real publication. That publication must
+come from a `release:published` event with a matching tag ref. Tag pushes,
+manual branch runs, and mismatched release/ref payloads fail closed before the
+publish jobs; pull requests and dry-runs do not need the App credential.
+
+The Actions-, Contents-, and Attestations-read `resolve-runner` job first reads
+the authenticated workflow-run record and selects the one
+`referenced_workflows` entry for this reusable workflow. It checks out the
+ci-templates verifier tree at that resolved commit, then mints a
+repository-scoped installation token at runtime through the approved GitHub App
+pattern. This avoids a stale remote self-action pin without requiring the
+workflow to embed its own impossible future commit SHA. The `settings`
+invocation receives only that Administration-read token and performs exactly
+one setting request. A separate `published` invocation receives only the job's
+read-only `GITHUB_TOKEN`. Validation and both publication jobs depend on this
+gate. It fails closed unless all of the following are true:
+
+- the run is attached to an exact tag ref and GitHub reports that tag's peeled
+  commit as `github.sha`
+- `GET /repos/{owner}/{repo}/immutable-releases`, using GitHub API version
+  `2026-03-10`, reports `enabled: true`
+- the exact tag ref peels through any annotated tag objects to `github.sha`,
+  while retaining the direct ref object digest used by GitHub's release
+  attestation
+- the published Release exists for that exact tag and reports
+  `immutable: true`
+- `gh release verify` cryptographically verifies GitHub's release attestation,
+  and the verified statement binds the same repository, exact tag, and direct
+  tag-ref object digest
+
+Supply `IMMUTABLE_RELEASE_APP_CLIENT_ID` and
+`IMMUTABLE_RELEASE_APP_PRIVATE_KEY` from the approved App custody path. Do not
+store an installation token. The workflow pins `actions/create-github-app-token`
+to a full commit SHA, requests only **Administration read** for the caller
+repository, and lets the action revoke the short-lived token when the job ends.
+The verifier unsets the App token before any later `git`, `jq`, or `gh` child
+process. The job explicitly has `actions: read`, `contents: read`, and
+`attestations: read`, never `packages: write`; the separate package publication
+jobs retain only the caller authority they need. Callers must grant those three
+read permissions because a reusable workflow cannot elevate the caller token.
+
+```yaml
+on:
+  release:
+    types: [published]
+
+permissions:
+  actions: read
+  attestations: read
+  contents: read
+  packages: write
+
+jobs:
+  package:
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v2.12.0
+    with:
+      # Other package inputs omitted.
+      dry_run: false
+      require_immutable_release: true
+```
+
+The caller must map the two declared App custody secrets into the reusable
+workflow. Keep that mapping in workflow code; never paste either value into the
+file or pass it through a workflow input.
+
+GitHub's Release REST response exposes `immutable`, but it does not expose the
+attested source commit as a release field. `target_commitish` may be a branch or
+other creation hint and is not evidence that the current exact tag still binds
+the expected source, so the verifier never trusts it. Published mode instead
+proves both links: the exact tag peels to the expected commit, and the
+cryptographically verified release attestation binds the repository/tag
+predicate plus the direct tag-ref object digest. For a lightweight tag those
+digests are the same; for an annotated tag they are deliberately different. If
+the installed GitHub CLI lacks `gh release verify`, or GitHub has not made a
+valid release attestation available after the bounded retry window, published
+mode fails closed; there is no weaker `target_commitish` fallback. Re-running
+an interrupted publication is safe: the exact tag and Release must already
+match, and the floating major is never part of this reusable package workflow.
+
 ### `cache_backed`
 
 Opt-in (default `false`) shared-cache-backed Bazel validation. This is the
@@ -314,6 +397,9 @@ jobs:
   requires `secrets.NPM_TOKEN` only when `npm_publish_mode=required`; Bazel-first
   packages should use `optional` or `disabled` when GitHub Packages and the
   Bazel registry are the release authority.
+- `require_immutable_release: true` applies only to real publication paths. A
+  manual `dry_run: false` run without an exact tag fails closed rather than
+  bypassing the Release check.
 - self-hosted jobs now call `nix-setup`, so Attic and Bazel cache hints are
   explicit instead of incidental runner state.
 - `workspace_mode=isolated` is the preferred contract for downstream pilots.

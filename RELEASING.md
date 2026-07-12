@@ -14,6 +14,14 @@ and may break without notice**.
 
 ## Release flow
 
+The release workflow requires repository immutable releases to be enabled and
+two App custody secrets: `IMMUTABLE_RELEASE_APP_CLIENT_ID` and
+`IMMUTABLE_RELEASE_APP_PRIVATE_KEY`. It uses the approved runtime GitHub App
+mint to request a repository-scoped **Administration read** installation token,
+then revokes that token automatically at job teardown. Never store an
+installation token, substitute an owner PAT, or grant the App package/write
+authority for this check.
+
 1. **Land all changes for the release on `main`** via squash-merged PRs.
    Each PR amends `## [Unreleased]` in `CHANGELOG.md`.
 2. **Pick the next version** per SemVer:
@@ -28,8 +36,25 @@ and may break without notice**.
 
    ### 3a. Workflow-driven (preferred)
 
-   `release.yml`'s `tag-on-release-commit` job auto-tags when a
-   commit with subject `release: vX.Y.Z` lands on main.
+   `release.yml` detects a commit with subject `release: vX.Y.Z` on main, then
+   advances authority through separate jobs:
+
+   1. plan and validate any recoverable existing exact tag with Contents read
+   2. mint the short-lived App token and check immutable-release settings with
+      no `GITHUB_TOKEN` permissions
+   3. create or reuse the exact version tag and published GitHub Release
+   4. verify the immutable Release attestation and source binding with Contents
+      read plus Attestations read
+   5. move the floating major last, with Contents write
+
+   An interrupted run is retryable only when an existing exact tag peels to the
+   same source and an existing Release is published, non-prerelease, and
+   tag-matched. Conflicts fail closed; the floating major cannot move before
+   published verification. Workflow concurrency uses `queue: max` so a newer
+   pending push does not replace an older pending release run. GitHub does not
+   guarantee dispatch order, so the final step also compares semantic versions
+   and refuses to move the floating major backward when an older run starts or
+   is re-run later.
 
    ```bash
    ver=v1.2.3
@@ -37,10 +62,10 @@ and may break without notice**.
    git add CHANGELOG.md
    git commit -m "release: $ver"
    git push origin main
-   # release.yml fires; auto-cuts $ver + moves @vMAJOR + creates GH Release.
+   # release.yml fires; publishes/verifies $ver, then moves @vMAJOR last.
    ```
 
-   ### 3b. Manual fallback
+   ### 3b. Manual dispatch fallback
 
    Use when 3a's "push to main" doesn't work in your environment:
 
@@ -52,37 +77,40 @@ and may break without notice**.
      feature branch and rebase-merged into main yields a main HEAD
      without the release subject — `release.yml` doesn't fire.
 
-   Manual cut (matches what 3a's automation would have produced):
+   Dispatch the same release workflow from `main` with the exact version. This
+   is not a second implementation: it enters the same settings check, exact-tag
+   and Release publication, Attestations read verification, and floating-major
+   compare-and-swap jobs as 3a. No App token, tag, or Release is created from the
+   operator shell.
 
    ```bash
+   set -euo pipefail
    ver=v1.2.3
-   target_sha=$(git rev-parse origin/main)   # or a specific merge SHA
-
-   # Make sure CHANGELOG.md already has the ## [X.Y.Z] section.
-   # If not, land that via a normal PR first.
-   grep -qE "^## \\[${ver#v}\\]" CHANGELOG.md || {
-     echo "CHANGELOG.md missing ## [${ver#v}] section — land that PR first"
+   run_url="$(
+     gh workflow run release.yml \
+       --repo tinyland-inc/ci-templates \
+       --ref main \
+       --raw-field "version=$ver"
+   )"
+   run_id="${run_url##*/}"
+   [[ "$run_id" =~ ^[0-9]+$ ]] || {
+     echo "release dispatch did not return a run URL: $run_url" >&2
      exit 1
    }
-
-   git tag -a "$ver" "$target_sha" -m "$ver
-
-   See CHANGELOG.md ## [${ver#v}] for the full Added/Changed list."
-   git tag -f -a "v${ver%%.*}" "$target_sha" -m "track $ver"
-   git push origin "$ver"
-   git push origin "v${ver%%.*}" --force-with-lease
-
-   # Extract just this version's CHANGELOG section for the GH Release:
-   awk -v v="${ver#v}" '
-     $0 ~ "^## \\[" v "\\]" {flag=1; next}
-     /^## \[/ && flag {exit}
-     flag {print}
-   ' CHANGELOG.md > /tmp/release-notes.md
-
-   gh release create "$ver" \
-     --title "$ver" \
-     --notes-file /tmp/release-notes.md
+   gh run watch "$run_id" \
+     --repo tinyland-inc/ci-templates \
+     --compact \
+     --exit-status
    ```
+
+   The dispatch job is accepted only from `refs/heads/main`, the version input
+   must match `vMAJOR.MINOR.PATCH`, and `CHANGELOG.md` at that exact main commit
+   must contain the matching section. The shared floating-major step proves the
+   annotation's referenced exact tag exists, belongs to the same major, and
+   peels to the current `vMAJOR` commit before comparing versions. Movement uses
+   the remote tag object captured by `git ls-remote` as the explicit
+   `--force-with-lease=refs/tags/vMAJOR:<object>` expectation; a concurrent move
+   or backward request fails closed.
 
    Verify with `gh release view "$ver"` and at least one downstream
    spoke bumping its `@v...` pin.
@@ -110,9 +138,9 @@ and may break without notice**.
 
 ## Composite-action internal refs
 
-Composite actions and reusable workflows that call sibling composites
-(e.g. `flywheel-bazel` calling `nix-setup`) MUST reference siblings by the
-current major tag, not `@main` or an older major:
+Ordinary composite actions and reusable workflows that call sibling composites
+(e.g. `flywheel-bazel` calling `nix-setup`) reference siblings by the current
+major tag, not `@main` or an older major:
 
 ```yaml
 uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
@@ -122,6 +150,15 @@ This ensures a `git checkout v2.0.0` of the repo exposes a coherent
 self-referential set of action versions. A v2 reusable workflow must not call
 v1 composites unless the migration guide explicitly documents that compatibility
 boundary.
+
+The privileged `immutable-release-verify` calls are the deliberate exception.
+They do not use a remote self-reference because a workflow cannot embed its own
+future commit SHA without a circular update. Release jobs check out the planned
+main source SHA and invoke the local verifier action. The reusable package
+workflow reads its resolved workflow SHA from the authenticated run API's
+`referenced_workflows` record, checks out that exact ci-templates tree, and then
+invokes the local action. Validation rejects remote verifier self-pins and any
+checkout that is not tied to those reviewed source SHAs.
 
 ## Flywheel endpoint discipline
 
