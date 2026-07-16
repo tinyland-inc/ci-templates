@@ -85,7 +85,7 @@ jobs:
       # PATH; the Nix devshell keeps Node/pnpm inside `nix develop --command`,
       # so expose the declared host Node + pinned pnpm to the action
       # environment first.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node_version }}
 

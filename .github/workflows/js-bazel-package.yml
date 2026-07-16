@@ -422,7 +422,7 @@ jobs:
         with:
           version: ${{ inputs.pnpm_version || '9' }}
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -903,7 +903,7 @@ jobs:
         if: ${{ steps.npm-policy.outputs.should_publish == 'true' && runner.environment != 'github-hosted' }}
         uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         if: ${{ steps.npm-policy.outputs.should_publish == 'true' }}
         with:
           node-version: ${{ inputs.publish_node_version || '22' }}
@@ -996,7 +996,7 @@ jobs:
         if: ${{ runner.environment != 'github-hosted' }}
         uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: ${{ inputs.publish_node_version || '22' }}
           registry-url: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}

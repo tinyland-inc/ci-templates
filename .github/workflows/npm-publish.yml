@@ -49,7 +49,7 @@ jobs:
         with:
           version: ${{ inputs.pnpm-version || '9' }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
 
@@ -92,7 +92,7 @@ jobs:
         with:
           version: ${{ inputs.pnpm-version || '9' }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.publish-node-version || '22' }}
           registry-url: https://npm.pkg.github.com
@@ -124,7 +124,7 @@ jobs:
         with:
           version: ${{ inputs.pnpm-version || '9' }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.publish-node-version || '22' }}
           registry-url: ${{ inputs.registry-url || 'https://registry.npmjs.org' }}
