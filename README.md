@@ -11,8 +11,8 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
 
 - **Spoke CI** (lint, type-check, build, test, Bazel graph, optional
   Playwright) via `spoke-ci.yml` reusable workflow.
-- **Per-PR ephemeral env lifecycle** (build image, dispatch to Blahaj,
-  reap on close) via `spoke-lane-env.yml`.
+- **Legacy per-PR lane dispatch compatibility** (build image, request apply,
+  request reap) via `spoke-lane-env.yml`. It is not a runtime observer.
 - **Static projection snapshot refresh** via `spoke-pulse-ingest.yml`.
 - **GloriousFlywheel REAPI binding** via the `flywheel-bazel` composite
   action.
@@ -21,13 +21,18 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
   tag.
 - **Repo-shape manifest validation** via `repo-manifest-validate`.
 - **Schema-validated `lanes.json` loading** via `lanes-load`.
-- **Blahaj `repository_dispatch` payload construction** via
-  `lane-dispatch` / `lane-reap`.
-- **Public client preview dispatch** via `public-preview-dispatch`;
-  Blahaj owns Cloudflare DNS, Access, Tunnel ingress, and cleanup.
+- **Receiver `repository_dispatch` payload construction** via
+  `lane-dispatch` / `lane-reap`. Existing v2 payloads target Blahaj
+  compatibility receivers; target application authority lives in owner
+  overlays.
+- **Public client preview request construction** via
+  `public-preview-dispatch`; exposure and apply remain human-gated in the
+  owning overlay/receiver.
 - **Scheduled expired-lane cleanup dispatch** via `lane-ttl-reap`.
 - **GloriousFlywheel proof dispatch** via `flywheel-reapi-proof`.
-- **Per-lane GitHub commit status checks** via `lane-status-check`.
+- **Namespaced per-lane GitHub commit statuses** via `lane-status-check`.
+  Compatibility note: v2 callers historically publish flywheel-build results as
+  `ci/lane/<name>`. That name does not prove a deployed environment.
 
 The full contract spokes conform to is
 [`tinyland-inc/site.scaffold/docs/CI-SCHEMA.md`](https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/CI-SCHEMA.md).
@@ -66,6 +71,33 @@ Your spoke needs `.github/lanes.json` validating against
 also include `tinyland.repo.json` validating against
 [`schemas/tinyland-repo-manifest.schema.json`](./schemas/tinyland-repo-manifest.schema.json).
 
+The reusable lane workflow is a legacy dispatch adapter. A successful token
+probe or accepted dispatch does not prove that a receiver exists, that a route
+is healthy, or that the exact PR head is served. Runtime acceptance belongs to
+the application owner overlay in the target architecture; current allowlisted
+Blahaj receivers remain migration exceptions. Acceptance requires route,
+served SHA/digest, health, expiry, and reaper receipts.
+
+After a release containing this input, migrate build-only contexts in a
+coordinated source/ruleset change:
+
+```yaml
+jobs:
+  ci:
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci.yml@v2.12.0
+    with:
+      lane_status_context_prefix: ci/build/
+```
+
+The default remains `ci/lane/`, including its legacy `build-and-test`
+description, so existing v2 consumers retain their current status output.
+Callers opting into `ci/build/` receive the truthful `build (<lane>)`
+description.
+Do not require a new `ci/build/<name>` context until its caller and branch
+ruleset change together. A future runtime `ci/lane/<name>` context is meaningful
+only when posted by the receipt-bearing owner-overlay observer; this library
+does not currently provide that observer.
+
 To inherit the canonical scaffold agent skills into a spoke:
 
 ```yaml
@@ -79,9 +111,9 @@ steps:
 `scaffold_ref` must be a pinned scaffold tag, `refs/tags/*`, or a full commit
 SHA. Branch refs such as `main` are rejected by default.
 
-## Local validation
+## Developer preflight and remote acceptance
 
-Use the same house-style entrypoint as consuming repos:
+Use the same house-style entrypoint as consuming repos for preflight:
 
 ```bash
 just check
@@ -92,8 +124,20 @@ The check parses all workflow/action YAML, parses vendored JSON schemas,
 validates `tinyland.repo.json`, verifies v2 internal action refs resolve to
 checked-in sibling actions, asserts `bazelrc/flywheel.bazelrc` and
 `bazelrc/ci-cached.bazelrc` remain endpoint-free, asserts the `cache_backed`
-opt-in lane stays default-off and cache-first, and runs the canonical Tinyland
-gitleaks working-tree scan.
+opt-in lane stays default-off and cache-first, keeps the legacy lane-status
+name byte-identical by default, verifies the truthful `ci/build/` migration
+remains opt-in, and runs the canonical Tinyland gitleaks working-tree scan.
+
+The authoritative acceptance is a completed same-repository exact-head
+`check` job on the GloriousFlywheel `tinyland-nix` capability lane. Public-fork
+heads never execute there: review the fork diff, then move accepted changes to
+a signed same-repository branch. The checked-in default-branch ruleset is
+desired state for binding `check` and `changelog-gate` to the GitHub Actions
+App only after the all-external-contributor approval policy is installed and
+runner admission is proved. A local pass or skipped fork job cannot replace
+either result. The integration binding rejects non-Actions status writers;
+context-name uniqueness inside GitHub Actions remains a reviewed repository
+workflow contract.
 
 ## Composite actions
 
@@ -112,7 +156,7 @@ gitleaks working-tree scan.
 | **`lane-ttl-reap`** | Emit Blahaj expired-lane sweep payload for scheduled TTL backstops. |
 | **`public-preview-dispatch`** | Emit Blahaj public/client preview payload with Cloudflare Access allowlist. |
 | **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run, correlated by a unique request id. |
-| **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
+| **`lane-status-check`** | Post a caller-namespaced per-lane commit status. The v2 `ci/lane/<name>` default is a legacy name and is not runtime proof; coordinated build callers may opt into `ci/build/<name>`. |
 | **`pulse-ingest-validate`** | Validate a Pulse / static projection snapshot. |
 
 See per-action `action.yml` files for full input/output documentation.
@@ -124,7 +168,7 @@ See per-action `action.yml` files for full input/output documentation.
 | `js-bazel-package.yml` | Pre-existing: JS/TS packages built by Bazel and published to GitHub Packages, with npmjs required/optional/disabled by package policy. Supports an **opt-in, default-off `cache_backed`** shared-cache Bazel validation lane (cache-first; see below). |
 | `npm-publish.yml` | Pre-existing: hosted-only Node package build + publish. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
-| **`spoke-lane-env.yml`** | Canonical PR-env workflow. Replaces hand-rolled `pr-env-lanes.yml`. |
+| **`spoke-lane-env.yml`** | Legacy direct-Blahaj dispatch adapter. Its green token-probe/dispatch path is not evidence that a PR environment exists or is healthy. |
 | **`spoke-lane-ttl-reap.yml`** | Reusable scheduled TTL backstop dispatcher for Blahaj lane cleanup. |
 | **`spoke-public-preview.yml`** | Reusable public/client preview dispatcher for Cloudflare Access-gated aliases. |
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |

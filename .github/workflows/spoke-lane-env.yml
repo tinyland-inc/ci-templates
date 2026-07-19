@@ -160,7 +160,7 @@ jobs:
           set -euo pipefail
           echo "running E2E against pr-${{ github.event.pull_request.number }}-${{ matrix.lane.name }}.${{ needs.lanes-load.outputs.spoke_domain }}"
           # Spokes plug their own E2E command here via a follow-up workflow.
-          # This job exists to gate the per-lane `ci/lane/<name>` E2E status.
+          # This placeholder does not post a lane status or prove E2E readiness.
 
   destroy-lanes:
     if: needs.check-blahaj-token.outputs.enabled == 'true' && (github.event.action == 'closed' || inputs.reap)

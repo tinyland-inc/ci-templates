@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check lane-status-namespace-contract-check default-branch-ruleset-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -27,7 +27,7 @@ lint-runs-on-check:
 
 # Parse all vendored JSON schemas.
 json-parse:
-    cd {{ root }} && for f in schemas/*.json tinyland.repo.json; do jq empty "$f"; echo "json ok: $f"; done
+    cd {{ root }} && for f in schemas/*.json .github/actions-policy.json .github/rulesets/*.json tinyland.repo.json; do jq empty "$f"; echo "json ok: $f"; done
 
 # Validate tinyland.repo.json against the vendored Tinyland repo manifest schema.
 repo-manifest-validate:
@@ -51,6 +51,16 @@ js-bazel-runner-contract-check:
 # Ensure flywheel-reapi-proof keeps child-run correlation request-id based.
 flywheel-reapi-proof-contract-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py flywheel-reapi-proof-contract
+
+# Ensure the v2 status namespace stays byte-identical by default while a
+# coordinated consumer may opt build evidence into the truthful ci/build/* name.
+lane-status-namespace-contract-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py lane-status-namespace-contract
+
+# Ensure checked-in and executable default-branch rails agree on remote checks,
+# signed merge-only lineage, and no bypass.
+default-branch-ruleset-contract-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py default-branch-ruleset-contract
 
 # Ensure the v2 Flywheel bazelrc fragment has no baked endpoints or upload authority.
 endpoint-free-check:

@@ -1,5 +1,10 @@
 # Migrating from `@main` to `@v1.0.0`
 
+> Historical v1 record: v1/v2 named build-only statuses
+> `ci/lane/<name>`. That legacy name never proved a deployed runtime. Current
+> main preserves it byte-for-byte by default and offers a coordinated opt-in to
+> `ci/build/<name>`; see the README.
+
 `@main` is the develop branch from v1.0.0 onward and **breaks without
 notice**. All consumers should pin to `@v1.0.0` (or the latest
 `v1.x.y`).
@@ -54,8 +59,9 @@ three-lane reference.
 - **Per-PR TTL override via PR labels**: apply `lane-ttl/24h` or
   `lane-ttl/keep` to a PR to raise the TTL. Hardcoded 72h is gone.
 - **Per-lane GitHub commit status checks** named `ci/lane/<name>` are
-  now posted; update branch protection rules to require the ones that
-  should block merge.
+  posted by the flywheel-build job. They do not prove tests, a route, or runtime
+  environment. Only require them according to that historical meaning; migrate
+  names and branch rules together when adopting `ci/build/<name>`.
 - **E2E inclusion is per-lane data**, not workflow-hardcoded. Set
   `e2e: true` on each lane that should run tailnet-qa.
 - **Dry-run testability**: `lane-dispatch` accepts `dry_run: true` so

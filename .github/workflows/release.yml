@@ -2,15 +2,11 @@ name: release
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      - "!CHANGELOG.md"
   push:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.workflow }}
@@ -18,9 +14,9 @@ concurrency:
 
 # Two-mode workflow:
 #
-# 1. On pull_request to main: assert CHANGELOG.md `## [Unreleased]` is
-#    non-empty. PRs that add features/fixes/breaks MUST amend the
-#    Unreleased section per RELEASING.md.
+# 1. On pull_request to main: assert this PR changes CHANGELOG.md
+#    `## [Unreleased]` and leaves that section non-empty. PRs that add
+#    features/fixes/breaks MUST amend it per RELEASING.md.
 #
 # 2. On push to main: if the head commit's message starts with
 #    `release: vX.Y.Z`, cut the immutable tag and move the floating
@@ -37,11 +33,14 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Assert ## [Unreleased] is non-empty
+      - name: "Assert this PR amends ## [Unreleased]"
         run: |
           set -euo pipefail
-          subject=$(git log -1 --pretty=%s "${{ github.event.pull_request.head.sha }}")
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          subject=$(git log -1 --pretty=%s "$head")
           if [[ "$subject" =~ ^release:\ v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             echo "::notice::release PR detected ($subject); allowing empty ## [Unreleased]"
             exit 0
@@ -50,17 +49,30 @@ jobs:
             echo "::error::CHANGELOG.md missing"
             exit 1
           fi
-          # Extract the body between `## [Unreleased]` and the next `## [` header.
-          body=$(awk '/^## \[Unreleased\]/{flag=1;next} /^## \[/{flag=0} flag' CHANGELOG.md \
-                 | grep -vE '^\s*$' || true)
-          if [ -z "$body" ]; then
+          if ! git cat-file -e "$base:CHANGELOG.md"; then
+            echo "::error::base revision has no CHANGELOG.md"
+            exit 1
+          fi
+          extract_unreleased() {
+            awk '/^## \[Unreleased\]/{flag=1;next} /^## \[/{flag=0} flag' \
+              | grep -vE '^\s*$' || true
+          }
+          base_body=$(git show "$base:CHANGELOG.md" | extract_unreleased)
+          head_body=$(extract_unreleased < CHANGELOG.md)
+          if [ -z "$head_body" ]; then
             echo "::error file=CHANGELOG.md::## [Unreleased] is empty. Amend per RELEASING.md before merging."
             exit 1
           fi
-          echo "::notice::CHANGELOG.md [Unreleased] has $(echo "$body" | wc -l | tr -d ' ') line(s) of content"
+          if [ "$head_body" = "$base_body" ]; then
+            echo "::error file=CHANGELOG.md::This PR did not amend ## [Unreleased]."
+            exit 1
+          fi
+          echo "::notice::This PR amends CHANGELOG.md [Unreleased]"
 
   tag-on-release-commit:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

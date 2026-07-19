@@ -54,6 +54,14 @@ on:
       lanes_path:
         type: string
         default: .github/lanes.json
+      lane_status_context_prefix:
+        type: string
+        default: ci/lane/
+        description: >-
+          Opt-in status namespace migration. The v2 default remains
+          `ci/lane/` byte-identically for existing consumers, but those
+          statuses are flywheel-build results rather than runtime proof. Pass
+          `ci/build/` only with a coordinated branch-ruleset migration.
       default_runner_class:
         type: string
         default: tinyland-nix
@@ -266,6 +274,18 @@ jobs:
       - name: Static site build
         run: nix develop --command just build
 
+      - name: Validate lane status namespace
+        env:
+          LANE_STATUS_CONTEXT_PREFIX: ${{ inputs.lane_status_context_prefix }}
+        run: |
+          case "$LANE_STATUS_CONTEXT_PREFIX" in
+            ci/lane/|ci/build/) ;;
+            *)
+              echo "::error::lane_status_context_prefix must be exactly ci/lane/ or ci/build/"
+              exit 1
+              ;;
+          esac
+
       - name: Post lane build status
         if: always()
         uses: tinyland-inc/ci-templates/.github/actions/lane-status-check@v2
@@ -273,7 +293,8 @@ jobs:
           commit_sha: ${{ github.event.pull_request.head.sha || github.sha }}
           lane_name: ${{ matrix.lane.name }}
           state: ${{ job.status == 'success' && 'success' || 'failure' }}
-          description: "build-and-test (${{ matrix.lane.name }})"
+          description: ${{ inputs.lane_status_context_prefix == 'ci/build/' && format('build ({0})', matrix.lane.name) || format('build-and-test ({0})', matrix.lane.name) }}
+          context_prefix: ${{ inputs.lane_status_context_prefix == 'ci/build/' && 'ci/build/' || 'ci/lane/' }}
 
   flywheel-test:
     needs: [secrets-scan, repo-manifest, lanes-load]

@@ -113,7 +113,7 @@
 				"name": {
 					"type": "string",
 					"pattern": "^[a-z][a-z0-9-]{0,30}$",
-					"description": "Lane slug. Used in DNS (`pr-{PR_NUMBER}-{name}.<spoke.domain>`), in the GitHub status check name (`ci/lane/<name>`), and as the S3 state suffix when `tofu_state_suffix` is unset."
+					"description": "Lane slug. Used in DNS (`pr-{PR_NUMBER}-{name}.<spoke.domain>`), in caller-selected status names, and as the S3 state suffix when `tofu_state_suffix` is unset. The v2 `ci/lane/<name>` default is a legacy build-status name, not proof that a runtime environment exists; coordinated consumers may opt build evidence into `ci/build/<name>`."
 				},
 				"trigger": { "$ref": "#/$defs/laneTrigger" },
 				"domain": {

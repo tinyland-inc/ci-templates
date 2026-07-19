@@ -7,10 +7,42 @@ import argparse
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def load_workflow(path: pathlib.Path) -> dict:
+    """Parse workflow YAML through the repository's existing Ruby/Psych toolchain."""
+
+    result = subprocess.run(
+        [
+            "ruby",
+            "-rjson",
+            "-ryaml",
+            "-e",
+            "puts JSON.generate(YAML.load_file(ARGV.fetch(0)))",
+            str(path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ValueError(result.stderr.strip() or f"could not parse {path}")
+    parsed = json.loads(result.stdout)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{path} must parse to an object")
+    return parsed
+
+
+def workflow_events(workflow: dict) -> dict:
+    """Psych may serialize YAML's plain `on` key as JSON key `true`."""
+
+    events = workflow.get("on", workflow.get("true"))
+    return events if isinstance(events, dict) else {}
 
 
 def validate_manifest() -> int:
@@ -172,6 +204,417 @@ def check_flywheel_reapi_proof_contract() -> int:
     if not ok:
         return 1
     print("flywheel-reapi-proof request-id correlation guarded")
+    return 0
+
+
+def check_lane_status_namespace_contract() -> int:
+    """Keep the v2 status migration explicit, opt-in, and truthfully named."""
+
+    ci_path = ROOT / ".github/workflows/spoke-ci.yml"
+    action_path = ROOT / ".github/actions/lane-status-check/action.yml"
+    schema_path = ROOT / "schemas/lanes.schema.json"
+    readme_path = ROOT / "README.md"
+    ok = True
+
+    try:
+        ci = load_workflow(ci_path)
+        action = load_workflow(action_path)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+
+    inputs = workflow_events(ci).get("workflow_call", {}).get("inputs", {})
+    status_input = inputs.get("lane_status_context_prefix")
+    if not isinstance(status_input, dict) or status_input.get("default") != "ci/lane/":
+        print(f"{ci_path.relative_to(ROOT)}: status input must default to ci/lane/", file=sys.stderr)
+        ok = False
+
+    steps = ci.get("jobs", {}).get("flywheel-build", {}).get("steps", [])
+    status_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("name") == "Post lane build status"
+    ]
+    expected_with = {
+        "commit_sha": "${{ github.event.pull_request.head.sha || github.sha }}",
+        "lane_name": "${{ matrix.lane.name }}",
+        "state": "${{ job.status == 'success' && 'success' || 'failure' }}",
+        "description": "${{ inputs.lane_status_context_prefix == 'ci/build/' && format('build ({0})', matrix.lane.name) || format('build-and-test ({0})', matrix.lane.name) }}",
+        "context_prefix": "${{ inputs.lane_status_context_prefix == 'ci/build/' && 'ci/build/' || 'ci/lane/' }}",
+    }
+    if len(status_steps) != 1 or status_steps[0].get("with") != expected_with:
+        print(f"{ci_path.relative_to(ROOT)}: active flywheel-build status step drifted", file=sys.stderr)
+        ok = False
+
+    action_input = action.get("inputs", {}).get("context_prefix")
+    if not isinstance(action_input, dict) or action_input.get("default") != "ci/lane/":
+        print(f"{action_path.relative_to(ROOT)}: action default must remain ci/lane/", file=sys.stderr)
+        ok = False
+    action_steps = action.get("runs", {}).get("steps", [])
+    post_steps = [
+        step
+        for step in action_steps
+        if isinstance(step, dict) and step.get("name") == "Post status"
+    ]
+    post_script = post_steps[0].get("run", "") if len(post_steps) == 1 else ""
+    post_env = post_steps[0].get("env", {}) if len(post_steps) == 1 else {}
+    namespace_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("name") == "Validate lane status namespace"
+    ]
+    namespace_script = namespace_steps[0].get("run", "") if len(namespace_steps) == 1 else ""
+    namespace_env = namespace_steps[0].get("env", {}) if len(namespace_steps) == 1 else {}
+    if (
+        namespace_env
+        != {"LANE_STATUS_CONTEXT_PREFIX": "${{ inputs.lane_status_context_prefix }}"}
+        or 'case "$LANE_STATUS_CONTEXT_PREFIX" in' not in namespace_script
+        or "ci/lane/|ci/build/" not in namespace_script
+    ):
+        print(
+            f"{ci_path.relative_to(ROOT)}: spoke caller must fail closed to approved status namespaces",
+            file=sys.stderr,
+        )
+        ok = False
+
+    required_script_snippets = [
+        'context="${INPUT_CONTEXT_PREFIX}${INPUT_LANE_NAME}"',
+        "${GITHUB_REPOSITORY}/statuses/${INPUT_COMMIT_SHA}",
+    ]
+    if any(snippet not in post_script for snippet in required_script_snippets):
+        print(
+            f"{action_path.relative_to(ROOT)}: status writer must avoid direct input interpolation",
+            file=sys.stderr,
+        )
+        ok = False
+    expected_input_env = {
+        "GH_TOKEN": "${{ inputs.github_token }}",
+        "INPUT_COMMIT_SHA": "${{ inputs.commit_sha }}",
+        "INPUT_CONTEXT_PREFIX": "${{ inputs.context_prefix }}",
+        "INPUT_DESCRIPTION": "${{ inputs.description }}",
+        "INPUT_LANE_NAME": "${{ inputs.lane_name }}",
+        "INPUT_STATE": "${{ inputs.state }}",
+        "INPUT_TARGET_URL": "${{ inputs.target_url }}",
+    }
+    if post_env != expected_input_env:
+        print(
+            f"{action_path.relative_to(ROOT)}: status inputs must cross the shell boundary through env",
+            file=sys.stderr,
+        )
+        ok = False
+    if "${{ inputs." in post_script or "${{ github." in post_script:
+        print(
+            f"{action_path.relative_to(ROOT)}: status script interpolates untrusted expressions directly",
+            file=sys.stderr,
+        )
+        ok = False
+
+    required_snippets = {
+        action_path: [
+            "`ci/build/`",
+            "`ci/lane/<name>`",
+            "status name alone is not",
+            "owner-overlay observer",
+        ],
+        schema_path: [
+            "`ci/build/<name>`",
+            "`ci/lane/<name>`",
+            "legacy build-status name",
+        ],
+        readme_path: [
+            "lane_status_context_prefix: ci/build/",
+            "`ci/build/<name>`",
+            "`ci/lane/<name>`",
+            "does not prove",
+            "flywheel-build results",
+        ],
+    }
+    for path, snippets in required_snippets.items():
+        text = re.sub(r"\s+", " ", path.read_text(encoding="utf-8"))
+        for snippet in snippets:
+            if re.sub(r"\s+", " ", snippet) not in text:
+                print(
+                    f"{path.relative_to(ROOT)}: missing lane-status namespace snippet: {snippet}",
+                    file=sys.stderr,
+                )
+                ok = False
+
+    if not ok:
+        return 1
+    print("v2 lane-status namespace migration is explicit, opt-in, and truthfully documented")
+    return 0
+
+
+def check_default_branch_ruleset_contract() -> int:
+    """Validate the source contract for guarded remote checks and branch rails."""
+
+    ruleset_path = ROOT / ".github/rulesets/default-branch.json"
+    actions_policy_path = ROOT / ".github/actions-policy.json"
+    workflow_path = ROOT / ".github/workflows/validate.yml"
+    release_path = ROOT / ".github/workflows/release.yml"
+    ruleset = json.loads(ruleset_path.read_text(encoding="utf-8"))
+    actions_policy = json.loads(actions_policy_path.read_text(encoding="utf-8"))
+    try:
+        workflow = load_workflow(workflow_path)
+        release = load_workflow(release_path)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    ok = True
+
+    expected_header = {
+        "name": "main-signed-merge-lineage",
+        "target": "branch",
+        "enforcement": "active",
+        "bypass_actors": [],
+        "conditions": {
+            "ref_name": {
+                "exclude": [],
+                "include": ["refs/heads/main"],
+            }
+        },
+    }
+    for key, expected in expected_header.items():
+        if ruleset.get(key) != expected:
+            print(
+                f"{ruleset_path.relative_to(ROOT)}: {key} must be {expected!r}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    rules = ruleset.get("rules")
+    if not isinstance(rules, list):
+        print(f"{ruleset_path.relative_to(ROOT)}: rules must be a list", file=sys.stderr)
+        return 1
+    rule_types = [
+        rule.get("type")
+        for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("type"), str)
+    ]
+    required_types = {
+        "required_signatures",
+        "deletion",
+        "non_fast_forward",
+        "pull_request",
+        "required_status_checks",
+    }
+    if len(rule_types) != len(required_types) or set(rule_types) != required_types:
+        print(
+            f"{ruleset_path.relative_to(ROOT)}: rule types must appear exactly once: {sorted(required_types)}",
+            file=sys.stderr,
+        )
+        ok = False
+    by_type = {
+        rule["type"]: rule
+        for rule in rules
+        if isinstance(rule, dict) and rule.get("type") in required_types
+    }
+
+    pr_parameters = by_type.get("pull_request", {}).get("parameters", {})
+    if pr_parameters.get("allowed_merge_methods") != ["merge"]:
+        print(
+            f"{ruleset_path.relative_to(ROOT)}: pull requests must preserve signed commits with merge-only integration",
+            file=sys.stderr,
+        )
+        ok = False
+
+    status_parameters = by_type.get("required_status_checks", {}).get("parameters", {})
+    expected_checks = [
+        {"context": "check", "integration_id": 15368},
+        {"context": "changelog-gate", "integration_id": 15368},
+    ]
+    if status_parameters.get("required_status_checks") != expected_checks:
+        print(
+            f"{ruleset_path.relative_to(ROOT)}: checks must bind GitHub Actions app 15368",
+            file=sys.stderr,
+        )
+        ok = False
+
+    check_job = workflow.get("jobs", {}).get("check")
+    check_steps = check_job.get("steps", []) if isinstance(check_job, dict) else []
+    check_runs = [
+        step.get("run")
+        for step in check_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    ]
+    if (
+        not isinstance(check_job, dict)
+        or check_job.get("runs-on") != "tinyland-nix"
+        or check_job.get("if")
+        != "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
+        or "nix develop --command just check" not in check_runs
+    ):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: active check must be same-repo-only on tinyland-nix and run just check",
+            file=sys.stderr,
+        )
+        ok = False
+    validate_events = workflow_events(workflow)
+    if (
+        set(validate_events) != {"pull_request", "push"}
+        or validate_events.get("pull_request") is not None
+        or validate_events.get("push") != {"branches": ["main"]}
+    ):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: check producer must run on every PR and main push",
+            file=sys.stderr,
+        )
+        ok = False
+    if workflow.get("permissions") != {"contents": "read"}:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: check producer must remain contents-read-only",
+            file=sys.stderr,
+        )
+        ok = False
+    if isinstance(check_job, dict) and check_job.get("permissions") is not None:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: check job must inherit read-only workflow permissions",
+            file=sys.stderr,
+        )
+        ok = False
+    workflow_dir = ROOT / ".github" / "workflows"
+    workflow_paths = sorted(
+        set(workflow_dir.glob("*.yml")) | set(workflow_dir.glob("*.yaml"))
+    )
+    producers = {"check": [], "changelog-gate": []}
+    for candidate_path in workflow_paths:
+        try:
+            candidate = load_workflow(candidate_path)
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            ok = False
+            continue
+        for job_id, job in candidate.get("jobs", {}).items():
+            if not isinstance(job, dict):
+                continue
+            effective_context = job.get("name", job_id)
+            if effective_context in producers:
+                producers[effective_context].append(
+                    candidate_path.relative_to(ROOT).as_posix()
+                )
+    expected_producers = {
+        "check": [".github/workflows/validate.yml"],
+        "changelog-gate": [".github/workflows/release.yml"],
+    }
+    for context, expected in expected_producers.items():
+        if producers[context] != expected:
+            print(
+                f"required {context} context must have one workflow producer, "
+                f"found {producers[context]}",
+                file=sys.stderr,
+            )
+            ok = False
+    checkout_steps = [
+        step
+        for step in check_steps
+        if isinstance(step, dict) and step.get("uses") == "actions/checkout@v6"
+    ]
+    if (
+        len(checkout_steps) != 1
+        or checkout_steps[0].get("with", {}).get("persist-credentials") is not False
+        or checkout_steps[0].get("with", {}).get("ref")
+        != "${{ github.event.pull_request.head.sha || github.sha }}"
+    ):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: check checkout must use the exact head without persisted credentials",
+            file=sys.stderr,
+        )
+        ok = False
+
+    expected_actions_policy = {
+        "repository": "tinyland-inc/ci-templates",
+        "visibility": "public",
+        "default_workflow_permissions": "read",
+        "can_approve_pull_request_reviews": False,
+        "fork_pr_approval_policy": "all_external_contributors",
+        "self_hosted_pull_request_policy": "same-repository-only",
+        "fork_handoff": "review-then-move-to-signed-same-repository-branch",
+    }
+    if actions_policy != expected_actions_policy:
+        print(
+            f"{actions_policy_path.relative_to(ROOT)}: public self-hosted runner policy drifted",
+            file=sys.stderr,
+        )
+        ok = False
+
+    gate_job = release.get("jobs", {}).get("changelog-gate")
+    gate_steps = gate_job.get("steps", []) if isinstance(gate_job, dict) else []
+    release_events = workflow_events(release)
+    if (
+        set(release_events) != {"pull_request", "push"}
+        or release_events.get("pull_request") != {"branches": ["main"]}
+        or release_events.get("push") != {"branches": ["main"]}
+    ):
+        print(
+            f"{release_path.relative_to(ROOT)}: release workflow must run only for main pull requests and main pushes",
+            file=sys.stderr,
+        )
+        ok = False
+    if release.get("permissions") != {"contents": "read"}:
+        print(
+            f"{release_path.relative_to(ROOT)}: workflow permissions must default to contents read",
+            file=sys.stderr,
+        )
+        ok = False
+    gate_checkouts = [
+        step
+        for step in gate_steps
+        if isinstance(step, dict) and step.get("uses") == "actions/checkout@v6"
+    ]
+    expected_gate_checkout = {
+        "ref": "${{ github.event.pull_request.head.sha }}",
+        "fetch-depth": 0,
+        "persist-credentials": False,
+    }
+    if len(gate_checkouts) != 1 or gate_checkouts[0].get("with") != expected_gate_checkout:
+        print(
+            f"{release_path.relative_to(ROOT)}: changelog gate checkout must be exact-head and credential-free",
+            file=sys.stderr,
+        )
+        ok = False
+    tag_job = release.get("jobs", {}).get("tag-on-release-commit")
+    if not isinstance(tag_job, dict) or tag_job.get("permissions") != {"contents": "write"}:
+        print(
+            f"{release_path.relative_to(ROOT)}: only the tag job may receive contents write",
+            file=sys.stderr,
+        )
+        ok = False
+    if gate_job.get("permissions") is not None:
+        print(
+            f"{release_path.relative_to(ROOT)}: changelog gate must inherit read-only workflow permissions",
+            file=sys.stderr,
+        )
+        ok = False
+    if tag_job.get("if") != "github.event_name == 'push' && github.ref == 'refs/heads/main'":
+        print(
+            f"{release_path.relative_to(ROOT)}: tag write authority must stay push-main-only",
+            file=sys.stderr,
+        )
+        ok = False
+    gate_runs = [
+        step.get("run")
+        for step in gate_steps
+        if isinstance(step, dict)
+        and step.get("name") == "Assert this PR amends ## [Unreleased]"
+        and isinstance(step.get("run"), str)
+    ]
+    gate_script = gate_runs[0] if len(gate_runs) == 1 else ""
+    for required in (
+        'base="${{ github.event.pull_request.base.sha }}"',
+        'head="${{ github.event.pull_request.head.sha }}"',
+        'base_body=$(git show "$base:CHANGELOG.md" | extract_unreleased)',
+        'if [ "$head_body" = "$base_body" ]; then',
+    ):
+        if required not in gate_script:
+            print(
+                f"{release_path.relative_to(ROOT)}: active changelog gate lacks: {required}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    if not ok:
+        return 1
+    print("source contract guards remote checks and declares signed merge-only branch rails")
     return 0
 
 
@@ -364,6 +807,8 @@ def main() -> int:
             "internal-refs",
             "js-bazel-runner-contract",
             "flywheel-reapi-proof-contract",
+            "lane-status-namespace-contract",
+            "default-branch-ruleset-contract",
             "cache-backed-optin-contract",
         ],
     )
@@ -375,6 +820,10 @@ def main() -> int:
         return check_js_bazel_package_runner_contract()
     if args.check == "flywheel-reapi-proof-contract":
         return check_flywheel_reapi_proof_contract()
+    if args.check == "lane-status-namespace-contract":
+        return check_lane_status_namespace_contract()
+    if args.check == "default-branch-ruleset-contract":
+        return check_default_branch_ruleset_contract()
     if args.check == "cache-backed-optin-contract":
         return check_cache_backed_optin_contract()
     return check_internal_refs()
