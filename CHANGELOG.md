@@ -5,6 +5,27 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Lane status namespace migration is opt-in and default-preserving** —
+  `spoke-ci.yml` adds `lane_status_context_prefix`, defaulting to the historical
+  `ci/lane/` context and legacy description for all existing v2 consumers.
+  Repositories may pass `ci/build/` only alongside a coordinated branch-ruleset
+  migration; that opt-in receives a truthful build-only description. The docs
+  now state explicitly that a status name or accepted dispatch does not prove
+  tests or a live PR environment; runtime readiness belongs to a
+  receipt-bearing owner-overlay observer.
+- **ci-templates gains a guarded remote-validation contract** — a stable
+  same-repository-only `check` job runs `just check` on the GloriousFlywheel
+  `tinyland-nix` capability lane without persisted checkout credentials.
+  Checked-in desired state declares all-external-contributor approval, signed
+  merge-only lineage, and GitHub-Actions-bound `check` plus `changelog-gate`;
+  live check enforcement waits for that fork policy and a proved exact-head
+  runner assignment.
+- **The changelog gate now proves per-PR change** — normal PRs must change the
+  `## [Unreleased]` body relative to the exact base SHA and leave it non-empty;
+  pre-existing Unreleased content can no longer make an unrelated PR pass.
+
 ## [2.11.0] — 2026-07-10
 
 ### Added

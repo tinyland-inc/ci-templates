@@ -28,8 +28,20 @@ a fleet-wide change.
    composite/workflow from validated env.
 4. **Amend `CHANGELOG.md` `## [Unreleased]`** in every PR (gated by `release.yml`).
 5. **Run `just check` before pushing** (or `nix develop --command just check`).
+6. **GPG-sign every commit on the local Mac** with primary key
+   `0B01977B8DD5DA60`. If YubiKey/pinentry is unavailable, STOP; do not bypass
+   signing or substitute an API-authored commit. Preserve signed commits with
+   merge-only PR integration.
+7. **Remote acceptance is authoritative.** The stable `check` job is designed
+   to run `just check` on the GloriousFlywheel `tinyland-nix` capability lane
+   for same-repository heads only. Local execution is developer preflight,
+   never a substitute for a remote exact-head result.
+8. **Never execute public-fork code on a self-hosted runner.** Require approval
+   for all external contributors, never approve the fork run, and move reviewed
+   changes to a signed same-repository branch. The runner is an internal
+   capability lane, not an untrusted-code sandbox.
 
-## Local validation
+## Developer preflight
 
 ```bash
 just check                       # full suite
@@ -40,6 +52,13 @@ nix develop --command just check # if tools are not on PATH
 `tinyland.repo.json`, asserts internal action refs resolve, guards the
 js-bazel-package runner + cache-backed contracts, asserts the bazelrc fragments
 stay endpoint-free, and runs the gitleaks working-tree scan.
+
+The checked-in `.github/rulesets/default-branch.json` is the reviewed source
+for binding `check` and `changelog-gate` to the GitHub Actions App after the
+fork policy is applied and a same-repository exact-head run proves runner
+admission. It also declares signed commits, merge-only lineage, and blocked
+deletion/non-fast-forward updates. Checked-in desired state is not evidence
+that the live GitHub ruleset already matches it.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 

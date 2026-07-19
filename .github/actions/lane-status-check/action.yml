@@ -1,8 +1,13 @@
 name: lane-status-check
 description: |
-  Post a per-lane GitHub commit status named `ci/lane/<name>` so branch
-  protection can require per-lane checks. Fixes the MassageIthaca
-  "no per-lane gating" pain point.
+  Post a caller-namespaced per-lane GitHub commit status.
+
+  Compatibility warning: the v2 default remains `ci/lane/<name>`, even though
+  the existing spoke caller posts it from the flywheel-build job. The status
+  name alone is not runtime evidence, and this generic writer cannot establish
+  those semantics.
+  New build-only callers should pass `ci/build/`; runtime readiness requires a
+  trusted owner-overlay observer with a receipt-bearing runtime contract.
 
   Contract: tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §8.
 
@@ -25,7 +30,9 @@ inputs:
     required: false
     default: ""
   context_prefix:
-    description: Status context prefix. Default `ci/lane/`.
+    description: >-
+      Caller-owned status context prefix. The `ci/lane/` default is retained
+      only for v2 compatibility and does not prove a deployed environment.
     required: false
     default: ci/lane/
   github_token:
@@ -46,15 +53,28 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        context="${{ inputs.context_prefix }}${{ inputs.lane_name }}"
-        desc="${{ inputs.description }}"
-        [[ -z "$desc" ]] && desc="Lane: ${{ inputs.lane_name }}"
+        [[ "$INPUT_LANE_NAME" =~ ^[a-z][a-z0-9-]{0,30}$ ]] || {
+          echo "::error::lane_name is not a valid lane slug"
+          exit 1
+        }
+        [[ "$INPUT_STATE" =~ ^(pending|success|failure|error)$ ]] || {
+          echo "::error::state must be pending, success, failure, or error"
+          exit 1
+        }
+        [[ "$INPUT_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+          echo "::error::commit_sha must be a full lowercase commit SHA"
+          exit 1
+        }
+
+        context="${INPUT_CONTEXT_PREFIX}${INPUT_LANE_NAME}"
+        desc="$INPUT_DESCRIPTION"
+        [[ -z "$desc" ]] && desc="Lane: $INPUT_LANE_NAME"
 
         payload=$(jq -nc \
-          --arg state "${{ inputs.state }}" \
+          --arg state "$INPUT_STATE" \
           --arg context "$context" \
           --arg description "$desc" \
-          --arg target_url "${{ inputs.target_url }}" \
+          --arg target_url "$INPUT_TARGET_URL" \
           '{state: $state, context: $context, description: $description}
            + (if $target_url != "" then {target_url: $target_url} else {} end)')
 
@@ -72,7 +92,7 @@ runs:
           -H "Authorization: Bearer ${GH_TOKEN}" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
           --data "$payload" \
-          "https://api.github.com/repos/${{ github.repository }}/statuses/${{ inputs.commit_sha }}")
+          "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${INPUT_COMMIT_SHA}")
         if [[ "$http_status" -lt 200 || "$http_status" -ge 300 ]]; then
           echo "::error::statuses POST returned HTTP $http_status"
           cat /tmp/lane-status-response.json
@@ -82,3 +102,9 @@ runs:
         echo "context=$context" >> "$GITHUB_OUTPUT"
       env:
         GH_TOKEN: ${{ inputs.github_token }}
+        INPUT_COMMIT_SHA: ${{ inputs.commit_sha }}
+        INPUT_CONTEXT_PREFIX: ${{ inputs.context_prefix }}
+        INPUT_DESCRIPTION: ${{ inputs.description }}
+        INPUT_LANE_NAME: ${{ inputs.lane_name }}
+        INPUT_STATE: ${{ inputs.state }}
+        INPUT_TARGET_URL: ${{ inputs.target_url }}
