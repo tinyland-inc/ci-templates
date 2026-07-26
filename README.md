@@ -106,6 +106,7 @@ gitleaks working-tree scan.
 | **`inherit-scaffold-skills`** | Pull `plugins/scaffold-core` from `site.scaffold` at a pinned ref and materialize `.agents/skills` + `.claude/skills`. |
 | **`repo-manifest-validate`** | Validate `tinyland.repo.json` and optionally require repo roles such as `static-spoke`. |
 | **`flywheel-bazel`** | `bazelisk` wrapper with endpoint-free `--config=flywheel[-executor]`. Supplies cache/executor endpoints from runtime env or inputs. Refuses executor on non-cluster runners. |
+| **`routine-rbe`** | Default-off TIN-2851 guard for one bounded, supported target class. Requires canonical immutable release bytes, sealed tools/sources, forced remote-only execution, and BEP proof with `remote_processes > 0`. |
 | **`lanes-load`** | Validate + load `.github/lanes.json`. Outputs matrix-ready `lanes_json`. |
 | **`lane-dispatch`** | Emit Blahaj `<spoke>-lane-env` provision payload. Supports `dry_run`. |
 | **`lane-reap`** | Emit Blahaj destroy payload. Idempotent. |
@@ -220,6 +221,32 @@ selects a remote executor. `scripts/cache-attachment-contract.sh` is the
 fail-closed checker that gates cache-backed work (`--strict` requires a real
 `BAZEL_REMOTE_CACHE`; rejects unexpanded `${...}` placeholders, non-`grpc`/`http`
 endpoints, and localhost without explicit proof).
+
+## Routine RBE guard (TIN-2851, default off)
+
+Routine remote execution is a separate proof surface from package authority,
+remote-cache attachment, ARC placement, and ordinary local Bazel execution.
+`spoke-ci.yml` defaults `routine_rbe` to `false`; non-opted and cache-backed
+jobs retain their existing behavior. Those existing jobs do not emit the
+bounded attestation described here and must not be cited as its proof.
+
+An opted lane must name one bounded target and one class admitted by its lane
+manifest. The workflow invokes the action at exact tag `v2.12.0` and passes
+`job.workflow_ref`, `job.workflow_sha`, `job.workflow_repository`, and
+`job.workflow_file_path`; the action compares those inputs with its own job
+context and verifies the annotated exact-release tag and peeled commit. It uses
+pinned SHA-256-verified Python, Bazelisk, and Bazel binaries; recursively scans
+`MODULE.bazel` includes, bazelrc imports, and all `bazel-*` source trees; then
+binds the audited input hashes and workflow/action identity into Bazel BEP
+metadata and the final evidence. The command forces
+remote spawn strategy, disables local fallback and cache acceptance, and only
+emits evidence when Bazel's BEP reports a successful supported target with
+`remote_processes > 0` and no local runner count.
+
+`just routine-rbe-publication-gate` verifies the public canonical `v2.12.0`
+bytes. It intentionally remains red until the repaired immutable release is
+reviewed and published. A local trusted-root substitution is rejected by this
+gate.
 
 ## Cache-backed enrollment (cache-first, TIN-2110)
 

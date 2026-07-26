@@ -40,6 +40,18 @@ target class proved. Dispatch correlation uses a unique request id in the
 GloriousFlywheel workflow run name; timestamp-only child-run resolution is not
 safe under concurrent consumer proofs.
 
+### Routine RBE guard (TIN-2851)
+
+Implemented but deliberately not activated. The reusable spoke lane is
+default-off and additive; existing local, cache, and executor selectors retain
+their prior behavior but are not this attestation. Its publication gate
+requires canonical annotated `v2.12.0` exact-release bytes, sealed
+tool and helper provenance, recursive Bazel source purity, post-run mutation
+checks, a supported lane-admitted target class, forced remote-only execution,
+and BEP `remote_processes > 0`. The currently published `v2` bytes are expected
+to fail the gate; release review/publication, consumer activation, and any live
+RBE proof remain separate work.
+
 ### Public preview overlay
 
 Implemented as a reusable dispatch workflow and composite. Spokes request

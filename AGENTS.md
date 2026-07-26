@@ -127,6 +127,24 @@ runner class + `GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST`) and fails closed if any piec
 is missing. No current repo selects it (cache-first / TIN-1997 Option D); the
 contract exists so the gate is enforceable the moment a repo declares it.
 
+## Routine RBE Guard (TIN-2851)
+
+- Routine RBE is default-off. `cache_backed: false` and non-opted lanes execute
+  through their pre-existing paths; cache-backed behavior is unchanged. The
+  attested proof surface is `.github/actions/routine-rbe`, called only by the
+  default-off `spoke-ci.yml` job.
+- The guarded job binds the exact `v2.12.0` reusable workflow and action tag,
+  passes all four `job.workflow_*` identity fields, and requires a supported
+  target class admitted by the lane, forced remote spawn strategy, no local
+  fallback, and BEP `remote_processes > 0`.
+- Package authority, a remote-cache hit, ARC placement, or a green local action
+  is not RBE evidence. The emitted evidence states these exclusions.
+- Run `just routine-rbe-contract-check` and `just routine-rbe-selftest` for
+  changes. `just routine-rbe-publication-gate` must remain red until repaired
+  immutable release bytes are reviewed and published. Never use a local trusted
+  root to satisfy that gate, move `v2`, activate a consumer, or run a live proof
+  as part of ordinary guard development.
+
 ## Releasing
 
 See `RELEASING.md`. On a `release: vX.Y.Z` commit to `main`, `release.yml` cuts

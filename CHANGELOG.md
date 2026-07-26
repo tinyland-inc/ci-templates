@@ -5,6 +5,26 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **TIN-2851 routine-RBE publication guard** — adds a default-off spoke lane
+  that admits only declared, supported target classes and requires the exact
+  canonical `v2.12.0` action/workflow archive, pinned and hash-verified Python,
+  Bazelisk, and Bazel tools, recursively scanned Bazel inputs, mutation checks,
+  forced remote execution, disabled local fallback, and BEP evidence with
+  `remote_processes > 0`.
+  Adversarial self-tests cover floating/moved refs, reusable-workflow roots,
+  poisoned tools/modules, local repositories, cache-only and local execution,
+  fallback, mixed runners, cached tests, helper mutation, and stale release
+  bytes.
+
+### Changed
+
+- **Routine attestation remains default-off and additive** — existing non-opted
+  and cache-backed jobs retain their prior behavior. The published releases
+  intentionally fail `just routine-rbe-publication-gate` until exact `v2.12.0`
+  bytes pass review and are published; no consumer may opt in before then.
+
 ## [2.11.0] — 2026-07-10
 
 ### Added

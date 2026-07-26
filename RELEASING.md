@@ -87,8 +87,22 @@ and may break without notice**.
    Verify with `gh release view "$ver"` and at least one downstream
    spoke bumping its `@v...` pin.
 
-4. **Verify**: at least one spoke (`tinyland-inc/site.scaffold` first)
-   bumps its `@v...` pin and CI is green.
+4. **Verify the routine-RBE exact-release bytes after publishing `v2.12.0`**:
+
+   ```bash
+   just routine-rbe-publication-gate
+   ```
+
+   The gate resolves the canonical remote, requires the immutable `v2.12.0`
+   annotated tag, archives its peeled commit, and checks the exact action and
+   reusable-workflow identity plus pinned helper hashes. A checkout or local
+   trusted-root override is not accepted. It is expected to stay red until the
+   reviewed `v2.12.0` bytes are published; never alter an existing exact tag.
+
+5. **Verify consumer behavior** only after the publication gate is green: at
+   least one spoke (`tinyland-inc/site.scaffold` first) bumps its immutable
+   `@v...` pin and CI is green. Consumer activation and live RBE proof are
+   separate, operator-authorized follow-ups.
 
 ## Migration discipline
 
@@ -122,6 +136,11 @@ This ensures a `git checkout v2.0.0` of the repo exposes a coherent
 self-referential set of action versions. A v2 reusable workflow must not call
 v1 composites unless the migration guide explicitly documents that compatibility
 boundary.
+
+The routine-RBE action is the narrow exception: its reusable workflow pins
+`@v2.12.0` exactly because a floating action could execute before its own trust
+guard. A future release that changes either routine-RBE helper or workflow byte
+must update that exact internal pin and the guard's release constant together.
 
 ## Flywheel endpoint discipline
 

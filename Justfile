@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check routine-rbe-contract-check routine-rbe-selftest endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -51,6 +51,19 @@ js-bazel-runner-contract-check:
 # Ensure flywheel-reapi-proof keeps child-run correlation request-id based.
 flywheel-reapi-proof-contract-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py flywheel-reapi-proof-contract
+
+# Guard TIN-2851's default-off executor boundary and immutable helper/tool pins.
+routine-rbe-contract-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py routine-rbe-contract
+
+# Exercise moved refs, source/tool poisoning, mutation, and false RBE evidence.
+routine-rbe-selftest:
+    cd {{ root }} && python3 -I -S scripts/routine-rbe-guard-selftest.py
+
+# Live publication check. Intentionally NOT part of `just check`: this remains
+# red until the reviewed bytes are published at immutable tag v2.12.0.
+routine-rbe-publication-gate:
+    cd {{ root }} && env -u ROUTINE_RBE_TRUSTED_ROOT -u TIN2851_SELFTEST -u TIN2851_SELFTEST_REMOTE python3 -I -S scripts/routine-rbe-guard.py publication-check
 
 # Ensure the v2 Flywheel bazelrc fragment has no baked endpoints or upload authority.
 endpoint-free-check:

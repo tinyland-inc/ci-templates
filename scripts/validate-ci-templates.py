@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import re
@@ -40,13 +41,16 @@ def validate_manifest() -> int:
 
 def check_internal_refs() -> int:
     ok = True
-    action_pattern = re.compile(r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@v2\b")
+    action_pattern = re.compile(
+        r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@"
+        r"(v2(?:\.[0-9]+\.[0-9]+)?)\b"
+    )
     main_pattern = re.compile(r"tinyland-inc/ci-templates/.*@main")
 
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
-        for action in action_pattern.findall(text):
+        for action, _ref in action_pattern.findall(text):
             action_yml = ROOT / ".github/actions" / action / "action.yml"
             if not action_yml.exists():
                 print(f"{rel}: missing internal action {action_yml.relative_to(ROOT)}", file=sys.stderr)
@@ -172,6 +176,288 @@ def check_flywheel_reapi_proof_contract() -> int:
     if not ok:
         return 1
     print("flywheel-reapi-proof request-id correlation guarded")
+    return 0
+
+
+def check_routine_rbe_contract() -> int:
+    """Guard the default-off TIN-2851 routine-RBE path and trust boundary."""
+
+    workflow_path = ROOT / ".github/workflows/spoke-ci.yml"
+    action_path = ROOT / ".github/actions/routine-rbe/action.yml"
+    run_path = ROOT / "scripts/routine-rbe-run.sh"
+    guard_path = ROOT / "scripts/routine-rbe-guard.py"
+    selftest_path = ROOT / "scripts/routine-rbe-guard-selftest.py"
+    toolchain_path = ROOT / "config/routine-rbe-toolchain.json"
+    justfile_path = ROOT / "Justfile"
+    readme_path = ROOT / "README.md"
+    changelog_path = ROOT / "CHANGELOG.md"
+    paths = (
+        workflow_path,
+        action_path,
+        run_path,
+        guard_path,
+        selftest_path,
+        toolchain_path,
+        justfile_path,
+        readme_path,
+        changelog_path,
+    )
+    missing = [path for path in paths if not path.is_file()]
+    if missing:
+        for path in missing:
+            print(f"missing {path.relative_to(ROOT)}", file=sys.stderr)
+        return 1
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+    action = action_path.read_text(encoding="utf-8")
+    runner = run_path.read_text(encoding="utf-8")
+    guard = guard_path.read_text(encoding="utf-8")
+    justfile = justfile_path.read_text(encoding="utf-8")
+    readme = readme_path.read_text(encoding="utf-8")
+    changelog = changelog_path.read_text(encoding="utf-8")
+    ok = True
+
+    required_workflow = [
+        "routine_rbe:\n",
+        "if: ${{ inputs.routine_rbe }}",
+        "uses: tinyland-inc/ci-templates/.github/actions/routine-rbe@v2.12.0",
+        "workflow-ref: ${{ job.workflow_ref }}",
+        "workflow-sha: ${{ job.workflow_sha }}",
+        "workflow-repository: ${{ job.workflow_repository }}",
+        "workflow-file-path: ${{ job.workflow_file_path }}",
+        "uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+        "config: ${{ inputs.flywheel_config }}",
+        "GF_BAZEL_SUBSTRATE_MODE: executor-backed",
+        "GF_FLYWHEEL_PROFILE_STATE: executor-backed",
+    ]
+    for snippet in required_workflow:
+        if snippet not in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: missing routine-RBE snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    routine_block = re.search(
+        r"\n      routine_rbe:\n(?:.*\n)*?        default: (\w+)\n", workflow
+    )
+    if not routine_block or routine_block.group(1) != "false":
+        print("spoke-ci routine_rbe input must default false", file=sys.stderr)
+        ok = False
+    flywheel_block = re.search(
+        r"\n      flywheel_config:\n(?:.*\n)*?        default: ([^\s]+)\n", workflow
+    )
+    if not flywheel_block or flywheel_block.group(1) != "flywheel-executor":
+        print("spoke-ci flywheel_config default drifted from the existing contract", file=sys.stderr)
+        ok = False
+    routine_job = re.search(r"\n  routine-rbe:\n(?P<body>.*?)(?=\n  [a-zA-Z0-9_-]+:\n)", workflow, re.S)
+    if not routine_job:
+        print("spoke-ci routine-rbe job is missing", file=sys.stderr)
+        ok = False
+    elif "@v2\n" in routine_job.group("body") or "/nix-setup@v2" in routine_job.group("body"):
+        print("routine-rbe job must not load floating internal action bytes", file=sys.stderr)
+        ok = False
+
+    unchanged_workflow = [
+        "config: ${{ inputs.flywheel_config }}",
+        "nix develop --command bazelisk build //:node_modules",
+        "--config=ci-cached \\",
+        '--remote_cache="${BAZEL_REMOTE_CACHE}" \\',
+        "--remote_upload_local_results=false \\",
+    ]
+    for snippet in unchanged_workflow:
+        if snippet not in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: ordinary/cache-backed path drifted: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    required_action = [
+        'default: "false"',
+        "ROUTINE_RBE_ACTION_REPOSITORY: ${{ github.action_repository }}",
+        "ROUTINE_RBE_ACTION_REF: ${{ github.action_ref }}",
+        "ROUTINE_RBE_WORKFLOW_REF: ${{ inputs.workflow-ref }}",
+        "ROUTINE_RBE_WORKFLOW_SHA: ${{ inputs.workflow-sha }}",
+        "ROUTINE_RBE_WORKFLOW_REPOSITORY: ${{ inputs.workflow-repository }}",
+        "ROUTINE_RBE_WORKFLOW_FILE_PATH: ${{ inputs.workflow-file-path }}",
+        "ROUTINE_RBE_JOB_WORKFLOW_REF: ${{ job.workflow_ref }}",
+        "ROUTINE_RBE_JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}",
+        "ROUTINE_RBE_JOB_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}",
+        "ROUTINE_RBE_JOB_WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}",
+        "BASH_ENV: /dev/null",
+        "PATH: /usr/bin:/bin:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin",
+        "remote_processes greater than zero",
+        '"$trusted_env" -i "${clean_env[@]}"',
+    ]
+    for snippet in required_action:
+        if snippet not in action:
+            print(
+                f"{action_path.relative_to(ROOT)}: missing guarded action snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    helper_paths = {
+        "RUN": run_path,
+        "GUARD": guard_path,
+        "TOOLCHAIN": toolchain_path,
+    }
+    declared_hashes = dict(
+        re.findall(
+            r"ROUTINE_RBE_(RUN|GUARD|TOOLCHAIN)_SHA256:\s*([0-9a-f]{64})",
+            action,
+        )
+    )
+    for name, path in helper_paths.items():
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if declared_hashes.get(name) != actual:
+            print(
+                f"{action_path.relative_to(ROOT)}: {name} helper hash is stale; "
+                f"expected {actual}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    try:
+        toolchain = json.loads(toolchain_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"{toolchain_path.relative_to(ROOT)}: invalid JSON: {exc}", file=sys.stderr)
+        toolchain = {}
+        ok = False
+    if toolchain.get("contract") != "TIN-2851-routine-rbe-v1":
+        print("routine-RBE toolchain contract marker is missing", file=sys.stderr)
+        ok = False
+    for tool in ("python", "bazelisk", "bazel"):
+        block = toolchain.get(tool, {})
+        if not re.fullmatch(r"[0-9a-f]{64}", str(block.get("sha256", ""))):
+            print(f"routine-RBE {tool} SHA-256 is not pinned", file=sys.stderr)
+            ok = False
+    for tool in ("python", "bazelisk"):
+        url = str(toolchain.get(tool, {}).get("url", ""))
+        if not url.startswith("https://github.com/") or "/latest/" in url:
+            print(f"routine-RBE {tool} URL is not an exact GitHub release", file=sys.stderr)
+            ok = False
+    if toolchain.get("bazel", {}).get("version") != "8.2.1":
+        print("routine-RBE Bazel must match the scaffold's pinned 8.2.1", file=sys.stderr)
+        ok = False
+    python_block = toolchain.get("python", {})
+    if python_block.get("url") not in action or python_block.get("sha256") not in action:
+        print("action bootstrap Python pin differs from toolchain manifest", file=sys.stderr)
+        ok = False
+
+    required_runner = [
+        'readonly SAFE_SYSTEM_PATH=',
+        "unset BASH_ENV ENV CDPATH GLOBIGNORE PYTHONHOME PYTHONPATH PYTHONSTARTUP",
+        "resolve_trusted_tool()",
+        'GIT_BIN="$(resolve_trusted_tool git)"',
+        'TAR_BIN="$(resolve_trusted_tool tar)"',
+        'CURL_BIN="$(resolve_trusted_tool curl)"',
+        '"${CURL_BIN}" --disable --proto',
+        '"$python_bin" -I -S',
+        "BAZELISK_VERIFY_SHA256=$bazel_sha256",
+        "USE_BAZEL_VERSION=$bazel_version",
+        "--remote_accept_cached=false",
+        "--remote_local_fallback=false",
+        "--spawn_strategy=remote",
+        "--remote_upload_local_results=false",
+        "source-scan",
+        "source-verify",
+        "trust-recheck",
+        "attestation-args",
+        "evidence-verify",
+        "ROUTINE_RBE_TRUSTED_ROOT",
+        "--job-workflow-ref",
+        'for required_tag in flywheel-eligible "$ROUTINE_RBE_TARGET_CLASS"',
+        '"${attestation_flags[@]}"',
+    ]
+    for snippet in required_runner:
+        if snippet not in runner:
+            print(
+                f"{run_path.relative_to(ROOT)}: missing fail-closed runner snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    for forbidden in ("command -v", "ROUTINE_RBE_GIT=", "| awk"):
+        if forbidden in runner:
+            print(
+                f"{run_path.relative_to(ROOT)}: caller-controlled tool lookup remains: {forbidden}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    required_guard = [
+        'ROUTINE_RBE_RELEASE_TAG = "v2.12.0"',
+        "recursive_module_closure",
+        "recursive_bazelrc_closure",
+        "pre-existing bazel-* tree",
+        "audited_workspace_hashes",
+        "audited_workspace_digest",
+        "workspace mutated after source scan",
+        "canonical tag refs moved",
+        "reusable-workflow identity inputs differ from the runner job context",
+        '"action_repository": "TIN2851_ACTION_REPOSITORY"',
+        '"workflow_file_path": "TIN2851_WORKFLOW_FILE_PATH"',
+        "BEP build metadata differs from the trusted identity/source attestation",
+        'if name == "remote"',
+        "remote_processes must be greater than zero",
+        "cache hits, ARC placement",
+        "local trusted-root substitution is forbidden",
+    ]
+    for snippet in required_guard:
+        if snippet not in guard:
+            print(
+                f"{guard_path.relative_to(ROOT)}: missing guard behavior: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    required_selftests = [
+        "caller-controlled git path shim is rejected",
+        "routine runner ignores caller PATH tool shims",
+        "nonstandard MODULE include source cannot hide local_path_override",
+        "multiline MODULE include source cannot hide local_path_override",
+        "nested bazel-* tree cannot hide local repository injection",
+        "floating internal action ref is rejected",
+        "workflow identity inputs must equal the actual job identity",
+        "BEP workflow identity metadata cannot diverge from trust state",
+        "audited workspace digest cannot be changed before attestation",
+        "remote cache hits cannot substitute for remote processes",
+    ]
+    selftest = selftest_path.read_text(encoding="utf-8")
+    for snippet in required_selftests:
+        if snippet not in selftest:
+            print(
+                f"{selftest_path.relative_to(ROOT)}: missing adversarial case: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    required_just = [
+        "routine-rbe-contract-check",
+        "routine-rbe-selftest",
+        "routine-rbe-publication-gate",
+    ]
+    for snippet in required_just:
+        if snippet not in justfile:
+            print(f"Justfile missing {snippet}", file=sys.stderr)
+            ok = False
+    check_header = next((line for line in justfile.splitlines() if line.startswith("check:")), "")
+    if "routine-rbe-publication-gate" in check_header:
+        print("intentionally red publication gate must not be a just check dependency", file=sys.stderr)
+        ok = False
+    if "routine-rbe" not in readme.lower() or "remote_processes" not in readme:
+        print("README missing routine-RBE evidence boundary", file=sys.stderr)
+        ok = False
+    if "TIN-2851" not in changelog:
+        print("CHANGELOG [Unreleased] missing TIN-2851 entry", file=sys.stderr)
+        ok = False
+
+    if not ok:
+        return 1
+    print(
+        "routine-RBE guard is default-off, exact-release-bound, tool-pinned, "
+        "workspace-audited, and BEP-attested"
+    )
     return 0
 
 
@@ -365,6 +651,7 @@ def main() -> int:
             "js-bazel-runner-contract",
             "flywheel-reapi-proof-contract",
             "cache-backed-optin-contract",
+            "routine-rbe-contract",
         ],
     )
     args = parser.parse_args()
@@ -377,6 +664,8 @@ def main() -> int:
         return check_flywheel_reapi_proof_contract()
     if args.check == "cache-backed-optin-contract":
         return check_cache_backed_optin_contract()
+    if args.check == "routine-rbe-contract":
+        return check_routine_rbe_contract()
     return check_internal_refs()
 
 

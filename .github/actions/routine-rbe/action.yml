@@ -1,0 +1,154 @@
+name: routine-rbe
+description: >-
+  Default-off, target-class-scoped remote-execution guard. It verifies the
+  canonical ci-templates tag/archive and pinned toolchain, scans immutable
+  consumer source, forces remote-only Bazel execution, and emits evidence only
+  when Bazel BEP metrics report remote_processes greater than zero.
+
+inputs:
+  enabled:
+    description: Explicit routine-RBE opt-in. False is a no-op.
+    required: false
+    default: "false"
+  cache-backed:
+    description: Separate shared-cache substrate opt-in; must also be true.
+    required: false
+    default: "false"
+  lanes-path:
+    description: Consumer lanes.json path relative to the checkout root.
+    required: false
+    default: .github/lanes.json
+  lane:
+    description: Lane whose proved target-class allowlist admits this invocation.
+    required: true
+  target-class:
+    description: One supported proved target class.
+    required: true
+  target:
+    description: One bounded canonical Bazel target label.
+    required: true
+  bazel-command:
+    description: Bazel build or test command required by the target class.
+    required: false
+    default: build
+  workflow-ref:
+    description: Exact job.workflow_ref supplied by the reusable workflow.
+    required: true
+  workflow-sha:
+    description: Exact job.workflow_sha supplied by the reusable workflow.
+    required: true
+  workflow-repository:
+    description: Exact job.workflow_repository supplied by the reusable workflow.
+    required: true
+  workflow-file-path:
+    description: Exact job.workflow_file_path supplied by the reusable workflow.
+    required: true
+
+outputs:
+  proved:
+    description: True only after all trust, source, toolchain, and BEP evidence checks pass.
+    value: ${{ steps.run.outputs.proved || steps.disabled.outputs.proved }}
+  remote-processes:
+    description: Count from Bazel BEP runnerCount entries named exactly remote.
+    value: ${{ steps.run.outputs.remote-processes }}
+  evidence-path:
+    description: Path to the bounded machine-readable evidence JSON.
+    value: ${{ steps.run.outputs.evidence-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Keep routine RBE default-off
+      id: disabled
+      if: inputs.enabled != 'true'
+      shell: bash
+      run: |
+        echo "proved=false" >> "$GITHUB_OUTPUT"
+        echo "::notice::routine RBE is disabled; no executor endpoint or Bazel executor config was selected"
+
+    - name: Run guarded routine RBE
+      id: run
+      if: inputs.enabled == 'true'
+      shell: bash
+      env:
+        BASH_ENV: /dev/null
+        ENV: /dev/null
+        PATH: /usr/bin:/bin:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin
+        ROUTINE_RBE_ENABLED: ${{ inputs.enabled }}
+        ROUTINE_RBE_CACHE_BACKED: ${{ inputs.cache-backed }}
+        ROUTINE_RBE_ACTION_REPOSITORY: ${{ github.action_repository }}
+        ROUTINE_RBE_ACTION_REF: ${{ github.action_ref }}
+        ROUTINE_RBE_WORKFLOW_REF: ${{ inputs.workflow-ref }}
+        ROUTINE_RBE_WORKFLOW_SHA: ${{ inputs.workflow-sha }}
+        ROUTINE_RBE_WORKFLOW_REPOSITORY: ${{ inputs.workflow-repository }}
+        ROUTINE_RBE_WORKFLOW_FILE_PATH: ${{ inputs.workflow-file-path }}
+        ROUTINE_RBE_JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
+        ROUTINE_RBE_JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        ROUTINE_RBE_JOB_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+        ROUTINE_RBE_JOB_WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
+        ROUTINE_RBE_LANES_PATH: ${{ inputs.lanes-path }}
+        ROUTINE_RBE_LANE: ${{ inputs.lane }}
+        ROUTINE_RBE_TARGET_CLASS: ${{ inputs.target-class }}
+        ROUTINE_RBE_TARGET: ${{ inputs.target }}
+        ROUTINE_RBE_BAZEL_COMMAND: ${{ inputs.bazel-command }}
+        ROUTINE_RBE_RUNNER_LABELS: ${{ join(runner.labels, ',') }}
+        ROUTINE_RBE_RUN_SHA256: 0d8dc5bced6f6315af4816e2c17c427ce5ef0917f818aaecf18da87cd2603ca7
+        ROUTINE_RBE_GUARD_SHA256: 0ebdad717dedfb0551c7db316f2d7e3d3f23add1b10021839b81dd5292fb1ae5
+        ROUTINE_RBE_TOOLCHAIN_SHA256: abc5ecc96651b3f8ef0fce0914bdd71a63e00df9a0e86d1ee430dda688b2c9d3
+        ROUTINE_RBE_PYTHON_URL: https://github.com/astral-sh/python-build-standalone/releases/download/20250529/cpython-3.12.10%2B20250529-x86_64-unknown-linux-gnu-install_only.tar.gz
+        ROUTINE_RBE_PYTHON_SHA256: 3b7de567f4a8a1c3e5be2d51af3023dd3c1075cfacb6cd8efb511e0ef4b31fa8
+      run: |
+        trusted_bash=""
+        trusted_env=""
+        for candidate in /bin/bash /usr/bin/bash /run/current-system/sw/bin/bash; do
+          if [[ -x "$candidate" ]]; then
+            trusted_bash="$candidate"
+            break
+          fi
+        done
+        for candidate in /usr/bin/env /bin/env /run/current-system/sw/bin/env; do
+          if [[ -x "$candidate" ]]; then
+            trusted_env="$candidate"
+            break
+          fi
+        done
+        [[ -n "$trusted_bash" && -n "$trusted_env" ]] || {
+          builtin printf '%s\n' \
+            "::error::routine RBE requires Bash and env from fixed system paths" >&2
+          exit 127
+        }
+
+        clean_env=(
+          "PATH=/usr/bin:/bin:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin"
+          "BASH_ENV=/dev/null"
+          "ENV=/dev/null"
+        )
+        for name in \
+          GITHUB_WORKSPACE RUNNER_TEMP GITHUB_OUTPUT GITHUB_STEP_SUMMARY \
+          GITHUB_RUN_ID ROUTINE_RBE_ENABLED ROUTINE_RBE_CACHE_BACKED \
+          ROUTINE_RBE_ACTION_REPOSITORY ROUTINE_RBE_ACTION_REF \
+          ROUTINE_RBE_WORKFLOW_REF ROUTINE_RBE_WORKFLOW_SHA \
+          ROUTINE_RBE_WORKFLOW_REPOSITORY ROUTINE_RBE_WORKFLOW_FILE_PATH \
+          ROUTINE_RBE_JOB_WORKFLOW_REF ROUTINE_RBE_JOB_WORKFLOW_SHA \
+          ROUTINE_RBE_JOB_WORKFLOW_REPOSITORY \
+          ROUTINE_RBE_JOB_WORKFLOW_FILE_PATH ROUTINE_RBE_LANES_PATH \
+          ROUTINE_RBE_LANE ROUTINE_RBE_TARGET_CLASS ROUTINE_RBE_TARGET \
+          ROUTINE_RBE_BAZEL_COMMAND ROUTINE_RBE_RUNNER_LABELS \
+          ROUTINE_RBE_RUN_SHA256 ROUTINE_RBE_GUARD_SHA256 \
+          ROUTINE_RBE_TOOLCHAIN_SHA256 ROUTINE_RBE_PYTHON_URL \
+          ROUTINE_RBE_PYTHON_SHA256 GF_BAZEL_SUBSTRATE_MODE \
+          GF_FLYWHEEL_PROFILE_STATE GF_BAZEL_REMOTE_UPLOAD \
+          BAZEL_REMOTE_CACHE BAZEL_REMOTE_EXECUTOR \
+          BAZEL_REMOTE_INSTANCE_NAME BAZEL_CREDENTIAL_HELPER \
+          BAZEL_REMOTE_HEADER BAZEL_REMOTE_CACHE_HEADER \
+          BAZEL_REMOTE_EXEC_HEADER SSL_CERT_FILE SSL_CERT_DIR \
+          NIX_SSL_CERT_FILE ACTIONS_ID_TOKEN_REQUEST_URL \
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN; do
+          if [[ -v $name ]]; then
+            clean_env+=("$name=${!name}")
+          fi
+        done
+
+        "$trusted_env" -i "${clean_env[@]}" \
+          "$trusted_bash" --noprofile --norc \
+          "${{ github.action_path }}/../../../scripts/routine-rbe-run.sh"

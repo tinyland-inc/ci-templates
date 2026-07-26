@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "contract": "TIN-2851-routine-rbe-v1",
+  "platform": {
+    "os": "Linux",
+    "arch": "x86_64"
+  },
+  "python": {
+    "version": "3.12.10",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250529/cpython-3.12.10%2B20250529-x86_64-unknown-linux-gnu-install_only.tar.gz",
+    "sha256": "3b7de567f4a8a1c3e5be2d51af3023dd3c1075cfacb6cd8efb511e0ef4b31fa8",
+    "executable": "python/bin/python3"
+  },
+  "bazelisk": {
+    "version": "1.26.0",
+    "url": "https://github.com/bazelbuild/bazelisk/releases/download/v1.26.0/bazelisk-linux-amd64",
+    "sha256": "6539c12842ad76966f3d493e8f80d67caa84ec4a000e220d5459833c967c12bc"
+  },
+  "bazel": {
+    "version": "8.2.1",
+    "sha256": "7ff2b6a675b59a791d007c526977d5262ade8fa52efc8e0d1ff9e18859909fc0"
+  }
+}

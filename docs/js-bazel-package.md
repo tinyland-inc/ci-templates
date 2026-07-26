@@ -168,6 +168,14 @@ cluster runner class for platform identity + a digest-pinned REAPI proof image,
 **No current repo selects executor-backed** (cache-first / Option D); the contract
 is defined so the gate is enforceable the moment a repo declares it.
 
+That declaration is not sufficient to claim routine RBE. TIN-2851 routes any
+future routine execution through the separate default-off `routine-rbe` guard;
+the ordinary package lane remains local or cache-only. Package publication,
+remote-cache hits, ARC placement, and successful local actions are explicitly
+excluded from RBE evidence. The guard additionally requires canonical release
+bytes, sealed tools and sources, a supported lane-admitted class, remote-only
+spawn strategy with fallback disabled, and BEP `remote_processes > 0`.
+
 Consumers opting in must:
 
 1. set `cache_backed: true` in the `with:` block

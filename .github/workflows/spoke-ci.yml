@@ -30,6 +30,29 @@ on:
           remote cache.
         type: boolean
         default: false
+      routine_rbe:
+        description: >-
+          Explicit, default-off opt-in for one guarded executor-backed Bazel
+          invocation per lane. Requires cache_backed=true, exact v2.12.0
+          reusable-workflow/action pins, a supported lane-admitted target class, pinned
+          tool provenance, source-purity and mutation checks, forced remote
+          strategy with local fallback disabled, and BEP remote_processes > 0.
+          This input remains unusable until the canonical v2.12.0 publication gate
+          verifies the reviewed guard bytes.
+        type: boolean
+        default: false
+      routine_rbe_target_class:
+        description: Supported proved target class selected only when routine_rbe=true.
+        type: string
+        default: ""
+      routine_rbe_target:
+        description: One bounded canonical Bazel label selected only when routine_rbe=true.
+        type: string
+        default: ""
+      routine_rbe_bazel_command:
+        description: Bazel build or test command required by routine_rbe_target_class.
+        type: string
+        default: build
       substrate_mode:
         description: >-
           Optional operator override for the cache-backed lane's expected Bazel
@@ -289,6 +312,49 @@ jobs:
 
       - run: nix develop --command just setup
       - run: nix develop --command just check
+
+  routine-rbe:
+    if: ${{ inputs.routine_rbe }}
+    needs: [secrets-scan, repo-manifest, lanes-load]
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
+    runs-on: ${{ inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Guard one routine RBE target
+        id: proof
+        uses: tinyland-inc/ci-templates/.github/actions/routine-rbe@v2.12.0
+        env:
+          GF_BAZEL_SUBSTRATE_MODE: executor-backed
+          GF_FLYWHEEL_PROFILE_STATE: executor-backed
+          GF_BAZEL_REMOTE_UPLOAD: "false"
+        with:
+          enabled: ${{ inputs.routine_rbe }}
+          cache-backed: ${{ inputs.cache_backed }}
+          lanes-path: ${{ inputs.lanes_path }}
+          lane: ${{ matrix.lane.name }}
+          target-class: ${{ inputs.routine_rbe_target_class }}
+          target: ${{ inputs.routine_rbe_target }}
+          bazel-command: ${{ inputs.routine_rbe_bazel_command }}
+          workflow-ref: ${{ job.workflow_ref }}
+          workflow-sha: ${{ job.workflow_sha }}
+          workflow-repository: ${{ job.workflow_repository }}
+          workflow-file-path: ${{ job.workflow_file_path }}
+
+      - name: Upload bounded routine-RBE evidence
+        if: steps.proof.outputs.proved == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: routine-rbe-${{ matrix.lane.name }}-${{ github.run_id }}
+          path: ${{ steps.proof.outputs.evidence-path }}
+          if-no-files-found: error
+          retention-days: 14
 
   bazel-graph:
     needs: [secrets-scan]
