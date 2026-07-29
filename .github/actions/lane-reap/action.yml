@@ -26,11 +26,11 @@ inputs:
     description: Lanes array from lanes-load (defaults to all lanes for reap).
     required: true
   blahaj_repository:
-    description: Target repo for the repository_dispatch.
+    description: Compatibility receiver input. Only exact tinyland-inc/blahaj is accepted.
     required: false
     default: tinyland-inc/blahaj
   dispatch_token:
-    description: GitHub token with repo:dispatch scope on blahaj_repository.
+    description: GitHub token with repo:dispatch scope on exact tinyland-inc/blahaj.
     required: false
     default: ""
   dry_run:
@@ -54,18 +54,33 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        lanes='${{ inputs.lanes_json }}'
+        if ! [[ "${SPOKE}" =~ ^[a-z][a-z0-9-]+$ ]]; then
+          echo "::error::spoke must be a lowercase slug" >&2
+          exit 64
+        fi
+        if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::pr_number must be a positive integer" >&2
+          exit 64
+        fi
+        if ! [[ "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::commit_sha must be a full lowercase commit SHA" >&2
+          exit 64
+        fi
+        jq -e 'type == "array" and all(.[]; type == "object")' \
+          <<<"${LANES_JSON}" >/dev/null
+
         payload_lanes=$(jq -c \
-          --arg pr "${{ inputs.pr_number }}" \
-          --arg domain "${{ inputs.domain }}" \
-          '[.[] | { name: .name, fqdn: (.domain // ("pr-" + $pr + "-" + .name + "." + $domain)) }]' <<< "$lanes")
+          --arg pr "${PR_NUMBER}" \
+          --arg domain "${DOMAIN}" \
+          '[.[] | { name: .name, fqdn: (.domain // ("pr-" + $pr + "-" + .name + "." + $domain)) }]' \
+          <<<"${LANES_JSON}")
 
         payload=$(jq -nc \
-          --arg event_type "${{ inputs.spoke }}-lane-env" \
-          --arg spoke "${{ inputs.spoke }}" \
-          --arg domain "${{ inputs.domain }}" \
-          --argjson pr "${{ inputs.pr_number }}" \
-          --arg commit_sha "${{ inputs.commit_sha }}" \
+          --arg event_type "${SPOKE}-lane-env" \
+          --arg spoke "${SPOKE}" \
+          --arg domain "${DOMAIN}" \
+          --argjson pr "${PR_NUMBER}" \
+          --arg commit_sha "${COMMIT_SHA}" \
           --argjson lanes "$payload_lanes" \
           '{
             event_type: $event_type,
@@ -83,7 +98,7 @@ runs:
             } + (if $domain != "" then {domain: $domain} else {} end))
           }')
 
-        dispatch_id="${{ inputs.spoke }}-pr${{ inputs.pr_number }}-reap-${GITHUB_RUN_ID}"
+        dispatch_id="${SPOKE}-pr${PR_NUMBER}-reap-${GITHUB_RUN_ID}"
         payload_path="${RUNNER_TEMP}/blahaj-reap-${dispatch_id}.json"
         echo "$payload" | jq . > "$payload_path"
 
@@ -95,39 +110,52 @@ runs:
         echo "::group::Blahaj reap payload ($dispatch_id)"
         cat "$payload_path"
         echo "::endgroup::"
+      env:
+        PR_NUMBER: ${{ inputs.pr_number }}
+        SPOKE: ${{ inputs.spoke }}
+        DOMAIN: ${{ inputs.domain }}
+        COMMIT_SHA: ${{ inputs.commit_sha }}
+        LANES_JSON: ${{ inputs.lanes_json }}
 
     - name: Validate against schema
       shell: bash
       run: |
         set -euo pipefail
-        schema="${{ github.action_path }}/../../../schemas/blahaj-dispatch.schema.json"
-        python3 - <<PY
-        import json, sys
+        python3 - <<'PY'
+        import json, os, sys
         from jsonschema import Draft202012Validator
-        schema = json.load(open("$schema"))
-        payload = json.load(open("${{ steps.build.outputs.payload_path }}"))
-        errs = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda e: list(e.absolute_path))
+        schema_path = os.path.join(
+            os.environ["ACTION_PATH"], "../../../schemas/blahaj-dispatch.schema.json"
+        )
+        with open(schema_path, encoding="utf-8") as stream:
+            schema = json.load(stream)
+        with open(os.environ["PAYLOAD_PATH"], encoding="utf-8") as stream:
+            payload = json.load(stream)
+        errs = sorted(
+            Draft202012Validator(schema).iter_errors(payload),
+            key=lambda e: list(e.absolute_path),
+        )
         if errs:
             for e in errs:
                 p = "/" + "/".join(str(x) for x in e.absolute_path)
                 print(f"::error::payload at {p}: {e.message}", file=sys.stderr)
             sys.exit(1)
         PY
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PAYLOAD_PATH: ${{ steps.build.outputs.payload_path }}
 
     - name: Dispatch
       if: inputs.dry_run != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        if [[ -z "${{ inputs.dispatch_token }}" ]]; then
-          echo "::error::dispatch_token is required when dry_run=false"
-          exit 1
-        fi
-        gh api "/repos/${{ inputs.blahaj_repository }}/dispatches" \
-          -X POST \
-          -H "Accept: application/vnd.github+json" \
-          --input "${{ steps.build.outputs.payload_path }}" \
-          || echo "::warning::Blahaj dispatch failed; reap is idempotent and the hourly TTL backstop will retry"
+        bash "${DISPATCH_HELPER}" "${BLAHAJ_REPOSITORY}" "${PAYLOAD_PATH}" best-effort
+      env:
+        DISPATCH_HELPER: ${{ github.action_path }}/../../../scripts/blahaj-repository-dispatch.sh
+        GH_TOKEN: ${{ inputs.dispatch_token }}
+        BLAHAJ_REPOSITORY: ${{ inputs.blahaj_repository }}
+        PAYLOAD_PATH: ${{ steps.build.outputs.payload_path }}
 
     - name: Dry-run notice
       if: inputs.dry_run == 'true'

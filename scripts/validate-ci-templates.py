@@ -7,10 +7,49 @@ import argparse
 import json
 import pathlib
 import re
+import subprocess
 import sys
+import tempfile
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def action_run_input_interpolations(
+    action_path: pathlib.Path,
+) -> list[tuple[int, str]]:
+    """Return composite steps whose parsed run scalar contains an expression."""
+
+    ruby = r"""
+doc = YAML.load_file(ARGV.fetch(0))
+steps = doc.fetch("runs").fetch("steps")
+runs = []
+steps.each_with_index do |step, index|
+  next unless step.key?("run")
+  runs << {
+    "index" => index,
+    "name" => (step["name"] || "step-#{index}"),
+    "run" => step.fetch("run").to_s,
+  }
+end
+puts JSON.generate(runs)
+"""
+    result = subprocess.run(
+        ["ruby", "-ryaml", "-rjson", "-e", ruby, str(action_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "unknown Ruby YAML parse error"
+        raise ValueError(f"could not parse action run scalars: {detail}")
+
+    parsed_runs = json.loads(result.stdout)
+    return [
+        (int(step["index"]), str(step["name"]))
+        for step in parsed_runs
+        if "${{" in str(step["run"])
+    ]
 
 
 def validate_manifest() -> int:
@@ -172,6 +211,180 @@ def check_flywheel_reapi_proof_contract() -> int:
     if not ok:
         return 1
     print("flywheel-reapi-proof request-id correlation guarded")
+    return 0
+
+
+def check_blahaj_dispatch_receiver_contract() -> int:
+    """Guard exact-receiver containment for token-bearing Blahaj dispatchers."""
+
+    action_paths = [
+        ROOT / ".github/actions/lane-dispatch/action.yml",
+        ROOT / ".github/actions/lane-reap/action.yml",
+        ROOT / ".github/actions/lane-ttl-reap/action.yml",
+        ROOT / ".github/actions/public-preview-dispatch/action.yml",
+    ]
+    helper_path = ROOT / "scripts/blahaj-repository-dispatch.sh"
+    validator_path = ROOT / "scripts/validate-blahaj-dispatch-receiver.sh"
+    selftest_path = ROOT / "scripts/blahaj-dispatch-receiver-selftest.sh"
+    shell_input_selftest_path = (
+        ROOT / "scripts/blahaj-dispatch-shell-input-selftest.sh"
+    )
+    ok = True
+
+    for path in (
+        *action_paths,
+        helper_path,
+        validator_path,
+        selftest_path,
+        shell_input_selftest_path,
+    ):
+        if not path.exists():
+            print(f"missing {path.relative_to(ROOT)}", file=sys.stderr)
+            ok = False
+    if not ok:
+        return 1
+
+    required_action_snippets = [
+        "default: tinyland-inc/blahaj",
+        "DISPATCH_HELPER: ${{ github.action_path }}/../../../scripts/blahaj-repository-dispatch.sh",
+        'bash "${DISPATCH_HELPER}" "${BLAHAJ_REPOSITORY}" "${PAYLOAD_PATH}"',
+        "BLAHAJ_REPOSITORY: ${{ inputs.blahaj_repository }}",
+        "PAYLOAD_PATH: ${{ steps.build.outputs.payload_path }}",
+        "GH_TOKEN: ${{ inputs.dispatch_token }}",
+    ]
+    for path in action_paths:
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(ROOT)
+        for snippet in required_action_snippets:
+            if snippet not in text:
+                print(
+                    f"{rel}: missing exact-receiver dispatch snippet: {snippet}",
+                    file=sys.stderr,
+                )
+                ok = False
+        if "gh api " in text or "/dispatches" in text:
+            print(
+                f"{rel}: embeds a dispatch endpoint instead of using the validated helper",
+                file=sys.stderr,
+            )
+            ok = False
+        if text.count("${{ inputs.blahaj_repository }}") != 1:
+            print(
+                f"{rel}: blahaj_repository must enter the dispatch step only through "
+                "the quoted environment binding",
+                file=sys.stderr,
+            )
+            ok = False
+        try:
+            interpolated_steps = action_run_input_interpolations(path)
+        except (ValueError, json.JSONDecodeError) as err:
+            print(f"{rel}: {err}", file=sys.stderr)
+            ok = False
+            continue
+        for step_index, step_name in interpolated_steps:
+            print(
+                f"{rel}: step {step_index} ({step_name}) contains a GitHub "
+                "expression in parsed run source instead of an env binding",
+                file=sys.stderr,
+            )
+            ok = False
+
+    helper = helper_path.read_text(encoding="utf-8")
+    validator_call = (
+        'bash "${script_dir}/validate-blahaj-dispatch-receiver.sh" "${receiver}"'
+    )
+    dispatch_call = 'gh api "/repos/${receiver}/dispatches"'
+    validator_index = helper.find(validator_call)
+    dispatch_index = helper.find(dispatch_call)
+    if validator_index < 0:
+        print(
+            f"{helper_path.relative_to(ROOT)}: missing exact receiver validator call",
+            file=sys.stderr,
+        )
+        ok = False
+    if dispatch_index < 0:
+        print(
+            f"{helper_path.relative_to(ROOT)}: missing repository_dispatch call",
+            file=sys.stderr,
+        )
+        ok = False
+    if validator_index >= 0 and dispatch_index >= 0 and validator_index >= dispatch_index:
+        print(
+            f"{helper_path.relative_to(ROOT)}: receiver validation must precede gh api",
+            file=sys.stderr,
+        )
+        ok = False
+    if helper.count("gh api ") != 1:
+        print(
+            f"{helper_path.relative_to(ROOT)}: dispatch helper must have exactly one gh api call",
+            file=sys.stderr,
+        )
+        ok = False
+
+    validator = validator_path.read_text(encoding="utf-8")
+    for snippet in (
+        'readonly expected_receiver="tinyland-inc/blahaj"',
+        'if [[ "${receiver}" != "${expected_receiver}" ]]',
+    ):
+        if snippet not in validator:
+            print(
+                f"{validator_path.relative_to(ROOT)}: missing fail-closed snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    if not ok:
+        return 1
+    print("Blahaj repository_dispatch receiver validation precedes every dispatch")
+    return 0
+
+
+def selftest_action_run_scalar_guard() -> int:
+    """Mutation-test rejection of every GitHub-expression spelling."""
+
+    clean_action = """\
+name: parsed-run-selftest
+runs:
+  using: composite
+  steps:
+    - name: probe
+      shell: bash
+      run: SAFE_RUN_SOURCE
+"""
+    mutations = {
+        "clean": ("echo safe", False),
+        "inline-dot": ('echo "${{ inputs.receiver }}"', True),
+        "block-dot": ('|-\n        echo "${{inputs.receiver}}"', True),
+        "inline-bracket": ('echo "${{ inputs[\'receiver\'] }}"', True),
+        "block-bracket": ('|-\n        echo "${{ inputs[\'receiver\'] }}"', True),
+        "inline-nested": (
+            'echo "${{ fromJSON(toJSON(inputs))[\'receiver\'] }}"',
+            True,
+        ),
+        "block-nested": (
+            '|-\n        echo "${{ fromJSON(toJSON(inputs))[\'receiver\'] }}"',
+            True,
+        ),
+    }
+    with tempfile.TemporaryDirectory() as raw_tmp:
+        tmp = pathlib.Path(raw_tmp)
+        for name, (replacement, must_reject) in mutations.items():
+            action_path = tmp / f"{name}.yml"
+            action_path.write_text(
+                clean_action.replace("SAFE_RUN_SOURCE", replacement),
+                encoding="utf-8",
+            )
+            findings = action_run_input_interpolations(action_path)
+            rejected = bool(findings)
+            if rejected != must_reject:
+                verdict = "reject" if must_reject else "accept"
+                print(
+                    f"run-scalar guard did not {verdict} {name} mutation",
+                    file=sys.stderr,
+                )
+                return 1
+
+    print("parsed action run-scalar guard rejects inline and block GitHub expressions")
     return 0
 
 
@@ -364,6 +577,8 @@ def main() -> int:
             "internal-refs",
             "js-bazel-runner-contract",
             "flywheel-reapi-proof-contract",
+            "blahaj-dispatch-receiver-contract",
+            "blahaj-dispatch-run-scalar-selftest",
             "cache-backed-optin-contract",
         ],
     )
@@ -375,6 +590,10 @@ def main() -> int:
         return check_js_bazel_package_runner_contract()
     if args.check == "flywheel-reapi-proof-contract":
         return check_flywheel_reapi_proof_contract()
+    if args.check == "blahaj-dispatch-receiver-contract":
+        return check_blahaj_dispatch_receiver_contract()
+    if args.check == "blahaj-dispatch-run-scalar-selftest":
+        return selftest_action_run_scalar_guard()
     if args.check == "cache-backed-optin-contract":
         return check_cache_backed_optin_contract()
     return check_internal_refs()

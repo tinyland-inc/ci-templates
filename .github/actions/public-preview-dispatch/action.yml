@@ -59,11 +59,11 @@ inputs:
     required: false
     default: "24h"
   blahaj_repository:
-    description: Target repository for the repository_dispatch.
+    description: Compatibility receiver input. Only exact tinyland-inc/blahaj is accepted.
     required: false
     default: tinyland-inc/blahaj
   dispatch_token:
-    description: GitHub token with repo:dispatch scope on blahaj_repository. Required unless dry_run.
+    description: GitHub token with repo:dispatch scope on exact tinyland-inc/blahaj. Required unless dry_run.
     required: false
     default: ""
   dry_run:
@@ -88,38 +88,50 @@ runs:
       run: |
         set -euo pipefail
 
-        case "${{ inputs.operation }}" in
+        case "${OPERATION}" in
           provision|destroy) ;;
           *) echo "::error::operation must be provision or destroy"; exit 64 ;;
         esac
 
-        if ! [[ "${{ inputs.ttl_hours }}" =~ ^[0-9]+$ ]] || [ "${{ inputs.ttl_hours }}" -lt 1 ] || [ "${{ inputs.ttl_hours }}" -gt 168 ]; then
+        if ! [[ "${SPOKE}" =~ ^[a-z][a-z0-9-]+$ ]]; then
+          echo "::error::spoke must be a lowercase slug" >&2
+          exit 64
+        fi
+        if ! [[ "${SOURCE_PR}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::source_pr must be a positive integer" >&2
+          exit 64
+        fi
+        if ! [[ "${SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::source_commit must be a full lowercase commit SHA" >&2
+          exit 64
+        fi
+        if ! [[ "${TTL_HOURS}" =~ ^[0-9]+$ ]] || [ "${TTL_HOURS}" -lt 1 ] || [ "${TTL_HOURS}" -gt 168 ]; then
           echo "::error::ttl_hours must be an integer from 1 through 168"
           exit 64
         fi
 
-        emails='${{ inputs.allow_emails_json }}'
-        domains='${{ inputs.allow_email_domains_json }}'
-        jq -e 'type == "array" and all(.[]; type == "string")' <<<"${emails}" >/dev/null
-        jq -e 'type == "array" and all(.[]; type == "string")' <<<"${domains}" >/dev/null
+        jq -e 'type == "array" and all(.[]; type == "string")' \
+          <<<"${ALLOW_EMAILS_JSON}" >/dev/null
+        jq -e 'type == "array" and all(.[]; type == "string")' \
+          <<<"${ALLOW_EMAIL_DOMAINS_JSON}" >/dev/null
 
         payload="$(jq -nc \
-          --arg event_type "${{ inputs.spoke }}-public-preview" \
-          --arg operation "${{ inputs.operation }}" \
-          --arg spoke "${{ inputs.spoke }}" \
-          --arg source_repository "${{ inputs.source_repository }}" \
-          --argjson source_pr "${{ inputs.source_pr }}" \
-          --arg source_commit "${{ inputs.source_commit }}" \
-          --arg lane "${{ inputs.lane }}" \
-          --arg origin_fqdn "${{ inputs.origin_fqdn }}" \
-          --arg origin_service "${{ inputs.origin_service }}" \
-          --arg origin_host_header "${{ inputs.origin_host_header }}" \
-          --arg preview_hostname "${{ inputs.preview_hostname }}" \
-          --argjson ttl_hours "${{ inputs.ttl_hours }}" \
-          --arg description "${{ inputs.description }}" \
-          --argjson allow_emails "${emails}" \
-          --argjson allow_email_domains "${domains}" \
-          --arg session_duration "${{ inputs.session_duration }}" \
+          --arg event_type "${SPOKE}-public-preview" \
+          --arg operation "${OPERATION}" \
+          --arg spoke "${SPOKE}" \
+          --arg source_repository "${SOURCE_REPOSITORY}" \
+          --argjson source_pr "${SOURCE_PR}" \
+          --arg source_commit "${SOURCE_COMMIT}" \
+          --arg lane "${LANE}" \
+          --arg origin_fqdn "${ORIGIN_FQDN}" \
+          --arg origin_service "${ORIGIN_SERVICE}" \
+          --arg origin_host_header "${ORIGIN_HOST_HEADER}" \
+          --arg preview_hostname "${PREVIEW_HOSTNAME}" \
+          --argjson ttl_hours "${TTL_HOURS}" \
+          --arg description "${DESCRIPTION}" \
+          --argjson allow_emails "${ALLOW_EMAILS_JSON}" \
+          --argjson allow_email_domains "${ALLOW_EMAIL_DOMAINS_JSON}" \
+          --arg session_duration "${SESSION_DURATION}" \
           '{
             event_type: $event_type,
             client_payload: ({
@@ -146,7 +158,7 @@ runs:
             + (if $description == "" then {} else {description: $description} end))
           }')"
 
-        dispatch_id="${{ inputs.spoke }}-public-preview-pr${{ inputs.source_pr }}-${GITHUB_RUN_ID}"
+        dispatch_id="${SPOKE}-public-preview-pr${SOURCE_PR}-${GITHUB_RUN_ID}"
         payload_path="${RUNNER_TEMP}/public-preview-${dispatch_id}.json"
         echo "${payload}" | jq . > "${payload_path}"
         {
@@ -157,20 +169,41 @@ runs:
         echo "::group::Public preview dispatch payload (${dispatch_id})"
         cat "${payload_path}"
         echo "::endgroup::"
+      env:
+        OPERATION: ${{ inputs.operation }}
+        SPOKE: ${{ inputs.spoke }}
+        SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+        SOURCE_PR: ${{ inputs.source_pr }}
+        SOURCE_COMMIT: ${{ inputs.source_commit }}
+        LANE: ${{ inputs.lane }}
+        ORIGIN_FQDN: ${{ inputs.origin_fqdn }}
+        ORIGIN_SERVICE: ${{ inputs.origin_service }}
+        ORIGIN_HOST_HEADER: ${{ inputs.origin_host_header }}
+        PREVIEW_HOSTNAME: ${{ inputs.preview_hostname }}
+        TTL_HOURS: ${{ inputs.ttl_hours }}
+        DESCRIPTION: ${{ inputs.description }}
+        ALLOW_EMAILS_JSON: ${{ inputs.allow_emails_json }}
+        ALLOW_EMAIL_DOMAINS_JSON: ${{ inputs.allow_email_domains_json }}
+        SESSION_DURATION: ${{ inputs.session_duration }}
 
     - name: Validate against schema
       shell: bash
       run: |
         set -euo pipefail
-        schema="${{ github.action_path }}/../../../schemas/public-preview-dispatch.schema.json"
-        python3 - <<PY
-        import json, re, sys
+        python3 - <<'PY'
+        import json, os, re, sys
         try:
             from jsonschema import Draft202012Validator
         except ImportError:
             Draft202012Validator = None
-        schema = json.load(open("$schema"))
-        payload = json.load(open("${{ steps.build.outputs.payload_path }}"))
+        schema_path = os.path.join(
+            os.environ["ACTION_PATH"],
+            "../../../schemas/public-preview-dispatch.schema.json",
+        )
+        with open(schema_path, encoding="utf-8") as stream:
+            schema = json.load(stream)
+        with open(os.environ["PAYLOAD_PATH"], encoding="utf-8") as stream:
+            payload = json.load(stream)
         if Draft202012Validator is None:
             cp = payload.get("client_payload", {})
             ok = (
@@ -193,23 +226,23 @@ runs:
                     print(f"::error::payload at {p}: {e.message}", file=sys.stderr)
                 sys.exit(1)
         PY
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PAYLOAD_PATH: ${{ steps.build.outputs.payload_path }}
 
     - name: Dispatch
       if: inputs.dry_run != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        if [[ -z "${{ inputs.dispatch_token }}" ]]; then
-          echo "::error::dispatch_token is required when dry_run=false"
-          exit 1
-        fi
-        gh api "/repos/${{ inputs.blahaj_repository }}/dispatches" \
-          -X POST \
-          -H "Accept: application/vnd.github+json" \
-          --input "${{ steps.build.outputs.payload_path }}"
-        echo "::notice::dispatched ${{ steps.build.outputs.dispatch_id }} -> ${{ inputs.blahaj_repository }}"
+        bash "${DISPATCH_HELPER}" "${BLAHAJ_REPOSITORY}" "${PAYLOAD_PATH}"
+        echo "::notice::dispatched ${DISPATCH_ID} -> ${BLAHAJ_REPOSITORY}"
       env:
+        DISPATCH_HELPER: ${{ github.action_path }}/../../../scripts/blahaj-repository-dispatch.sh
         GH_TOKEN: ${{ inputs.dispatch_token }}
+        BLAHAJ_REPOSITORY: ${{ inputs.blahaj_repository }}
+        PAYLOAD_PATH: ${{ steps.build.outputs.payload_path }}
+        DISPATCH_ID: ${{ steps.build.outputs.dispatch_id }}
 
     - name: Dry-run notice
       if: inputs.dry_run == 'true'

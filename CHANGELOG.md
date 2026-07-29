@@ -5,6 +5,23 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **Blahaj dispatch receiver containment** — the token-bearing
+  `lane-dispatch`, `lane-reap`, `lane-ttl-reap`, and
+  `public-preview-dispatch` composites now reject every
+  `blahaj_repository` value except exact `tinyland-inc/blahaj` before
+  `gh api`. A shared dispatcher, static ordering contract, and mocked dynamic
+  negative tests prevent target substitution from turning these actions into
+  cross-repository confused deputies. Every caller-controlled action input is
+  also passed into shell through an environment binding instead of interpolated
+  into `run:` source; hostile quote, newline, command-substitution, and backtick
+  cases are exercised without a provider call. This is defense in depth only:
+  it does not close same-repository PR secret exfiltration while caller workflow
+  code is pull-request-controlled; that durable boundary requires a separate
+  trusted-default-branch dispatch/App flow with no PR checkout or artifact
+  execution.
+
 ## [2.11.0] — 2026-07-10
 
 ### Added

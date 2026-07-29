@@ -16,11 +16,11 @@ inputs:
     required: false
     default: "false"
   blahaj_repository:
-    description: Target repository for the repository_dispatch.
+    description: Compatibility receiver input. Only exact tinyland-inc/blahaj is accepted.
     required: false
     default: tinyland-inc/blahaj
   dispatch_token:
-    description: GitHub token with repo:dispatch scope on blahaj_repository. Required unless local dry_run_only is true.
+    description: GitHub token with repo:dispatch scope on exact tinyland-inc/blahaj. Required unless local dry_run_only is true.
     required: false
     default: ""
   dry_run_only:
@@ -44,15 +44,25 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        if ! [[ "${SPOKE}" =~ ^[a-z][a-z0-9-]+$ ]]; then
+          echo "::error::spoke must be a lowercase slug" >&2
+          exit 64
+        fi
         requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        case "${{ inputs.dry_run }}" in true|false) ;; *) echo "::error::dry_run must be true or false"; exit 64 ;; esac
+        case "${DRY_RUN}" in
+          true|false) ;;
+          *)
+            echo "::error::dry_run must be true or false"
+            exit 64
+            ;;
+        esac
 
         payload="$(jq -nc \
-          --arg event_type "${{ inputs.spoke }}-lane-ttl-reap" \
-          --arg spoke "${{ inputs.spoke }}" \
-          --arg domain "${{ inputs.domain }}" \
+          --arg event_type "${SPOKE}-lane-ttl-reap" \
+          --arg spoke "${SPOKE}" \
+          --arg domain "${DOMAIN}" \
           --arg requested_at "${requested_at}" \
-          --argjson dry_run "${{ inputs.dry_run }}" \
+          --argjson dry_run "${DRY_RUN}" \
           '{
             event_type: $event_type,
             client_payload: {
@@ -65,7 +75,7 @@ runs:
             }
           }')"
 
-        dispatch_id="${{ inputs.spoke }}-ttl-reap-${GITHUB_RUN_ID}"
+        dispatch_id="${SPOKE}-ttl-reap-${GITHUB_RUN_ID}"
         payload_path="${RUNNER_TEMP}/lane-ttl-reap-${dispatch_id}.json"
         echo "${payload}" | jq . > "${payload_path}"
         {
@@ -73,20 +83,29 @@ runs:
           echo "payload_path=${payload_path}"
         } >> "${GITHUB_OUTPUT}"
         cat "${payload_path}"
+      env:
+        SPOKE: ${{ inputs.spoke }}
+        DOMAIN: ${{ inputs.domain }}
+        DRY_RUN: ${{ inputs.dry_run }}
 
     - name: Validate against schema
       shell: bash
       run: |
         set -euo pipefail
-        schema="${{ github.action_path }}/../../../schemas/lane-ttl-reap-dispatch.schema.json"
-        python3 - <<PY
-        import json, re, sys
+        python3 - <<'PY'
+        import json, os, re, sys
         try:
             from jsonschema import Draft202012Validator
         except ImportError:
             Draft202012Validator = None
-        schema = json.load(open("$schema"))
-        payload = json.load(open("${{ steps.build.outputs.payload_path }}"))
+        schema_path = os.path.join(
+            os.environ["ACTION_PATH"],
+            "../../../schemas/lane-ttl-reap-dispatch.schema.json",
+        )
+        with open(schema_path, encoding="utf-8") as stream:
+            schema = json.load(stream)
+        with open(os.environ["PAYLOAD_PATH"], encoding="utf-8") as stream:
+            payload = json.load(stream)
         if Draft202012Validator is None:
             cp = payload.get("client_payload", {})
             ok = (
@@ -107,19 +126,18 @@ runs:
                     print(f"::error::payload at {p}: {e.message}", file=sys.stderr)
                 sys.exit(1)
         PY
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PAYLOAD_PATH: ${{ steps.build.outputs.payload_path }}
 
     - name: Dispatch
       if: inputs.dry_run_only != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        if [[ -z "${{ inputs.dispatch_token }}" ]]; then
-          echo "::error::dispatch_token is required when dry_run_only=false"
-          exit 1
-        fi
-        gh api "/repos/${{ inputs.blahaj_repository }}/dispatches" \
-          -X POST \
-          -H "Accept: application/vnd.github+json" \
-          --input "${{ steps.build.outputs.payload_path }}"
+        bash "${DISPATCH_HELPER}" "${BLAHAJ_REPOSITORY}" "${PAYLOAD_PATH}"
       env:
+        DISPATCH_HELPER: ${{ github.action_path }}/../../../scripts/blahaj-repository-dispatch.sh
         GH_TOKEN: ${{ inputs.dispatch_token }}
+        BLAHAJ_REPOSITORY: ${{ inputs.blahaj_repository }}
+        PAYLOAD_PATH: ${{ steps.build.outputs.payload_path }}

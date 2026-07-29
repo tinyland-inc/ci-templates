@@ -61,6 +61,11 @@ jobs:
       BLAHAJ_DISPATCH_TOKEN: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}
 ```
 
+This snippet documents the legacy v2 caller shape; it is not proof of a safe
+secret boundary for PR-controlled workflow code. Keep live dispatch credentials
+out of `pull_request` execution until the trusted-default-branch
+workflow/App handoff described below is available.
+
 Your spoke needs `.github/lanes.json` validating against
 [`schemas/lanes.schema.json`](./schemas/lanes.schema.json). New spokes should
 also include `tinyland.repo.json` validating against
@@ -107,15 +112,33 @@ gitleaks working-tree scan.
 | **`repo-manifest-validate`** | Validate `tinyland.repo.json` and optionally require repo roles such as `static-spoke`. |
 | **`flywheel-bazel`** | `bazelisk` wrapper with endpoint-free `--config=flywheel[-executor]`. Supplies cache/executor endpoints from runtime env or inputs. Refuses executor on non-cluster runners. |
 | **`lanes-load`** | Validate + load `.github/lanes.json`. Outputs matrix-ready `lanes_json`. |
-| **`lane-dispatch`** | Emit Blahaj `<spoke>-lane-env` provision payload. Supports `dry_run`. |
-| **`lane-reap`** | Emit Blahaj destroy payload. Idempotent. |
-| **`lane-ttl-reap`** | Emit Blahaj expired-lane sweep payload for scheduled TTL backstops. |
-| **`public-preview-dispatch`** | Emit Blahaj public/client preview payload with Cloudflare Access allowlist. |
+| **`lane-dispatch`** | Emit Blahaj `<spoke>-lane-env` provision payload. Supports `dry_run`; live dispatch accepts only the exact `tinyland-inc/blahaj` receiver. |
+| **`lane-reap`** | Emit Blahaj destroy payload. Idempotent; live dispatch accepts only the exact `tinyland-inc/blahaj` receiver. |
+| **`lane-ttl-reap`** | Emit Blahaj expired-lane sweep payload for scheduled TTL backstops; live dispatch accepts only the exact `tinyland-inc/blahaj` receiver. |
+| **`public-preview-dispatch`** | Emit Blahaj public/client preview payload with Cloudflare Access allowlist; live dispatch accepts only the exact `tinyland-inc/blahaj` receiver. |
 | **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run, correlated by a unique request id. |
 | **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
 | **`pulse-ingest-validate`** | Validate a Pulse / static projection snapshot. |
 
 See per-action `action.yml` files for full input/output documentation.
+
+### Blahaj dispatch receiver containment
+
+The four token-bearing Blahaj dispatch composites keep
+`blahaj_repository` as a compatibility input, but a live call accepts only the
+exact receiver `tinyland-inc/blahaj`. A shared validator runs before `gh api`;
+target substitution fails closed without invoking the GitHub CLI.
+All caller-controlled composite inputs enter shell steps through environment
+bindings rather than `${{ ... }}` interpolation in `run:` source, so quotes,
+newlines, command substitutions, and backticks remain inert data.
+
+This is confused-deputy receiver containment only. It does **not** make a
+same-repository `pull_request` workflow safe to receive dispatch credentials:
+PR-controlled workflow code can use an exposed credential without calling these
+actions. The durable credential boundary must instead move dispatch authority
+to trusted default-branch code (for example, a `workflow_run`/GitHub App flow
+behind a protected environment) that neither checks out nor executes
+pull-request artifacts.
 
 ## Reusable workflows
 
