@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check blahaj-dispatch-receiver-contract-check blahaj-dispatch-run-scalar-selftest blahaj-dispatch-receiver-selftest blahaj-dispatch-shell-input-selftest endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -51,6 +51,25 @@ js-bazel-runner-contract-check:
 # Ensure flywheel-reapi-proof keeps child-run correlation request-id based.
 flywheel-reapi-proof-contract-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py flywheel-reapi-proof-contract
+
+# Ensure every token-bearing Blahaj repository_dispatch action routes through
+# the exact-receiver validator before gh api.
+blahaj-dispatch-receiver-contract-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py blahaj-dispatch-receiver-contract
+
+# Mutation-test both inline and block YAML run scalars so the static guard
+# cannot regress to indentation-only scanning.
+blahaj-dispatch-run-scalar-selftest:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py blahaj-dispatch-run-scalar-selftest
+
+# Prove invalid receiver inputs fail before a mocked gh command is reached.
+blahaj-dispatch-receiver-selftest:
+    cd {{ root }} && bash scripts/blahaj-dispatch-receiver-selftest.sh
+
+# Prove hostile quote, newline, command-substitution, and backtick input remains
+# inert when each dispatch payload-build step consumes it through step env.
+blahaj-dispatch-shell-input-selftest:
+    cd {{ root }} && bash scripts/blahaj-dispatch-shell-input-selftest.sh
 
 # Ensure the v2 Flywheel bazelrc fragment has no baked endpoints or upload authority.
 endpoint-free-check:

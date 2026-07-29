@@ -39,11 +39,11 @@ inputs:
     required: false
     default: "[]"
   blahaj_repository:
-    description: Target repo for the repository_dispatch.
+    description: Compatibility receiver input. Only exact tinyland-inc/blahaj is accepted.
     required: false
     default: tinyland-inc/blahaj
   dispatch_token:
-    description: GitHub token with repo:dispatch scope on blahaj_repository. Required unless dry_run.
+    description: GitHub token with repo:dispatch scope on exact tinyland-inc/blahaj. Required unless dry_run.
     required: false
     default: ""
   dry_run:
@@ -71,20 +71,43 @@ runs:
       run: |
         set -euo pipefail
 
+        if ! [[ "${SPOKE}" =~ ^[a-z][a-z0-9-]+$ ]]; then
+          echo "::error::spoke must be a lowercase slug" >&2
+          exit 64
+        fi
+        if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::pr_number must be a positive integer" >&2
+          exit 64
+        fi
+        if ! [[ "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::commit_sha must be a full lowercase commit SHA" >&2
+          exit 64
+        fi
+        jq -e 'type == "array" and all(.[]; type == "object")' \
+          <<<"${LANES_JSON}" >/dev/null
+        jq -e 'type == "array" and all(.[]; type == "string")' \
+          <<<"${PR_LABELS_JSON}" >/dev/null
+
         # Parse PR labels for TTL override (lane-ttl/7d, lane-ttl/30d, lane-ttl/keep)
         ttl_override=""
-        prefix="${{ inputs.ttl_label_prefix }}"
-        for label in $(echo '${{ inputs.pr_labels_json }}' | jq -r '.[]?'); do
-          if [[ "$label" == "${prefix}keep" ]]; then ttl_override=720; break
-          elif [[ "$label" =~ ^${prefix}([0-9]+)d$ ]]; then ttl_override=$(( ${BASH_REMATCH[1]} * 24 )); break
+        prefix="${TTL_LABEL_PREFIX}"
+        while IFS= read -r label; do
+          if [[ "${label}" == "${prefix}keep" ]]; then
+            ttl_override=720
+            break
+          elif [[ "${label}" == "${prefix}"* ]]; then
+            suffix="${label#"${prefix}"}"
+            if [[ "${suffix}" =~ ^([0-9]+)d$ ]]; then
+              ttl_override=$(( BASH_REMATCH[1] * 24 ))
+              break
+            fi
           fi
-        done
+        done < <(jq -r '.[]?' <<<"${PR_LABELS_JSON}")
 
         # Aggregate lanes with effective TTL
-        lanes='${{ inputs.lanes_json }}'
         payload_lanes=$(jq -c \
-          --arg pr "${{ inputs.pr_number }}" \
-          --arg domain "${{ inputs.domain }}" \
+          --arg pr "${PR_NUMBER}" \
+          --arg domain "${DOMAIN}" \
           --arg ttl_override "${ttl_override:-0}" \
           --arg default_ttl "72" \
           '[.[] | {
@@ -100,17 +123,17 @@ runs:
                 else (.ttl_hours // ($default_ttl | tonumber))
                 end)
              )
-           } + (if .extra then {extra: .extra} else {} end)]' <<< "$lanes")
+           } + (if .extra then {extra: .extra} else {} end)]' <<<"${LANES_JSON}")
 
-        top_ttl=$(echo "$payload_lanes" | jq '[.[].ttl_hours] | max')
+        top_ttl=$(jq '[.[].ttl_hours] | max' <<<"${payload_lanes}")
 
         payload=$(jq -nc \
-          --arg event_type "${{ inputs.spoke }}-lane-env" \
-          --arg spoke "${{ inputs.spoke }}" \
-          --arg domain "${{ inputs.domain }}" \
-          --argjson pr "${{ inputs.pr_number }}" \
-          --arg commit_sha "${{ inputs.commit_sha }}" \
-          --arg image_ref "${{ inputs.image_ref }}" \
+          --arg event_type "${SPOKE}-lane-env" \
+          --arg spoke "${SPOKE}" \
+          --arg domain "${DOMAIN}" \
+          --argjson pr "${PR_NUMBER}" \
+          --arg commit_sha "${COMMIT_SHA}" \
+          --arg image_ref "${IMAGE_REF}" \
           --argjson ttl "$top_ttl" \
           --argjson lanes "$payload_lanes" \
           '{
@@ -130,7 +153,7 @@ runs:
             }
           }')
 
-        dispatch_id="${{ inputs.spoke }}-pr${{ inputs.pr_number }}-${COMMIT_SHA:0:7}-${GITHUB_RUN_ID}"
+        dispatch_id="${SPOKE}-pr${PR_NUMBER}-${COMMIT_SHA:0:7}-${GITHUB_RUN_ID}"
         payload_path="${RUNNER_TEMP}/blahaj-dispatch-${dispatch_id}.json"
         echo "$payload" | jq . > "$payload_path"
 
@@ -144,42 +167,56 @@ runs:
         cat "$payload_path"
         echo "::endgroup::"
       env:
+        PR_NUMBER: ${{ inputs.pr_number }}
         COMMIT_SHA: ${{ inputs.commit_sha }}
+        SPOKE: ${{ inputs.spoke }}
+        DOMAIN: ${{ inputs.domain }}
+        IMAGE_REF: ${{ inputs.image_ref }}
+        LANES_JSON: ${{ inputs.lanes_json }}
+        TTL_LABEL_PREFIX: ${{ inputs.ttl_label_prefix }}
+        PR_LABELS_JSON: ${{ inputs.pr_labels_json }}
 
     - name: Validate against schema
       shell: bash
       run: |
         set -euo pipefail
-        schema="${{ github.action_path }}/../../../schemas/blahaj-dispatch.schema.json"
-        python3 - <<PY
-        import json, sys
+        python3 - <<'PY'
+        import json, os, sys
         from jsonschema import Draft202012Validator
-        schema = json.load(open("$schema"))
-        payload = json.load(open("${{ steps.build.outputs.payload_path }}"))
-        errs = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda e: list(e.absolute_path))
+        schema_path = os.path.join(
+            os.environ["ACTION_PATH"], "../../../schemas/blahaj-dispatch.schema.json"
+        )
+        with open(schema_path, encoding="utf-8") as stream:
+            schema = json.load(stream)
+        with open(os.environ["PAYLOAD_PATH"], encoding="utf-8") as stream:
+            payload = json.load(stream)
+        errs = sorted(
+            Draft202012Validator(schema).iter_errors(payload),
+            key=lambda e: list(e.absolute_path),
+        )
         if errs:
             for e in errs:
                 p = "/" + "/".join(str(x) for x in e.absolute_path)
                 print(f"::error::payload at {p}: {e.message}", file=sys.stderr)
             sys.exit(1)
         PY
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PAYLOAD_PATH: ${{ steps.build.outputs.payload_path }}
 
     - name: Dispatch
       if: inputs.dry_run != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        if [[ -z "${{ inputs.dispatch_token }}" ]]; then
-          echo "::error::dispatch_token is required when dry_run=false"
-          exit 1
-        fi
-        gh api "/repos/${{ inputs.blahaj_repository }}/dispatches" \
-          -X POST \
-          -H "Accept: application/vnd.github+json" \
-          --input "${{ steps.build.outputs.payload_path }}"
-        echo "::notice::dispatched ${{ steps.build.outputs.dispatch_id }} → ${{ inputs.blahaj_repository }}"
+        bash "${DISPATCH_HELPER}" "${BLAHAJ_REPOSITORY}" "${PAYLOAD_PATH}"
+        echo "::notice::dispatched ${DISPATCH_ID} → ${BLAHAJ_REPOSITORY}"
       env:
+        DISPATCH_HELPER: ${{ github.action_path }}/../../../scripts/blahaj-repository-dispatch.sh
         GH_TOKEN: ${{ inputs.dispatch_token }}
+        BLAHAJ_REPOSITORY: ${{ inputs.blahaj_repository }}
+        PAYLOAD_PATH: ${{ steps.build.outputs.payload_path }}
+        DISPATCH_ID: ${{ steps.build.outputs.dispatch_id }}
 
     - name: Dry-run notice
       if: inputs.dry_run == 'true'
