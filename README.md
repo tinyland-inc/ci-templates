@@ -202,6 +202,13 @@ object is additive and optional — existing manifests without it still validate
 and `substrateMode` is the authoritative expected mode the cache-backed gate
 enforces.
 
+The additive `authorities.gitops_binding_mode` field is closed to `direct-bound`
+or `application-owner-overlay`. When present, an app/stateful spoke is
+owner-overlay only and a direct-bound static spoke must also name its receiver.
+Existing manifests without the field remain valid during fleet migration;
+site.scaffold's newer local contract requires the declaration for generated
+spokes. The field selects a source contract, not provider/apply authority.
+
 ## Bazelrc fragments
 
 `bazelrc/flywheel.bazelrc` is endpoint-free. It defines safe behavior for

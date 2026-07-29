@@ -104,6 +104,10 @@
 			"additionalProperties": false,
 			"properties": {
 				"content_authority": { "type": "string" },
+				"gitops_binding_mode": {
+					"$ref": "#/$defs/gitopsBindingMode",
+					"description": "Explicitly distinguishes a direct receiver wire from an application owner-overlay wire. A source role alone never selects GitOps authority."
+				},
 				"gitops_receiver": { "type": "string" },
 				"ci_templates": { "type": "string" },
 				"cache_rbe_authority": { "type": "string" },
@@ -193,9 +197,63 @@
 					}
 				}
 			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": { "const": "app-stateful-spoke" }
+						},
+						"required": ["primary_role"]
+					}
+				},
+				"required": ["taxonomy"]
+			},
+			"then": {
+				"properties": {
+					"authorities": {
+						"properties": {
+							"gitops_binding_mode": {
+								"const": "application-owner-overlay"
+							}
+						}
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"authorities": {
+						"properties": {
+							"gitops_binding_mode": { "const": "direct-bound" }
+						},
+						"required": ["gitops_binding_mode"]
+					}
+				},
+				"required": ["authorities"]
+			},
+			"then": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": {
+								"enum": ["static-spoke", "static-spoke-scaffold"]
+							}
+						}
+					},
+					"authorities": {
+						"required": ["gitops_receiver"]
+					}
+				}
+			}
 		}
 	],
 	"$defs": {
+		"gitopsBindingMode": {
+			"enum": ["direct-bound", "application-owner-overlay"]
+		},
 		"repoRole": {
 			"enum": [
 				"static-spoke-scaffold",

@@ -5,6 +5,16 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Explicit GitOps binding-mode manifest contract (TIN-2406)** —
+  optional `authorities.gitops_binding_mode` is closed to `direct-bound` or
+  `application-owner-overlay`; when declared, app/stateful spokes cannot select
+  a direct receiver and direct-bound static spokes must name their receiver.
+  Legacy manifests remain valid during fleet migration. This propagates the
+  site.scaffold owner-overlay field into the hosted `repo-manifest-validate`
+  gate without granting dispatch, provider, or apply authority.
+
 ## [2.11.0] — 2026-07-10
 
 ### Added

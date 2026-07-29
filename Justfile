@@ -83,6 +83,31 @@ manifest-validate-selftest:
       if python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json "$bad" 2>/dev/null; then \
         echo "FAIL: validator did not reject an invalid manifest" >&2; rm -f "$bad"; exit 1; \
       else echo "manifest validator fails closed on invalid manifest"; rm -f "$bad"; fi
+    cd {{ root }} && direct=$(mktemp) && \
+      jq '.taxonomy.primary_role="static-spoke" | .authorities.gitops_binding_mode="direct-bound"' tinyland.repo.json > "$direct" && \
+      python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json "$direct" && rm -f "$direct"
+    cd {{ root }} && overlay=$(mktemp) && \
+      jq '.taxonomy.primary_role="app-stateful-spoke" | .authorities.gitops_binding_mode="application-owner-overlay" | del(.authorities.gitops_receiver)' tinyland.repo.json > "$overlay" && \
+      python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json "$overlay" && rm -f "$overlay"
+    cd {{ root }} && bad_mode=$(mktemp) && \
+      jq '.taxonomy.primary_role="static-spoke" | .authorities.gitops_binding_mode="unbounded"' tinyland.repo.json > "$bad_mode" && \
+      if python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json "$bad_mode" 2>/dev/null; then \
+        echo "FAIL: validator accepted an unknown gitops_binding_mode" >&2; rm -f "$bad_mode"; exit 1; \
+      else echo "manifest validator rejects unknown gitops binding modes"; rm -f "$bad_mode"; fi
+    cd {{ root }} && legacy=$(mktemp) && \
+      jq '.taxonomy.primary_role="static-spoke" | del(.authorities.gitops_binding_mode)' tinyland.repo.json > "$legacy" && \
+      python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json "$legacy" && \
+      echo "manifest validator preserves legacy spoke compatibility during binding-mode migration" && rm -f "$legacy"
+    cd {{ root }} && wrong_app_mode=$(mktemp) && \
+      jq '.taxonomy.primary_role="app-stateful-spoke" | .authorities.gitops_binding_mode="direct-bound"' tinyland.repo.json > "$wrong_app_mode" && \
+      if python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json "$wrong_app_mode" 2>/dev/null; then \
+        echo "FAIL: validator accepted direct-bound app-stateful spoke" >&2; rm -f "$wrong_app_mode"; exit 1; \
+      else echo "manifest validator requires owner-overlay app-stateful binding"; rm -f "$wrong_app_mode"; fi
+    cd {{ root }} && missing_receiver=$(mktemp) && \
+      jq '.taxonomy.primary_role="static-spoke" | .authorities.gitops_binding_mode="direct-bound" | del(.authorities.gitops_receiver)' tinyland.repo.json > "$missing_receiver" && \
+      if python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json "$missing_receiver" 2>/dev/null; then \
+        echo "FAIL: validator accepted direct-bound spoke without gitops_receiver" >&2; rm -f "$missing_receiver"; exit 1; \
+      else echo "manifest validator requires a direct-bound receiver"; rm -f "$missing_receiver"; fi
 
 # Scan current files for secrets.
 secrets-scan-dir:
