@@ -25,7 +25,10 @@ and may break without notice**.
 3. **Land the release commit through a normal PR.** Move the complete
    `## [Unreleased]` body into `## [X.Y.Z] — YYYY-MM-DD`, restore an empty
    `## [Unreleased]`, and use subject `release: vX.Y.Z`. Do not push directly
-   to `main`.
+   to `main`. If a restricted workflow needs composites changed by this
+   release, its self-references must name this exact version before the release
+   commit lands; an exact release that calls floating `@vMAJOR` is not
+   immutable in practice.
 4. **Enable native immutable releases before publishing.** This setting affects
    future releases only:
 
@@ -35,7 +38,12 @@ and may break without notice**.
      repos/tinyland-inc/ci-templates/immutable-releases
    ```
 
-5. **Cut signed tags with an exact floating-tag lease.** Never move or reuse the
+5. **Prove the dependency closure offline, then cut signed tags with an exact
+   floating-tag lease.** `just check` must pass from the exact release commit.
+   The restricted closure check recursively resolves every internal composite,
+   requires exact self-release refs and full third-party commit SHAs, and
+   verifies that downloaded scanner archives have source-pinned SHA-256 values.
+   Never move or reuse the
    exact SemVer tag. The floating major is intentionally advanced:
 
    ```bash
@@ -99,18 +107,21 @@ and may break without notice**.
 
 ## Composite-action internal refs
 
-Composite actions and reusable workflows that call sibling composites
-(e.g. `flywheel-bazel` calling `nix-setup`) MUST reference siblings by the
-current major tag, not `@main` or an older major:
+The restricted private-runner reusable workflows and every sibling composite in
+their transitive closure MUST reference siblings by an exact immutable release,
+not `@main`, floating `@vMAJOR`, or a consumer-relative `./` path:
 
 ```yaml
-uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
+uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2.12.1
 ```
 
-This ensures a `git checkout v2.0.0` of the repo exposes a coherent
-self-referential set of action versions. A v2 reusable workflow must not call
-v1 composites unless the migration guide explicitly documents that compatibility
-boundary.
+This makes the exact workflow tag a closed source graph: moving the floating
+major cannot change a pinned caller's nested actions. Third-party Actions in
+that closure use full commit SHAs, and release binaries are downloaded to a
+file and verified against a source-pinned checksum before execution. The
+historical legacy workflows still contain floating-major self-refs and are not
+evidence for the restricted immutability contract; do not copy that pattern
+into a new surface.
 
 ## Flywheel endpoint discipline
 

@@ -2,14 +2,23 @@
 
 `spoke-ci-restricted.yml` and `spoke-lane-env-restricted.yml` are explicit
 opt-in variants of the existing spoke workflows. They preserve the legacy
-steps, matrices, permissions, action pins, cache-first behavior, and lane
-lifecycle, but every directly defined job routes through both:
+behavior, matrices, permissions, cache-first behavior, and lane lifecycle, but
+every directly defined job routes through both:
 
 - a required GitHub runner group owned by the caller's `-infra` overlay; and
 - a required, reviewed GloriousFlywheel capability label.
 
 The legacy `spoke-ci.yml` and `spoke-lane-env.yml` files remain byte-identical.
-No existing caller changes behavior merely by consuming a newer release.
+The restricted variants additionally close their dependency graph: internal
+actions use exact `@v2.12.1` refs, third-party Actions use full commit SHAs
+(`actions/checkout` is the verified v6.1.0 commit), the cache contract executes
+from the release-vendored composite through one exact fail-closed strict step,
+and both scanner archives bind the expected digest to the downloaded file in
+their single allowed download/checksum/extract/install sequence. Alternate or
+conditional contract execution and any additional scanner download, extraction,
+or binary-execution path fail the source contract. `v2.12.0` does not provide
+that transitive guarantee and must not be used as an immutability receipt for
+this lane.
 
 ## Authority and sequencing
 
@@ -42,12 +51,12 @@ caller cannot widen this allowlist by supplying another `*-infra` string.
 
 ## Caller examples
 
-Pin the first immutable release that contains these files:
+Pin the first release with the enforced transitive closure:
 
 ```yaml
 jobs:
   ci:
-    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci-restricted.yml@vX.Y.Z
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci-restricted.yml@v2.12.1
     with:
       runner_group: tinyland-infra
       nix_runner_label: tinyland-nix
@@ -60,7 +69,7 @@ jobs:
 ```yaml
 jobs:
   lane-env:
-    uses: tinyland-inc/ci-templates/.github/workflows/spoke-lane-env-restricted.yml@vX.Y.Z
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-lane-env-restricted.yml@v2.12.1
     with:
       runner_group: tinyland-infra
       nix_runner_label: tinyland-nix
