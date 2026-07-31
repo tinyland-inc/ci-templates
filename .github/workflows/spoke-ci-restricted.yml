@@ -32,10 +32,11 @@ on:
         description: >-
           Opt-in (default false) shared-cache-backed Bazel enrollment for the
           flywheel-build + bazel-graph jobs. When true, those jobs additionally
-          (a) switch their Nix setup to nix-setup@v2 so BAZEL_REMOTE_CACHE is
-          exported from cluster DNS, (b) validate tinyland.repo.json and assert
-          shared-cache attachment via scripts/cache-attachment-contract.sh
-          (fail-closed: contract --strict), and (c) run a cache-backed Bazel
+          (a) switch their Nix setup to exact release-vendored
+          nix-setup@v2.12.1 so BAZEL_REMOTE_CACHE is exported from cluster DNS,
+          (b) validate tinyland.repo.json and invoke exact release-vendored
+          cache-attachment-validate@v2.12.1, which executes its vendored
+          scripts/cache-attachment-contract.sh --strict, and (c) run a cache-backed Bazel
           build of the flywheel-eligible targets with
           `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
           --remote_upload_local_results=false` reading the shared Bazel cache.
@@ -142,7 +143,7 @@ jobs:
       labels: ${{ inputs.nix_runner_label }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
       - uses: tinyland-inc/ci-templates/.github/actions/secrets-scan@v2.12.1
 
@@ -158,7 +159,7 @@ jobs:
       schema_version: ${{ steps.load.outputs.schema_version }}
       spoke_name: ${{ steps.load.outputs.spoke_name }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
       - id: load
         uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v2.12.1
@@ -172,7 +173,7 @@ jobs:
       labels: ${{ inputs.nix_runner_label }}
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
       - id: manifest
         shell: bash
@@ -199,7 +200,7 @@ jobs:
       labels: ${{ inputs.nix_runner_label }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       # Default path (cache_backed=false): byte-identical setup for the ~34
       # non-opted spoke consumers. setup-nix installs Nix only; it does NOT
@@ -296,7 +297,7 @@ jobs:
       labels: ${{ inputs.nix_runner_label }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
 
       - run: nix develop --command just setup
@@ -309,7 +310,7 @@ jobs:
       labels: ${{ inputs.heavy_runner_label }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       # Default path (cache_backed=false): byte-identical for non-opted spokes.
       - if: ${{ !inputs.cache_backed }}
@@ -360,7 +361,7 @@ jobs:
       labels: ${{ inputs.kvm_runner_label }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
       - run: nix develop --command just setup
       - run: nix develop --command just test-e2e

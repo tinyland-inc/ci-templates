@@ -10,9 +10,10 @@ every directly defined job routes through both:
 
 The legacy `spoke-ci.yml` and `spoke-lane-env.yml` files remain byte-identical.
 The restricted variants additionally close their dependency graph: internal
-actions use exact `@v2.12.1` refs, third-party Actions use full commit SHAs,
-the cache contract executes from the release-vendored composite, and both
-scanner archives are checksum-verified before execution. `v2.12.0` does not
+actions use exact `@v2.12.1` refs, third-party Actions use full commit SHAs
+(`actions/checkout` is the verified v6.1.0 commit), the cache contract executes
+from the release-vendored composite, and both scanner archives bind the expected
+digest to the downloaded file before exact-member extraction. `v2.12.0` does not
 provide that transitive guarantee and must not be used as an immutability
 receipt for this lane.
 

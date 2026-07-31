@@ -16,8 +16,30 @@ ROOT = File.expand_path("..", __dir__)
 GROUP_EXPR = "${{ inputs.runner_group }}"
 TRUST_JOB = "trust-gate"
 IMMUTABLE_RELEASE = "v2.12.1"
-CHECKOUT_SHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
 DETERMINATE_NIX_SHA = "61cbfe2efc2d4e7a8a6d56967c3c1058e846c858"
+SCANNER_INSTALL_SPECS = [
+  {
+    step: "Install TruffleHog",
+    version_input: "trufflehog-version",
+    sha_input: "trufflehog-sha256",
+    version_env: "TRUFFLEHOG_VERSION",
+    sha_env: "TRUFFLEHOG_SHA256",
+    archive: 'archive="$BIN_DIR/trufflehog_${version}_linux_amd64.tar.gz"',
+    url: '"https://github.com/trufflesecurity/trufflehog/releases/download/v${version}/trufflehog_${version}_linux_amd64.tar.gz" \\',
+    member: "trufflehog",
+  },
+  {
+    step: "Install gitleaks",
+    version_input: "gitleaks-version",
+    sha_input: "gitleaks-sha256",
+    version_env: "GITLEAKS_VERSION",
+    sha_env: "GITLEAKS_SHA256",
+    archive: 'archive="$BIN_DIR/gitleaks_${version}_linux_x64.tar.gz"',
+    url: '"https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz" \\',
+    member: "gitleaks",
+  },
+].freeze
 EXPECTED_CLOSURE_ACTIONS = %w[
   cache-attachment-validate
   flywheel-bazel
@@ -97,6 +119,124 @@ def deep_copy(value)
   Marshal.load(Marshal.dump(value))
 end
 
+def expected_restricted_cache_description(legacy_description)
+  legacy_description
+    .sub(
+      "switch their Nix setup to nix-setup@v2",
+      "switch their Nix setup to exact release-vendored nix-setup@#{IMMUTABLE_RELEASE}"
+    )
+    .sub(
+      "validate tinyland.repo.json and assert shared-cache attachment via scripts/cache-attachment-contract.sh " \
+      "(fail-closed: contract --strict)",
+      "validate tinyland.repo.json and invoke exact release-vendored " \
+      "cache-attachment-validate@#{IMMUTABLE_RELEASE}, which executes its vendored " \
+      "scripts/cache-attachment-contract.sh --strict"
+    )
+end
+
+def scanner_install_step(scanner, step_name)
+  Array(scanner.dig("runs", "steps")).find do |step|
+    step.is_a?(Hash) && step["name"] == step_name
+  end
+end
+
+def scanner_install_errors(scanner, spec)
+  errors = []
+  step = scanner_install_step(scanner, spec[:step])
+  unless step
+    return ["secrets-scan is missing #{spec[:step]} step"]
+  end
+
+  expected_env = {
+    spec[:version_env] => "${{ inputs.#{spec[:version_input]} }}",
+    spec[:sha_env] => "${{ inputs.#{spec[:sha_input]} }}",
+  }
+  unless step["env"] == expected_env
+    errors << "secrets-scan #{spec[:step]} must bind the exact version and digest inputs"
+  end
+
+  run = step["run"].to_s
+  lines = run.lines.map(&:strip).reject { |line| line.empty? || line.start_with?("#") }
+  errors << "secrets-scan #{spec[:step]} must begin fail-closed with set -euo pipefail" unless lines.first == "set -euo pipefail"
+  if lines.any? { |line| line.match?(/\A(?:set \+e|set \+o pipefail|if|then|else|elif|fi|while|until|for|case|esac)\b/) }
+    errors << "secrets-scan #{spec[:step]} must not conditionally bypass archive verification"
+  end
+
+  expected_assignments = [
+    %(version="$#{spec[:version_env]}"),
+    %(expected_sha256="$#{spec[:sha_env]}"),
+    spec[:archive],
+  ]
+  assignments = lines.select { |line| line.match?(/\A(?:version|expected_sha256|archive)=/) }
+  unless assignments == expected_assignments
+    errors << "secrets-scan #{spec[:step]} must bind version, digest, and archive exactly once"
+  end
+
+  version_guard = '[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {'
+  digest_guard = '[[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]] || {'
+  checksum = %q{printf '%s  %s\n' "$expected_sha256" "$archive" | sha256sum --check --status}
+  extraction = %(tar --extract --gzip --file "$archive" --directory "$BIN_DIR" #{spec[:member]})
+  chmod = %(chmod 0755 "$BIN_DIR/#{spec[:member]}")
+  integrity_block = [
+    spec[:archive],
+    "curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \\",
+    spec[:url],
+    '--output "$archive"',
+    checksum,
+    extraction,
+    chmod,
+  ]
+  block_starts = []
+  lines.each_index do |index|
+    block_starts << index if lines[index, integrity_block.length] == integrity_block
+  end
+  if block_starts.length != 1
+    errors << "secrets-scan #{spec[:step]} must download to the bound archive, verify its exact digest, then extract one member and chmod"
+  else
+    block_start = block_starts.first
+    version_assignment = lines.index(expected_assignments[0])
+    digest_assignment = lines.index(expected_assignments[1])
+    version_guard_index = lines.index(version_guard)
+    digest_guard_index = lines.index(digest_guard)
+    ordered_prefix = [version_assignment, digest_assignment, version_guard_index, digest_guard_index, block_start]
+    unless ordered_prefix.none?(&:nil?) && ordered_prefix == ordered_prefix.sort
+      errors << "secrets-scan #{spec[:step]} must validate bound version and digest before download/extraction"
+    end
+  end
+
+  errors
+end
+
+def scanner_integrity_errors(scanner)
+  SCANNER_INSTALL_SPECS.flat_map { |spec| scanner_install_errors(scanner, spec) }
+end
+
+def scanner_integrity_oracle_errors(scanner)
+  errors = []
+  checksum = %q{printf '%s  %s\n' "$expected_sha256" "$archive" | sha256sum --check --status}
+  SCANNER_INSTALL_SPECS.each do |spec|
+    extraction = %(tar --extract --gzip --file "$archive" --directory "$BIN_DIR" #{spec[:member]})
+    mutations = {
+      "missing checksum" => ->(run) { run.sub("#{checksum}\n", "") },
+      "bypassed checksum" => ->(run) { run.sub(checksum, "true # #{checksum}") },
+      "decoupled archive" => ->(run) { run.sub(checksum, checksum.sub('"$archive"', '"$BIN_DIR/unbound.tar.gz"')) },
+      "extraction before checksum" => ->(run) { run.sub("#{checksum}\n#{extraction}", "#{extraction}\n#{checksum}") },
+    }
+    mutations.each do |label, mutate|
+      mutant = deep_copy(scanner)
+      step = scanner_install_step(mutant, spec[:step])
+      original = step["run"].to_s
+      step["run"] = mutate.call(original)
+      if step["run"] == original
+        errors << "secrets-scan negative oracle could not construct #{spec[:step]} #{label} mutation"
+      elsif scanner_install_errors(mutant, spec).empty?
+        errors << "secrets-scan negative oracle accepted #{spec[:step]} #{label}"
+      end
+    end
+  end
+  errors
+end
+
 def checkout_step?(step)
   step.is_a?(Hash) && step["uses"].to_s.start_with?("actions/checkout@")
 end
@@ -121,6 +261,7 @@ end
 def validate_restricted(name, document, legacy, spec)
   errors = []
   call = workflow_call(document)
+  legacy_call = workflow_call(legacy)
   inputs = call.is_a?(Hash) && call["inputs"].is_a?(Hash) ? call["inputs"] : {}
   jobs = document["jobs"]
 
@@ -136,6 +277,14 @@ def validate_restricted(name, document, legacy, spec)
   end
   spec[:removed_legacy_inputs].each do |input|
     errors << "#{name}: legacy dynamic routing input #{input} must be absent" if inputs.key?(input)
+  end
+  if name == "spoke-ci"
+    legacy_description = legacy_call.dig("inputs", "cache_backed", "description").to_s
+    expected_description = expected_restricted_cache_description(legacy_description)
+    actual_description = inputs.dig("cache_backed", "description").to_s
+    unless actual_description == expected_description
+      errors << "#{name}: cache_backed description must name the exact release-vendored setup and attachment contract"
+    end
   end
 
   expected_jobs = spec[:labels].keys.sort
@@ -210,8 +359,10 @@ def validate_restricted(name, document, legacy, spec)
   normalized = deep_copy(document)
   normalized["name"] = legacy["name"]
   normalized_call = workflow_call(normalized)
-  legacy_call = workflow_call(legacy)
   normalized_inputs = normalized_call["inputs"]
+  if name == "spoke-ci"
+    normalized_inputs["cache_backed"]["description"] = legacy_call.dig("inputs", "cache_backed", "description")
+  end
   spec[:inputs].each_key { |input| normalized_inputs.delete(input) }
   spec[:removed_legacy_inputs].each do |input|
     normalized_inputs[input] = deep_copy(legacy_call["inputs"][input])
@@ -375,14 +526,8 @@ def validate_restricted_dependency_closure
     actual = scanner_inputs.dig(input, "default").to_s
     errors << "secrets-scan #{input} must default to #{expected}, got #{actual}" unless actual == expected
   end
-  scanner_text = File.read(scanner_path)
-  [
-    "sha256sum --check --status",
-    "trufflehog_${version}_linux_amd64.tar.gz",
-    "gitleaks_${version}_linux_x64.tar.gz",
-  ].each do |required|
-    errors << "secrets-scan is missing immutable archive guard #{required}" unless scanner_text.include?(required)
-  end
+  errors.concat(scanner_integrity_errors(scanner))
+  errors.concat(scanner_integrity_oracle_errors(scanner))
 
   attachment_path = File.join(ROOT, ".github/actions/cache-attachment-validate/action.yml")
   attachment_text = File.read(attachment_path)
@@ -477,6 +622,13 @@ def negative_oracles(name, document, legacy, spec)
   defaulted_input = deep_copy(document)
   workflow_call(defaulted_input)["inputs"]["runner_group"]["default"] = "tinyland-infra"
   cases << ["defaulted group input", defaulted_input]
+
+  if name == "spoke-ci"
+    stale_description = deep_copy(document)
+    workflow_call(stale_description)["inputs"]["cache_backed"]["description"] =
+      workflow_call(legacy).dig("inputs", "cache_backed", "description")
+    cases << ["stale mutable cache description", stale_description]
+  end
 
   failures = cases.map do |label, mutant|
     label if validate_restricted(name, mutant, legacy, spec).empty?
