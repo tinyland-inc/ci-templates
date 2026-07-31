@@ -5,6 +5,29 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Default-off private-group spoke workflows (TIN-3209)** — add
+  `spoke-ci-restricted.yml` and `spoke-lane-env-restricted.yml` as explicit
+  private-repository opt-ins. Every directly defined job uses a required owner
+  `-infra` runner group plus an exact reviewed capability label; fork and
+  untrusted `pull_request_target` execution is rejected before checkout. The
+  job-level pre-scheduling condition also admits only the reviewed
+  `tinyland-infra` group and exact role labels, so Default/shared/hosted/wrong
+  caller routes skip before any runner assignment. The
+  original spoke workflows are checksum-pinned byte-for-byte, so existing
+  consumers remain unchanged. The operator guide records the owner-overlay →
+  immutable ci-templates release → pinned app-caller sequence and makes clear
+  that source intent is not live runner-group proof or application authority.
+
+### Fixed
+
+- **Structured `runs-on` linting** — teach `lint-runs-on.rb` to inspect GitHub's
+  `{group, labels}` form as a mapping, reject missing/generic groups and hosted
+  labels inside group mappings, hard-fail forbidden literal fallbacks such as
+  `inputs.runner_group || 'Default'`, and retain fail-closed capability-label
+  checks instead of stringifying the mapping.
+
 ## [2.11.0] — 2026-07-10
 
 ### Added

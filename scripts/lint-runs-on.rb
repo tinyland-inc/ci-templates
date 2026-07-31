@@ -9,9 +9,12 @@
 # `self-hosted`, and drift smuggled into a fromJSON() fallback — while PASSing
 # org capability labels (tinyland-nix, great-falls-tool-bus-nix, ...),
 # GitHub-hosted labels (ubuntu-latest, ...), and the legitimate dynamic
-# `${{ fromJSON(vars.* || '["ubuntu-latest"]') }}`
-# indirection. Never crashes and never FAILs on a runs-on it cannot statically
-# resolve (pure needs-output / inputs / unresolvable matrix) — those WARN.
+# `${{ fromJSON(vars.* || '["ubuntu-latest"]') }}` indirection. GitHub's
+# `runs-on: {group, labels}` mapping is evaluated structurally: the group must
+# be explicit or runtime-resolved and the labels must still reduce to a shared
+# capability (hosted labels cannot satisfy a group mapping). Never crashes and
+# never FAILs on a runs-on it cannot statically resolve (pure needs-output /
+# inputs / unresolvable matrix) — those WARN.
 #
 # Taxonomy authority: GloriousFlywheel/scripts/validate-arc-runner-taxonomy.py,
 # ported in runner_label_taxonomy.rb and pinned by --self-test.
@@ -143,8 +146,102 @@ def evaluate_expression(raw, job, opts)
   worst.merge(resolved: results.map { |r| r[:resolved] }.join(","))
 end
 
+def worst_result(results, resolved)
+  worst = results.find { |r| r[:verdict] == :fail } ||
+          results.find { |r| r[:verdict] == :warn } ||
+          results.first
+  worst.merge(resolved: resolved, detail: results.map { |r| r[:detail] }.join("; "))
+end
+
+def forbidden_runner_group?(value)
+  raw = value.to_s.strip
+  normalized = raw.downcase.gsub(/[\s_]+/, "-")
+  return true if normalized.match?(/\A(?:default|shared)(?:-|\z)/)
+  return true if normalized.match?(/\A(?:github-actions|github-hosted|self-hosted)(?:-|\z)/)
+  return true if T.hosted_label?(raw)
+
+  false
+end
+
+def evaluate_runner_group(value)
+  return { verdict: :fail, detail: "runs-on group mapping is missing group", resolved: "" } if value.nil?
+  unless value.is_a?(String)
+    return { verdict: :fail, detail: "runner group must be a string or expression", resolved: value.inspect }
+  end
+
+  group = value.to_s.strip
+  if group.include?("${{")
+    literals = group.scan(/'([^']+)'/).flatten + group.scan(/"([^"]+)"/).flatten
+    forbidden = literals.uniq.select { |literal| forbidden_runner_group?(literal) }
+    unless forbidden.empty?
+      return {
+        verdict: :fail,
+        detail: "dynamic runner group contains forbidden fallback literal(s): #{forbidden.map(&:inspect).join(", ")}",
+        resolved: group,
+      }
+    end
+    return { verdict: :warn, detail: "runner group resolves only at runtime", resolved: group }
+  end
+  if group.empty?
+    return { verdict: :fail, detail: "runner group must not be empty", resolved: group }
+  end
+  if forbidden_runner_group?(group)
+    return { verdict: :fail, detail: "generic/shared runner group is forbidden", resolved: group }
+  end
+
+  { verdict: :pass, detail: "explicit non-generic runner group", resolved: group }
+end
+
+def evaluate_group_labels(value, job, opts)
+  return { verdict: :fail, detail: "runs-on group mapping is missing labels", resolved: "" } if value.nil?
+  unless value.is_a?(String) || value.is_a?(Array)
+    return { verdict: :fail, detail: "runner-group labels must be a string, expression, or array", resolved: value.inspect }
+  end
+
+  result = evaluate_runs_on(value, job, opts)
+  hosted = case value
+           when Array
+             value.map(&:to_s).any? { |label| T.hosted_label?(label) }
+           when String
+             if value.include?("${{")
+               literals = value.scan(/'([^']+)'/).flatten
+               literals.any? do |literal|
+                 if literal.start_with?("[")
+                   begin
+                     JSON.parse(literal).any? { |label| T.hosted_label?(label.to_s) }
+                   rescue StandardError
+                     false
+                   end
+                 else
+                   T.hosted_label?(literal)
+                 end
+               end
+             else
+               T.hosted_label?(value.strip)
+             end
+           else
+             false
+           end
+  return result unless hosted
+
+  { verdict: :fail, detail: "GitHub-hosted labels cannot satisfy a runner-group mapping", resolved: result[:resolved] }
+end
+
+def evaluate_mapping(value, job, opts)
+  normalized = value.transform_keys(&:to_s)
+  unknown = normalized.keys - %w[group labels]
+  unless unknown.empty?
+    return { verdict: :fail, detail: "unknown runs-on mapping keys: #{unknown.join(", ")}", resolved: value.inspect }
+  end
+
+  group = evaluate_runner_group(normalized["group"])
+  labels = evaluate_group_labels(normalized["labels"], job, opts)
+  worst_result([group, labels], "group=#{group[:resolved]}; labels=#{labels[:resolved]}")
+end
+
 # Top-level dispatch for a single runs-on node.
 def evaluate_runs_on(value, job, opts)
+  return evaluate_mapping(value, job, opts) if value.is_a?(Hash)
   return evaluate_array(value, opts) if value.is_a?(Array)
 
   str = value.to_s.strip
@@ -195,7 +292,7 @@ def lint_file(path, opts)
     next if value.nil? # reusable-workflow `uses:` jobs have no runs-on
 
     result = evaluate_runs_on(value, job, opts)
-    raw = value.is_a?(Array) ? value.inspect : value.to_s
+    raw = (value.is_a?(Array) || value.is_a?(Hash)) ? value.inspect : value.to_s
 
     if result[:verdict] != :fail && opts[:scale_set_names].any?
       literal = value.is_a?(Array) ? nil : value.to_s.strip
@@ -245,6 +342,20 @@ def self_test
     ["${{ inputs.runner || 'depot-macos-latest' }}", :pass, "hosted fleet fallback"],
     ["${{ fromJSON(needs.route-preflight.outputs.labels_json) }}", :warn, "pure needs-output indirection"],
     ["${{ inputs.runner_label }}", :warn, "bare input ref"],
+    [{ "group" => "tinyland-infra", "labels" => "tinyland-nix" }, :pass, "group mapping with capability"],
+    [{ "group" => "${{ inputs.runner_group }}", "labels" => "${{ inputs.runner_label }}" }, :warn, "runtime group mapping"],
+    [{ "group" => "${{ inputs.runner_group || 'tinyland-infra' }}", "labels" => "tinyland-nix" }, :warn, "runtime group mapping with safe literal"],
+    [{ "group" => "${{ inputs.runner_group || 'Default' }}", "labels" => "tinyland-nix" }, :fail, "dynamic group rejects Default fallback"],
+    [{ "group" => "${{ inputs.runner_group || 'default' }}", "labels" => "tinyland-nix" }, :fail, "dynamic group rejects lowercase default fallback"],
+    [{ "group" => "${{ inputs.runner_group || 'shared-runners' }}", "labels" => "tinyland-nix" }, :fail, "dynamic group rejects shared fallback variant"],
+    [{ "group" => "${{ inputs.runner_group || 'GitHub Actions' }}", "labels" => "tinyland-nix" }, :fail, "dynamic group rejects GitHub-hosted fallback"],
+    [{ "group" => "${{ inputs.runner_group || 'ubuntu-latest' }}", "labels" => "tinyland-nix" }, :fail, "dynamic group rejects hosted-label fallback"],
+    [{ "group" => "tinyland-infra", "labels" => "ubuntu-latest" }, :fail, "group mapping rejects hosted label"],
+    [{ "group" => "ubuntu-latest", "labels" => "tinyland-nix" }, :fail, "group mapping rejects hosted group"],
+    [{ "labels" => "tinyland-nix" }, :fail, "group mapping requires group"],
+    [{ "group" => "Default", "labels" => "tinyland-nix" }, :fail, "group mapping rejects Default"],
+    [{ "group" => ["tinyland-infra"], "labels" => "tinyland-nix" }, :fail, "group mapping rejects non-string group"],
+    [{ "group" => "tinyland-infra", "labels" => { "nested" => "tinyland-nix" } }, :fail, "group mapping rejects nested labels"],
   ]
   matrix_job = { "strategy" => { "matrix" => { "os" => %w[ubuntu-latest macos-latest] } } }
   matrix_cases = [
