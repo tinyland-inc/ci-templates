@@ -12,10 +12,13 @@ The legacy `spoke-ci.yml` and `spoke-lane-env.yml` files remain byte-identical.
 The restricted variants additionally close their dependency graph: internal
 actions use exact `@v2.12.1` refs, third-party Actions use full commit SHAs
 (`actions/checkout` is the verified v6.1.0 commit), the cache contract executes
-from the release-vendored composite, and both scanner archives bind the expected
-digest to the downloaded file before exact-member extraction. `v2.12.0` does not
-provide that transitive guarantee and must not be used as an immutability
-receipt for this lane.
+from the release-vendored composite through one exact fail-closed strict step,
+and both scanner archives bind the expected digest to the downloaded file in
+their single allowed download/checksum/extract/install sequence. Alternate or
+conditional contract execution and any additional scanner download, extraction,
+or binary-execution path fail the source contract. `v2.12.0` does not provide
+that transitive guarantee and must not be used as an immutability receipt for
+this lane.
 
 ## Authority and sequencing
 

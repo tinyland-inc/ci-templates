@@ -21,6 +21,7 @@ DETERMINATE_NIX_SHA = "61cbfe2efc2d4e7a8a6d56967c3c1058e846c858"
 SCANNER_INSTALL_SPECS = [
   {
     step: "Install TruffleHog",
+    display_name: "TruffleHog",
     version_input: "trufflehog-version",
     sha_input: "trufflehog-sha256",
     version_env: "TRUFFLEHOG_VERSION",
@@ -31,6 +32,7 @@ SCANNER_INSTALL_SPECS = [
   },
   {
     step: "Install gitleaks",
+    display_name: "gitleaks",
     version_input: "gitleaks-version",
     sha_input: "gitleaks-sha256",
     version_env: "GITLEAKS_VERSION",
@@ -140,6 +142,35 @@ def scanner_install_step(scanner, step_name)
   end
 end
 
+def active_shell_lines(run)
+  run.lines.map(&:strip).reject { |line| line.empty? || line.start_with?("#") }
+end
+
+def expected_scanner_install_lines(spec)
+  checksum = %q{printf '%s  %s\n' "$expected_sha256" "$archive" | sha256sum --check --status}
+  [
+    "set -euo pipefail",
+    'BIN_DIR="${RUNNER_TEMP:-/tmp}/secrets-scan-bin"',
+    'mkdir -p "$BIN_DIR"',
+    %(version="$#{spec[:version_env]}"),
+    %(expected_sha256="$#{spec[:sha_env]}"),
+    '[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {',
+    %(echo "::error::invalid #{spec[:display_name]} version: $version"; exit 64;),
+    "}",
+    '[[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]] || {',
+    %(echo "::error::invalid #{spec[:display_name]} SHA-256"; exit 64;),
+    "}",
+    spec[:archive],
+    "curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \\",
+    spec[:url],
+    '--output "$archive"',
+    checksum,
+    %(tar --extract --gzip --file "$archive" --directory "$BIN_DIR" #{spec[:member]}),
+    %(chmod 0755 "$BIN_DIR/#{spec[:member]}"),
+    'echo "$BIN_DIR" >> "$GITHUB_PATH"',
+  ]
+end
+
 def scanner_install_errors(scanner, spec)
   errors = []
   step = scanner_install_step(scanner, spec[:step])
@@ -156,7 +187,7 @@ def scanner_install_errors(scanner, spec)
   end
 
   run = step["run"].to_s
-  lines = run.lines.map(&:strip).reject { |line| line.empty? || line.start_with?("#") }
+  lines = active_shell_lines(run)
   errors << "secrets-scan #{spec[:step]} must begin fail-closed with set -euo pipefail" unless lines.first == "set -euo pipefail"
   if lines.any? { |line| line.match?(/\A(?:set \+e|set \+o pipefail|if|then|else|elif|fi|while|until|for|case|esac)\b/) }
     errors << "secrets-scan #{spec[:step]} must not conditionally bypass archive verification"
@@ -170,6 +201,10 @@ def scanner_install_errors(scanner, spec)
   assignments = lines.select { |line| line.match?(/\A(?:version|expected_sha256|archive)=/) }
   unless assignments == expected_assignments
     errors << "secrets-scan #{spec[:step]} must bind version, digest, and archive exactly once"
+  end
+
+  unless lines == expected_scanner_install_lines(spec)
+    errors << "secrets-scan #{spec[:step]} must retain the single exact validated download, digest, extraction, chmod, and PATH sequence"
   end
 
   version_guard = '[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {'
@@ -221,6 +256,18 @@ def scanner_integrity_oracle_errors(scanner)
       "bypassed checksum" => ->(run) { run.sub(checksum, "true # #{checksum}") },
       "decoupled archive" => ->(run) { run.sub(checksum, checksum.sub('"$archive"', '"$BIN_DIR/unbound.tar.gz"')) },
       "extraction before checksum" => ->(run) { run.sub("#{checksum}\n#{extraction}", "#{extraction}\n#{checksum}") },
+      "duplicate unverified curl+tar path" => lambda do |run|
+        alternate = <<~SHELL
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \\
+            #{spec[:url]}
+            --output "$BIN_DIR/unverified-#{spec[:member]}.tar.gz"
+          tar --extract --gzip --file "$BIN_DIR/unverified-#{spec[:member]}.tar.gz" --directory "$BIN_DIR" #{spec[:member]}
+        SHELL
+        run.sub(spec[:archive], "#{alternate}#{spec[:archive]}")
+      end,
+      "alternate downloaded binary execution" => lambda do |run|
+        run.sub(extraction, "#{extraction}\n\"$BIN_DIR/#{spec[:member]}\" --version")
+      end,
     }
     mutations.each do |label, mutate|
       mutant = deep_copy(scanner)
@@ -235,6 +282,120 @@ def scanner_integrity_oracle_errors(scanner)
     end
   end
   errors
+end
+
+def cache_attachment_step(action)
+  steps = action.dig("runs", "steps")
+  return nil unless steps.is_a?(Array) && steps.length == 1
+
+  steps.first
+end
+
+def expected_cache_attachment_lines
+  [
+    "set -euo pipefail",
+    'contract="${{ github.action_path }}/../../../scripts/cache-attachment-contract.sh"',
+    'if [[ ! -f "$contract" ]]; then',
+    'echo "::error::release-vendored cache attachment contract is missing: $contract"',
+    "exit 1",
+    "fi",
+    'declared_mode=""',
+    "if [[ -f tinyland.repo.json ]]; then",
+    'declared_mode="$(jq -r \'.enrollment.substrateMode // empty\' tinyland.repo.json)"',
+    "fi",
+    'if [[ -z "$declared_mode" ]]; then',
+    'declared_mode="$SUBSTRATE_MODE_INPUT"',
+    "fi",
+    'export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"',
+    'export GF_FLYWHEEL_PROFILE_STATE="$GF_BAZEL_SUBSTRATE_MODE"',
+    'export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"',
+    'echo "GF_FLYWHEEL_PROFILE_STATE=$GF_FLYWHEEL_PROFILE_STATE" >> "$GITHUB_ENV"',
+    'echo "::notice::cache-backed lane expected mode (manifest-driven): $GF_BAZEL_SUBSTRATE_MODE"',
+    'echo "::notice::Flywheel profile state: $GF_FLYWHEEL_PROFILE_STATE"',
+    'bash "$contract" --strict',
+  ]
+end
+
+def cache_attachment_errors(action)
+  errors = []
+  inputs = action["inputs"]
+  unless inputs.is_a?(Hash) && inputs.keys.sort == %w[runner_labels substrate_mode]
+    errors << "cache attachment action must declare only substrate_mode and runner_labels inputs"
+  end
+  unless inputs.is_a?(Hash) &&
+         inputs.dig("substrate_mode", "required") == false &&
+         inputs.dig("substrate_mode", "default") == "" &&
+         inputs.dig("runner_labels", "required") == true &&
+         !inputs.fetch("runner_labels", {}).key?("default")
+    errors << "cache attachment inputs must retain the exact optional mode and required label contract"
+  end
+
+  runs = action["runs"]
+  unless runs.is_a?(Hash) && runs.keys.sort == %w[steps using] && runs["using"] == "composite"
+    errors << "cache attachment action must be one exact composite step sequence"
+  end
+  step = cache_attachment_step(action)
+  unless step.is_a?(Hash)
+    errors << "cache attachment action must contain exactly one validation step"
+    return errors
+  end
+
+  unless step.keys.sort == %w[env name run shell] &&
+         step["name"] == "Assert cache attachment" &&
+         step["shell"] == "bash"
+    errors << "cache attachment validation step must have the exact name, Bash shell, env, and run shape"
+  end
+  expected_env = {
+    "SUBSTRATE_MODE_INPUT" => "${{ inputs.substrate_mode }}",
+    "RUNNER_LABELS" => "${{ inputs.runner_labels }}",
+  }
+  unless step["env"] == expected_env
+    errors << "cache attachment validation step must bind the exact mode and runner-label inputs"
+  end
+  unless active_shell_lines(step["run"].to_s) == expected_cache_attachment_lines
+    errors << "cache attachment validation must retain the exact fail-closed path, mode/label exports, and unconditional strict execution sequence"
+  end
+  errors
+end
+
+def cache_attachment_oracle_errors(action)
+  execution = 'bash "$contract" --strict'
+  export_labels = 'export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"'
+  mutations = {
+    "missing execution" => ->(mutant) { cache_attachment_step(mutant)["run"].sub!("#{execution}\n", "") },
+    "missing strict mode" => ->(mutant) { cache_attachment_step(mutant)["run"].sub!(execution, 'bash "$contract"') },
+    "decoupled contract path" => lambda do |mutant|
+      cache_attachment_step(mutant)["run"].sub!(
+        '${{ github.action_path }}/../../../scripts/cache-attachment-contract.sh',
+        '$GITHUB_WORKSPACE/scripts/cache-attachment-contract.sh'
+      )
+    end,
+    "missing runner-label input" => ->(mutant) { mutant["inputs"].delete("runner_labels") },
+    "missing substrate-mode input" => ->(mutant) { mutant["inputs"].delete("substrate_mode") },
+    "missing substrate input binding" => ->(mutant) { cache_attachment_step(mutant)["env"].delete("SUBSTRATE_MODE_INPUT") },
+    "missing runner-label env binding" => ->(mutant) { cache_attachment_step(mutant)["env"].delete("RUNNER_LABELS") },
+    "missing runner-label export" => ->(mutant) { cache_attachment_step(mutant)["run"].sub!("#{export_labels}\n", "") },
+    "conditional strict execution" => lambda do |mutant|
+      cache_attachment_step(mutant)["run"].sub!(execution, "if false; then\n  #{execution}\nfi")
+    end,
+    "alternate non-strict execution" => lambda do |mutant|
+      cache_attachment_step(mutant)["run"].sub!(execution, "bash \"$contract\"\n#{execution}")
+    end,
+    "alternate bypass step" => lambda do |mutant|
+      mutant.dig("runs", "steps") << { "name" => "Alternate", "shell" => "bash", "run" => "true" }
+    end,
+  }
+
+  mutations.each_with_object([]) do |(label, mutate), errors|
+    mutant = deep_copy(action)
+    before = deep_copy(mutant)
+    mutate.call(mutant)
+    if mutant == before
+      errors << "cache attachment negative oracle could not construct #{label} mutation"
+    elsif cache_attachment_errors(mutant).empty?
+      errors << "cache attachment negative oracle accepted #{label}"
+    end
+  end
 end
 
 def checkout_step?(step)
@@ -530,11 +691,9 @@ def validate_restricted_dependency_closure
   errors.concat(scanner_integrity_oracle_errors(scanner))
 
   attachment_path = File.join(ROOT, ".github/actions/cache-attachment-validate/action.yml")
-  attachment_text = File.read(attachment_path)
-  unless attachment_text.include?('${{ github.action_path }}/../../../scripts/cache-attachment-contract.sh') &&
-         !attachment_text.match?(/\b(?:curl|wget)\b/)
-    errors << "cache attachment validation must execute only its release-vendored contract"
-  end
+  attachment = load_yaml(attachment_path)
+  errors.concat(cache_attachment_errors(attachment))
+  errors.concat(cache_attachment_oracle_errors(attachment))
 
   # Negative oracles prove the ref classifier rejects each historical escape.
   {

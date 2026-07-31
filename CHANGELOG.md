@@ -14,8 +14,10 @@ Versioning: [SemVer 2.0](https://semver.org/).
   a release-vendored composite, and TruffleHog/Gitleaks release archives are
   downloaded without pipe-to-shell and SHA-256 verified before exact-member
   extraction. The offline restricted-workflow validator now traverses and pins
-  the exact action closure and structurally rejects checksum removal, bypass,
-  archive decoupling, or verification/extraction reordering.
+  the exact action closure, proves the cache composite's exact input/env/path/
+  label-export/strict-execution sequence, and permits only one exact scanner
+  download/checksum/extract/install sequence. Negative controls reject missing,
+  conditional, alternate, duplicate, decoupled, or reordered execution paths.
 
 ## [2.12.0] — 2026-07-31
 
