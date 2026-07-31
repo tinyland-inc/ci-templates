@@ -1,0 +1,422 @@
+name: spoke-ci-restricted
+on:
+  workflow_call:
+    inputs:
+      runner_group:
+        type: string
+        required: true
+        description: Reviewed owner-overlay GitHub runner group; this release requires tinyland-infra.
+      nix_runner_label:
+        type: string
+        required: true
+        description: Reviewed base capability; the restricted contract requires tinyland-nix.
+      heavy_runner_label:
+        type: string
+        required: true
+        description: Reviewed heavy capability; the restricted contract requires tinyland-nix-heavy.
+      kvm_runner_label:
+        type: string
+        required: true
+        description: Reviewed KVM capability; the restricted contract requires tinyland-nix-kvm.
+      node_version:
+        type: string
+        default: "22"
+      pnpm_version:
+        type: string
+        default: "10.13.1"
+      flywheel_config:
+        type: string
+        default: flywheel-executor
+        description: One of flywheel | flywheel-executor | local. Per-lane override via lanes.json.
+      cache_backed:
+        description: >-
+          Opt-in (default false) shared-cache-backed Bazel enrollment for the
+          flywheel-build + bazel-graph jobs. When true, those jobs additionally
+          (a) switch their Nix setup to nix-setup@v2 so BAZEL_REMOTE_CACHE is
+          exported from cluster DNS, (b) validate tinyland.repo.json and assert
+          shared-cache attachment via scripts/cache-attachment-contract.sh
+          (fail-closed: contract --strict), and (c) run a cache-backed Bazel
+          build of the flywheel-eligible targets with
+          `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
+          --remote_upload_local_results=false` reading the shared Bazel cache.
+          CACHE-FIRST only: no remote executor is wired. When false/unset the
+          existing default path runs byte-identically (zero behavior change for
+          non-opted spoke consumers). An opted spoke must also set
+          flywheel_config: flywheel (not local) so flywheel-bazel forwards the
+          remote cache.
+        type: boolean
+        default: false
+      substrate_mode:
+        description: >-
+          Optional operator override for the cache-backed lane's expected Bazel
+          substrate mode (compatibility-local-only | shared-cache-backed |
+          executor-backed). Used ONLY when cache_backed=true AND the spoke's
+          tinyland.repo.json does not declare enrollment.substrateMode (which is
+          the authoritative source, TIN-2109). When empty and the manifest is
+          silent, the lane defaults to shared-cache-backed. Has no effect on the
+          default (non-cache-backed) path.
+        type: string
+        default: ""
+      cache_backed_targets:
+        description: >-
+          Space-separated Bazel targets exercised by the cache-backed lane's
+          real-attach build (cache_backed=true only). Defaults to the SvelteKit
+          flywheel-eligible CAS surface. Ignored on the default path.
+        type: string
+        default: "//:node_modules //:sveltekit_types //:svelte_check_test"
+      playwright_enabled:
+        type: boolean
+        default: false
+      lanes_path:
+        type: string
+        default: .github/lanes.json
+      gitleaks_config:
+        type: string
+        default: .gitleaks.toml
+    secrets:
+      ATTIC_TOKEN:
+        required: false
+
+# Permissions are unchanged from the legacy lane. Public and fork events are
+# skipped by the pre-scheduling trust policy before these permissions are used.
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: spoke-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Public/fork events and inadmissible group/capability inputs are rejected by
+  # job-level policy before GitHub assigns a runner. No caller content is checked out.
+  trust-gate:
+    if: >-
+      ${{
+        github.event.repository.private == true &&
+        ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') ||
+        github.event.pull_request.head.repo.full_name == github.repository) &&
+        inputs.runner_group == 'tinyland-infra' &&
+        inputs.nix_runner_label == 'tinyland-nix' &&
+        inputs.heavy_runner_label == 'tinyland-nix-heavy' &&
+        inputs.kvm_runner_label == 'tinyland-nix-kvm'
+      }}
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ inputs.nix_runner_label }}
+    timeout-minutes: 2
+    steps:
+      - name: Validate private runner route
+        shell: bash
+        env:
+          RUNNER_GROUP: ${{ inputs.runner_group }}
+          NIX_RUNNER_LABEL: ${{ inputs.nix_runner_label }}
+          HEAVY_RUNNER_LABEL: ${{ inputs.heavy_runner_label }}
+          KVM_RUNNER_LABEL: ${{ inputs.kvm_runner_label }}
+        run: |
+          set -euo pipefail
+          group="$(printf '%s' "$RUNNER_GROUP" | tr '[:upper:]' '[:lower:]')"
+          case "$group" in
+            default|shared|github-actions|github-hosted|self-hosted)
+              echo "::error::restricted workflows reject generic/shared runner group '$RUNNER_GROUP'"
+              exit 1
+              ;;
+          esac
+          [[ "$group" == "tinyland-infra" ]] || {
+            echo "::error::runner_group must be the reviewed tinyland-infra owner-overlay group"; exit 1;
+          }
+          [[ "$NIX_RUNNER_LABEL" == "tinyland-nix" ]] || {
+            echo "::error::nix_runner_label must be the reviewed tinyland-nix capability"; exit 1;
+          }
+          [[ "$HEAVY_RUNNER_LABEL" == "tinyland-nix-heavy" ]] || {
+            echo "::error::heavy_runner_label must be the reviewed tinyland-nix-heavy capability"; exit 1;
+          }
+          [[ "$KVM_RUNNER_LABEL" == "tinyland-nix-kvm" ]] || {
+            echo "::error::kvm_runner_label must be the reviewed tinyland-nix-kvm capability"; exit 1;
+          }
+
+  secrets-scan:
+    needs: [trust-gate]
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ inputs.nix_runner_label }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - uses: tinyland-inc/ci-templates/.github/actions/secrets-scan@v2
+
+  lanes-load:
+    needs: [trust-gate]
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ inputs.nix_runner_label }}
+    timeout-minutes: 5
+    outputs:
+      lanes_json: ${{ steps.load.outputs.lanes_json }}
+      lane_count: ${{ steps.load.outputs.lane_count }}
+      schema_version: ${{ steps.load.outputs.schema_version }}
+      spoke_name: ${{ steps.load.outputs.spoke_name }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      - id: load
+        uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v2
+        with:
+          path: ${{ inputs.lanes_path }}
+
+  repo-manifest:
+    needs: [trust-gate]
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ inputs.nix_runner_label }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      - id: manifest
+        shell: bash
+        run: |
+          if [[ -f tinyland.repo.json ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::tinyland.repo.json not present; skipping manifest validation for this pre-manifest consumer."
+          fi
+      - if: steps.manifest.outputs.exists == 'true'
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2
+        with:
+          required_roles: static-spoke,static-spoke-scaffold
+
+  flywheel-build:
+    needs: [trust-gate, secrets-scan, repo-manifest, lanes-load]
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ inputs.nix_runner_label }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      # Default path (cache_backed=false): byte-identical setup for the ~34
+      # non-opted spoke consumers. setup-nix installs Nix only; it does NOT
+      # export BAZEL_REMOTE_CACHE.
+      - if: ${{ !inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+
+      # Cache-backed path (cache_backed=true): nix-setup probes cluster DNS and
+      # exports BAZEL_REMOTE_CACHE / ATTIC_SERVER so the contract + cache-backed
+      # build below can attach the shared Bazel cache. This is the spoke wiring
+      # fix: spoke-ci's default setup-nix does not export the cache endpoint.
+      - if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
+
+      - name: Setup workspace
+        run: nix develop --command just setup
+
+      # --- Opt-in (cache_backed=true) enrollment gate. NEW conditional steps; ---
+      # --- the default flywheel-bazel + just build steps below are untouched.  ---
+
+      # (a) Validate the spoke's tinyland.repo.json against the vendored schema
+      # and FAIL CLOSED on an invalid manifest (TIN-2109). Network-free.
+      - name: Validate repo manifest (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2
+        with:
+          required_roles: static-spoke,static-spoke-scaffold
+
+      # (b) Assert shared-cache attachment. Manifest-driven expected mode
+      # (TIN-2109): authority order enrollment.substrateMode > substrate_mode
+      # input > shared-cache-backed default. Runner labels are fed so the
+      # contract rejects hosted / non-cluster fallback (no silent degrade).
+      - name: Assert shared-cache attachment (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        env:
+          CI_TEMPLATES_REF: v2.5.1
+          SUBSTRATE_MODE_INPUT: ${{ inputs.substrate_mode }}
+          RUNNER_LABELS: ${{ inputs.nix_runner_label }}
+        run: |
+          set -euo pipefail
+          # The contract script ships in this ci-templates repo; prefer the
+          # spoke's vendored copy, else fetch the immutable pinned copy
+          # (CI_TEMPLATES_REF is the releasing tag, not floating v2).
+          script="$RUNNER_TEMP/cache-attachment-contract.sh"
+          if [ -f "scripts/cache-attachment-contract.sh" ]; then
+            script="scripts/cache-attachment-contract.sh"
+          else
+            curl -fsSL \
+              "https://raw.githubusercontent.com/tinyland-inc/ci-templates/${CI_TEMPLATES_REF}/scripts/cache-attachment-contract.sh" \
+              -o "$script"
+            chmod +x "$script"
+          fi
+
+          declared_mode=""
+          if [ -f tinyland.repo.json ]; then
+            declared_mode="$(jq -r '.enrollment.substrateMode // empty' tinyland.repo.json)"
+          fi
+          if [ -z "$declared_mode" ]; then
+            declared_mode="$SUBSTRATE_MODE_INPUT"
+          fi
+          export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"
+          export GF_FLYWHEEL_PROFILE_STATE="$GF_BAZEL_SUBSTRATE_MODE"
+          echo "GF_FLYWHEEL_PROFILE_STATE=$GF_FLYWHEEL_PROFILE_STATE" >> "$GITHUB_ENV"
+          echo "::notice::cache-backed lane expected mode (manifest-driven): $GF_BAZEL_SUBSTRATE_MODE"
+          echo "::notice::Flywheel profile state: $GF_FLYWHEEL_PROFILE_STATE"
+
+          export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"
+          bash "$script" --strict
+
+      - name: Build (flywheel)
+        uses: tinyland-inc/ci-templates/.github/actions/flywheel-bazel@v2
+        with:
+          targets: "//:node_modules"
+          command: build
+          config: ${{ inputs.flywheel_config }}
+          target_class: sveltekit-app-build
+
+      # (c) Cache-backed real-attach build. Fails closed if BAZEL_REMOTE_CACHE is
+      # unset. Runs the flywheel-eligible CAS targets through --config=ci-cached
+      # with the validated remote cache, read-only (no upload). The spoke's
+      # `build:ci --disk_cache=` makes a green build prove the REMOTE cache, not
+      # an incidental local-disk hit. The remote-cache hit/transfer lines in
+      # this step's log are the real-attach proof.
+      - name: Validate Bazel targets (cache-backed)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        env:
+          BAZEL_TARGETS: ${{ inputs.cache_backed_targets }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BAZEL_REMOTE_CACHE:-}" ]; then
+            echo "::error::cache_backed=true but BAZEL_REMOTE_CACHE is unset. nix-setup exports it from cluster DNS on self-hosted runners; the cache-backed lane fails closed rather than silently building local-only."
+            exit 1
+          fi
+          # CACHE-FIRST: ci-cached config + injected remote cache, read-only
+          # (no upload); no remote executor is wired.
+          read -r -a bazel_targets <<< "$BAZEL_TARGETS"
+          nix develop --command bazelisk build "${bazel_targets[@]}" \
+            --config=ci-cached \
+            --remote_cache="${BAZEL_REMOTE_CACHE}" \
+            --remote_upload_local_results=false \
+            --verbose_failures
+
+      - name: Static site build
+        run: nix develop --command just build
+
+      - name: Post lane build status
+        if: always()
+        uses: tinyland-inc/ci-templates/.github/actions/lane-status-check@v2
+        with:
+          commit_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          lane_name: ${{ matrix.lane.name }}
+          state: ${{ job.status == 'success' && 'success' || 'failure' }}
+          description: "build-and-test (${{ matrix.lane.name }})"
+
+  flywheel-test:
+    needs: [trust-gate, secrets-scan, repo-manifest, lanes-load]
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ inputs.nix_runner_label }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+
+      - run: nix develop --command just setup
+      - run: nix develop --command just check
+
+  bazel-graph:
+    needs: [trust-gate, secrets-scan]
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ inputs.heavy_runner_label }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      # Default path (cache_backed=false): byte-identical for non-opted spokes.
+      - if: ${{ !inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      # Cache-backed path: nix-setup exports BAZEL_REMOTE_CACHE from cluster DNS.
+      - if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
+
+      - run: nix develop --command bazelisk mod graph
+
+      # Default path: plain local build (untouched, byte-identical).
+      - if: ${{ !inputs.cache_backed }}
+        run: nix develop --command bazelisk build //:node_modules
+
+      # Cache-backed path: same target read through the validated shared cache.
+      # tinyland-nix-heavy is a cluster capability class accepted by the contract.
+      - name: Assert shared-cache attachment (bazel-graph)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        env:
+          CI_TEMPLATES_REF: v2.5.1
+          SUBSTRATE_MODE_INPUT: ${{ inputs.substrate_mode }}
+          RUNNER_LABELS: ${{ inputs.heavy_runner_label }}
+        run: |
+          set -euo pipefail
+          script="$RUNNER_TEMP/cache-attachment-contract.sh"
+          if [ -f "scripts/cache-attachment-contract.sh" ]; then
+            script="scripts/cache-attachment-contract.sh"
+          else
+            curl -fsSL \
+              "https://raw.githubusercontent.com/tinyland-inc/ci-templates/${CI_TEMPLATES_REF}/scripts/cache-attachment-contract.sh" \
+              -o "$script"
+            chmod +x "$script"
+          fi
+          declared_mode=""
+          if [ -f tinyland.repo.json ]; then
+            declared_mode="$(jq -r '.enrollment.substrateMode // empty' tinyland.repo.json)"
+          fi
+          if [ -z "$declared_mode" ]; then
+            declared_mode="$SUBSTRATE_MODE_INPUT"
+          fi
+          export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"
+          export GF_FLYWHEEL_PROFILE_STATE="$GF_BAZEL_SUBSTRATE_MODE"
+          echo "GF_FLYWHEEL_PROFILE_STATE=$GF_FLYWHEEL_PROFILE_STATE" >> "$GITHUB_ENV"
+          echo "::notice::Flywheel profile state: $GF_FLYWHEEL_PROFILE_STATE"
+          export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"
+          bash "$script" --strict
+
+      - name: Build //:node_modules (cache-backed)
+        if: ${{ inputs.cache_backed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${BAZEL_REMOTE_CACHE:-}" ]; then
+            echo "::error::cache_backed=true but BAZEL_REMOTE_CACHE is unset; failing closed rather than building local-only."
+            exit 1
+          fi
+          nix develop --command bazelisk build //:node_modules \
+            --config=ci-cached \
+            --remote_cache="${BAZEL_REMOTE_CACHE}" \
+            --remote_upload_local_results=false \
+            --verbose_failures
+
+  playwright:
+    if: ${{ inputs.playwright_enabled }}
+    needs: [trust-gate, flywheel-build, lanes-load]
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ inputs.kvm_runner_label }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      - run: nix develop --command just setup
+      - run: nix develop --command just test-e2e

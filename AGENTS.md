@@ -26,7 +26,8 @@ a fleet-wide change.
    (enforced by `just endpoint-free-check` + `just ci-cached-endpoint-free-check`).
    Cache/executor endpoints are runtime authority, supplied as flags by the
    composite/workflow from validated env.
-4. **Amend `CHANGELOG.md` `## [Unreleased]`** in every PR (gated by `release.yml`).
+4. **Amend `CHANGELOG.md` `## [Unreleased]`** in every feature/fix PR. Release
+   PRs move that content into the dated version section.
 5. **Run `just check` before pushing** (or `nix develop --command just check`).
 
 ## Local validation
@@ -129,6 +130,7 @@ contract exists so the gate is enforceable the moment a repo declares it.
 
 ## Releasing
 
-See `RELEASING.md`. On a `release: vX.Y.Z` commit to `main`, `release.yml` cuts
-the immutable tag and moves the floating major. Never reuse or force a tag
-out-of-band.
+See `RELEASING.md`. Releases are attended operator transactions: enable native
+immutable releases, land the dated changelog section, create signed annotated
+exact and floating-major tags with an exact lease, then publish and verify the
+GitHub release attestation. Never reuse an exact tag.

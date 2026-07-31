@@ -122,13 +122,28 @@ See per-action `action.yml` files for full input/output documentation.
 | Workflow | Purpose |
 |---|---|
 | `js-bazel-package.yml` | Pre-existing: JS/TS packages built by Bazel and published to GitHub Packages, with npmjs required/optional/disabled by package policy. Supports an **opt-in, default-off `cache_backed`** shared-cache Bazel validation lane (cache-first; see below). |
-| `npm-publish.yml` | Pre-existing: hosted-only Node package build + publish. |
+| `npm-publish.yml` | Pre-existing: hosted-only Node package build + publish, callable only (no local tag/manual trigger). |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
 | **`spoke-lane-env.yml`** | Canonical PR-env workflow. Replaces hand-rolled `pr-env-lanes.yml`. |
+| **`spoke-ci-restricted.yml`** | Explicit private-repo opt-in variant of `spoke-ci.yml`; every job requires an owner `-infra` runner group plus its reviewed capability label. |
+| **`spoke-lane-env-restricted.yml`** | Explicit private-repo opt-in variant of `spoke-lane-env.yml`; preserves lane semantics while requiring group+capability routing and rejecting fork execution before checkout. |
 | **`spoke-lane-ttl-reap.yml`** | Reusable scheduled TTL backstop dispatcher for Blahaj lane cleanup. |
 | **`spoke-public-preview.yml`** | Reusable public/client preview dispatcher for Cloudflare Access-gated aliases. |
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |
 | **`spoke-deploy-cloudflare-pages.yml`** | Sanctioned **opt-in** Cloudflare Pages deploy lane. Builds the adapter-static `build/` via `nix develop --command just setup/check/build`, then `wrangler pages deploy build`. Credential-skips when the org CF secrets are absent; PR events build only. Does **not** replace the scaffold default GitHub-Pages lane. |
+
+The restricted variants are a separate, default-off source surface. Existing
+`spoke-ci.yml` and `spoke-lane-env.yml` callers do not enter a private runner
+group by upgrading their pin. Adoption is deliberately sequenced: the owner
+`-infra` overlay first creates or adopts the selected private group and proves
+its repository selection; ci-templates then publishes an immutable release;
+finally the private app repo pins that release and passes the exact group plus
+capability inputs. Workflow source is not proof that the runner group exists,
+has the intended repository selection, or has live capacity. See
+[`docs/restricted-private-runners.md`](docs/restricted-private-runners.md).
+This release admits only the reviewed `tinyland-infra` group and exact Tinyland
+capability values; adding another owner group requires a reviewed source change
+and immutable release, not a caller-selected fallback.
 
 ### Cloudflare Pages deploy lane (opt-in)
 

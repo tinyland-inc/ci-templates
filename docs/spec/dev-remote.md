@@ -339,8 +339,8 @@ Out of this repo's scope, but documented for reference:
 2. `schemas/blahaj-dev-dispatch.schema.json` in this repo.
 3. `lane-preview-tunnel` composite action.
 4. `spoke-dev-env.yml` reusable workflow.
-5. CHANGELOG.md `## [Unreleased]` + tag `v1.1.0` via the
-   `release.yml` flow.
+5. CHANGELOG.md `## [Unreleased]` + signed immutable tag `v1.1.0` via the
+   attended `RELEASING.md` flow.
 6. `site.scaffold` v0.2+ patch: replace `dev-remote` stub with the
    real recipe, add `.github/workflows/dev-remote.yml` wrapper,
    optionally add `Dockerfile.dev` template.
