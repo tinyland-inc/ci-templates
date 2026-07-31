@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.12.0] — 2026-07-31
+
 ### Added
 
 - **Default-off private-group spoke workflows (TIN-3209)** — add
