@@ -1,5 +1,9 @@
 # Release checklist: ci-templates v1.0.0
 
+> Historical record only. The hosted `release.yml` automation described below
+> is retired; current releases follow the attended immutable process in
+> `RELEASING.md`.
+
 > **Status**: Pre-release. All v1.0.0 work has landed on
 > `feat/v1.0.0`; this checklist is the operator-facing
 > sequence for cutting the actual release.

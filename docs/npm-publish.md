@@ -3,8 +3,10 @@
 `npm-publish.yml` is the reusable workflow for straightforward Node package
 build, test, and publish flows that publish directly from the workspace tree.
 
-Unlike `js-bazel-package.yml`, this workflow is currently GitHub-hosted only.
-It does not expose shared-runner or repo-owned runner modes.
+Unlike `js-bazel-package.yml`, this reusable workflow is currently
+GitHub-hosted only. It does not expose shared-runner or repo-owned runner modes,
+and it has no repository-local push-tag or manual trigger. Publishing happens
+only when an existing consumer explicitly calls the pinned workflow.
 
 ## What it does
 
@@ -14,8 +16,8 @@ It does not expose shared-runner or repo-owned runner modes.
 - runs `pnpm test` when a `test` script exists, but does not fail the workflow
   if tests fail
 - verifies that `npm pack --dry-run` does not include source maps
-- publishes to GitHub Packages on tags
-- publishes to npmjs with provenance on tags
+- publishes to GitHub Packages when a reusable caller runs on a tag
+- publishes to npmjs with provenance when a reusable caller runs on a tag
 
 ## Contract inputs
 
@@ -71,7 +73,8 @@ All three jobs currently run on:
 
 - `ubuntu-latest`
 
-This is a hosted-only workflow today.
+This is a hosted-only reusable workflow today. The ci-templates repository does
+not invoke it when an immutable workflow-library release is tagged.
 
 ## Example
 

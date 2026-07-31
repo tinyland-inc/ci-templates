@@ -22,73 +22,62 @@ and may break without notice**.
    - **MINOR** — new actions / workflows, new optional inputs, schema
      minor bumps.
    - **PATCH** — bug fixes, prose/doc updates, internal refactors.
-3. **Cut the release**. Pick **3a** (workflow-driven, preferred when
-   it works) or **3b** (manual fallback, use when 3a's preconditions
-   don't hold in your environment):
-
-   ### 3a. Workflow-driven (preferred)
-
-   `release.yml`'s `tag-on-release-commit` job auto-tags when a
-   commit with subject `release: vX.Y.Z` lands on main.
+3. **Land the release commit through a normal PR.** Move the complete
+   `## [Unreleased]` body into `## [X.Y.Z] — YYYY-MM-DD`, restore an empty
+   `## [Unreleased]`, and use subject `release: vX.Y.Z`. Do not push directly
+   to `main`.
+4. **Enable native immutable releases before publishing.** This setting affects
+   future releases only:
 
    ```bash
-   ver=v1.2.3
-   sed -i "s|## \[Unreleased\]|## [Unreleased]\n\n## [${ver#v}] — $(date -u +%Y-%m-%d)|" CHANGELOG.md
-   git add CHANGELOG.md
-   git commit -m "release: $ver"
-   git push origin main
-   # release.yml fires; auto-cuts $ver + moves @vMAJOR + creates GH Release.
+   gh api --method PUT \
+     -H 'X-GitHub-Api-Version: 2026-03-10' \
+     repos/tinyland-inc/ci-templates/immutable-releases
    ```
 
-   ### 3b. Manual fallback
-
-   Use when 3a's "push to main" doesn't work in your environment:
-
-   - **Push-protection hook on `main`** (e.g. local agent safety hook
-     blocking direct push to `main` and/or `release/*` branches —
-     surfaced during darkmap's v1.0.0 cut).
-   - **GitHub rebase-merge drops empty commits**, so a
-     `git commit --allow-empty -m "release: vX.Y.Z"` pushed to a
-     feature branch and rebase-merged into main yields a main HEAD
-     without the release subject — `release.yml` doesn't fire.
-
-   Manual cut (matches what 3a's automation would have produced):
+5. **Cut signed tags with an exact floating-tag lease.** Never move or reuse the
+   exact SemVer tag. The floating major is intentionally advanced:
 
    ```bash
    ver=v1.2.3
-   target_sha=$(git rev-parse origin/main)   # or a specific merge SHA
+   major="${ver%%.*}"
+   target_sha="$(git rev-parse origin/main)"
+   old_major_ref="$(git ls-remote --tags origin "refs/tags/$major" | awk '{print $1}')"
 
-   # Make sure CHANGELOG.md already has the ## [X.Y.Z] section.
-   # If not, land that via a normal PR first.
    grep -qE "^## \\[${ver#v}\\]" CHANGELOG.md || {
-     echo "CHANGELOG.md missing ## [${ver#v}] section — land that PR first"
+     echo "CHANGELOG.md missing ## [${ver#v}] — land the release PR first"
      exit 1
    }
 
-   git tag -a "$ver" "$target_sha" -m "$ver
+   git tag -s "$ver" "$target_sha" -m "$ver"
+   git tag -f -s "$major" "$target_sha" -m "track $ver"
+   git push --atomic origin "refs/tags/$ver" "refs/tags/$major" \
+     --force-with-lease="refs/tags/$major:$old_major_ref"
+   ```
 
-   See CHANGELOG.md ## [${ver#v}] for the full Added/Changed list."
-   git tag -f -a "v${ver%%.*}" "$target_sha" -m "track $ver"
-   git push origin "$ver"
-   git push origin "v${ver%%.*}" --force-with-lease
+6. **Publish and verify the immutable GitHub release.** Draft first, inspect the
+   notes, then publish. Publication locks the exact release tag and produces the
+   release attestation:
 
-   # Extract just this version's CHANGELOG section for the GH Release:
+   ```bash
+   notes_file="$(mktemp -t ci-templates-release-notes.XXXXXX)"
+   trap 'rm -f "$notes_file"' EXIT
    awk -v v="${ver#v}" '
      $0 ~ "^## \\[" v "\\]" {flag=1; next}
      /^## \[/ && flag {exit}
      flag {print}
-   ' CHANGELOG.md > /tmp/release-notes.md
+   ' CHANGELOG.md > "$notes_file"
 
-   gh release create "$ver" \
-     --title "$ver" \
-     --notes-file /tmp/release-notes.md
+   gh release create "$ver" --verify-tag --draft \
+     --title "$ver" --notes-file "$notes_file"
+   gh release edit "$ver" --draft=false
+   gh api "repos/tinyland-inc/ci-templates/releases/tags/$ver" --jq .immutable
+   gh release verify "$ver"
    ```
 
-   Verify with `gh release view "$ver"` and at least one downstream
-   spoke bumping its `@v...` pin.
-
-4. **Verify**: at least one spoke (`tinyland-inc/site.scaffold` first)
-   bumps its `@v...` pin and CI is green.
+7. **Verify a consumer pin**: at least one spoke
+   (`tinyland-inc/site.scaffold` first) pins the exact `@vX.Y.Z` release and its
+   sanctioned private-group checks report the expected non-Default group.
 
 ## Migration discipline
 

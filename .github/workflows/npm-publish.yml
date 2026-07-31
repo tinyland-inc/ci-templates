@@ -24,12 +24,6 @@ on:
         description: "npmjs.com publish token"
         required: false
 
-  push:
-    tags:
-      - "v*"
-
-  workflow_dispatch:
-
 permissions:
   contents: read
   packages: write

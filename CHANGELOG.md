@@ -22,6 +22,12 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Fixed
 
+- **No implicit hosted release jobs (TIN-3209)** — retire the repository-local
+  PR/main release workflow and stop `npm-publish.yml` from auto-running on
+  ci-templates tags or manual dispatch. Immutable library releases are now an
+  attended signed-tag/GitHub-release transaction; the existing hosted npm
+  workflow remains callable only by already pinned consumers.
+
 - **Structured `runs-on` linting** — teach `lint-runs-on.rb` to inspect GitHub's
   `{group, labels}` form as a mapping, reject missing/generic groups and hosted
   labels inside group mappings, hard-fail forbidden literal fallbacks such as
