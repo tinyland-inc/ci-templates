@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.12.1] — 2026-07-31
+
 ### Fixed
 
 - **Restricted workflow transitive immutability (TIN-3209)** — close the full
