@@ -6,7 +6,7 @@ description: >
   Steps in order:
     1. Add /nix/var/nix/profiles/default/bin + $HOME/.nix-profile/bin to PATH.
     2. Probe `command -v nix` to detect a preinstalled install.
-    3. If absent → DeterminateSystems/determinate-nix-action@v3 (installs single-user).
+    3. If absent → the immutable v3 Determinate Nix action commit (installs single-user).
     4. If present → write per-user ~/.config/nix/nix.conf with the requested
        experimental-features (no sudo).
     5. Ensure the `nixbld` group + nixbld1..nixbld32 build users exist —
@@ -61,7 +61,7 @@ runs:
 
     - name: Install Determinate Nix (if not preinstalled)
       if: steps.detect.outputs.installed != 'true'
-      uses: DeterminateSystems/determinate-nix-action@v3
+      uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3
       with:
         extra-conf: ${{ inputs.extra_nix_config }}
 

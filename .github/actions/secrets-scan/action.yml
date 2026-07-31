@@ -8,9 +8,15 @@ inputs:
   trufflehog-version:
     description: "TruffleHog version (pinned binary release; no Docker)"
     default: "3.95.3"
+  trufflehog-sha256:
+    description: "SHA-256 for the pinned Linux amd64 TruffleHog release archive"
+    default: "5d836eae522540a32ca0f1a1e00efd4c3153a52462466a4b4008fac1e6c1a548"
   gitleaks-version:
     description: "Gitleaks version"
     default: "8.21.2"
+  gitleaks-sha256:
+    description: "SHA-256 for the pinned Linux x64 Gitleaks release archive"
+    default: "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
   gitleaks-config:
     description: "Path to .gitleaks.toml config (skipped if not found)"
     default: ".gitleaks.toml"
@@ -29,22 +35,36 @@ outputs:
 runs:
   using: "composite"
   steps:
-    # Docker-free: trufflesecurity/trufflehog@main is a container action and
-    # fails on Docker-less self-hosted runners (e.g. the tinyland nix compute
-    # pool: "failed to connect to the docker API at unix:///var/run/docker.sock").
-    # Install the pinned binary and scan git history directly, mirroring the
-    # gitleaks binary pattern below. `--fail` exits non-zero only when results
-    # are found; with the default `--only-verified` that means verified secrets.
+    # Docker-free: install checksum-pinned release archives and scan git history
+    # directly. `--fail` exits non-zero only when results are found; with the
+    # default `--only-verified` that means verified secrets.
     - name: Install TruffleHog
       shell: bash
+      env:
+        TRUFFLEHOG_VERSION: ${{ inputs.trufflehog-version }}
+        TRUFFLEHOG_SHA256: ${{ inputs.trufflehog-sha256 }}
       run: |
+        set -euo pipefail
         # /usr/local/bin is not writable on the nix self-hosted runners, so
         # install into a job-writable dir and export it onto PATH for the
         # subsequent scan steps via $GITHUB_PATH.
         BIN_DIR="${RUNNER_TEMP:-/tmp}/secrets-scan-bin"
         mkdir -p "$BIN_DIR"
-        curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-          | sh -s -- -b "$BIN_DIR" "v${{ inputs.trufflehog-version }}"
+        version="$TRUFFLEHOG_VERSION"
+        expected_sha256="$TRUFFLEHOG_SHA256"
+        [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+          echo "::error::invalid TruffleHog version: $version"; exit 64;
+        }
+        [[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+          echo "::error::invalid TruffleHog SHA-256"; exit 64;
+        }
+        archive="$BIN_DIR/trufflehog_${version}_linux_amd64.tar.gz"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          "https://github.com/trufflesecurity/trufflehog/releases/download/v${version}/trufflehog_${version}_linux_amd64.tar.gz" \
+          --output "$archive"
+        printf '%s  %s\n' "$expected_sha256" "$archive" | sha256sum --check --status
+        tar --extract --gzip --file "$archive" --directory "$BIN_DIR" trufflehog
+        chmod 0755 "$BIN_DIR/trufflehog"
         echo "$BIN_DIR" >> "$GITHUB_PATH"
 
     - name: TruffleHog scan
@@ -54,13 +74,30 @@ runs:
 
     - name: Install gitleaks
       shell: bash
+      env:
+        GITLEAKS_VERSION: ${{ inputs.gitleaks-version }}
+        GITLEAKS_SHA256: ${{ inputs.gitleaks-sha256 }}
       run: |
+        set -euo pipefail
         # Same job-writable bin dir as TruffleHog (/usr/local/bin is not
         # writable on the nix self-hosted runners).
         BIN_DIR="${RUNNER_TEMP:-/tmp}/secrets-scan-bin"
         mkdir -p "$BIN_DIR"
-        curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${{ inputs.gitleaks-version }}/gitleaks_${{ inputs.gitleaks-version }}_linux_x64.tar.gz" \
-          | tar xz -C "$BIN_DIR" gitleaks
+        version="$GITLEAKS_VERSION"
+        expected_sha256="$GITLEAKS_SHA256"
+        [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+          echo "::error::invalid gitleaks version: $version"; exit 64;
+        }
+        [[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+          echo "::error::invalid gitleaks SHA-256"; exit 64;
+        }
+        archive="$BIN_DIR/gitleaks_${version}_linux_x64.tar.gz"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz" \
+          --output "$archive"
+        printf '%s  %s\n' "$expected_sha256" "$archive" | sha256sum --check --status
+        tar --extract --gzip --file "$archive" --directory "$BIN_DIR" gitleaks
+        chmod 0755 "$BIN_DIR/gitleaks"
         echo "$BIN_DIR" >> "$GITHUB_PATH"
 
     - name: Resolve gitleaks config

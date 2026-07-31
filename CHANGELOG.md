@@ -5,6 +5,17 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Restricted workflow transitive immutability (TIN-3209)** — close the full
+  `spoke-ci-restricted.yml` / `spoke-lane-env-restricted.yml` dependency graph:
+  self-actions use exact `v2.12.1` refs, `actions/checkout` and Determinate Nix
+  use full commit SHAs, the cache attachment contract runs from a
+  release-vendored composite, and TruffleHog/Gitleaks release archives are
+  downloaded without pipe-to-shell and SHA-256 verified before execution. The
+  offline restricted-workflow validator now traverses and pins the exact action
+  closure with positive and negative immutability oracles.
+
 ## [2.12.0] — 2026-07-31
 
 ### Added

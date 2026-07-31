@@ -15,9 +15,14 @@ a fleet-wide change.
 
 ## Golden rules
 
-1. **Pin, don't float.** Consumers pin `@v2.x` (immutable) or the floating major
-   `@v2`. Internal composite-to-composite refs use the floating major (`@v2`),
-   never `@main` (enforced by `scripts/validate-ci-templates.py internal-refs`).
+1. **Pin, don't float.** Production consumers pin an exact immutable release
+   such as `@v2.12.1`; floating `@v2` is a quick-start convenience, not an
+   acceptance receipt. The restricted private-runner workflows and their full
+   transitive composite closure must use an exact immutable self-release, while
+   third-party Actions use full 40-character commit SHAs. The restricted
+   closure check rejects `@v2`, `@main`, local consumer-relative actions,
+   unpinned third-party Actions, mutable installer scripts, and unverified
+   scanner archives.
 2. **Default-off, opt-in changes only.** A new behavior added to a shared
    workflow MUST be gated behind a new input that defaults to the pre-existing
    behavior. Non-opted consumers must be byte-identical. Prove it by diffing the
@@ -38,9 +43,10 @@ nix develop --command just check # if tools are not on PATH
 ```
 
 `just check` parses all workflow/action YAML + JSON schemas, validates
-`tinyland.repo.json`, asserts internal action refs resolve, guards the
-js-bazel-package runner + cache-backed contracts, asserts the bazelrc fragments
-stay endpoint-free, and runs the gitleaks working-tree scan.
+`tinyland.repo.json`, asserts internal action refs resolve, traverses the
+restricted workflows' exact dependency closure, guards the js-bazel-package
+runner + cache-backed contracts, asserts the bazelrc fragments stay
+endpoint-free, and runs the gitleaks working-tree scan.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 

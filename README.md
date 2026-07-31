@@ -89,8 +89,9 @@ nix develop --command just check
 ```
 
 The check parses all workflow/action YAML, parses vendored JSON schemas,
-validates `tinyland.repo.json`, verifies v2 internal action refs resolve to
-checked-in sibling actions, asserts `bazelrc/flywheel.bazelrc` and
+validates `tinyland.repo.json`, verifies internal action refs resolve to
+checked-in sibling actions, recursively proves the restricted workflows' exact
+self/third-party dependency closure, asserts `bazelrc/flywheel.bazelrc` and
 `bazelrc/ci-cached.bazelrc` remain endpoint-free, asserts the `cache_backed`
 opt-in lane stays default-off and cache-first, and runs the canonical Tinyland
 gitleaks working-tree scan.
@@ -105,6 +106,7 @@ gitleaks working-tree scan.
 | `secrets-scan` | TruffleHog + Gitleaks. |
 | **`inherit-scaffold-skills`** | Pull `plugins/scaffold-core` from `site.scaffold` at a pinned ref and materialize `.agents/skills` + `.claude/skills`. |
 | **`repo-manifest-validate`** | Validate `tinyland.repo.json` and optionally require repo roles such as `static-spoke`. |
+| **`cache-attachment-validate`** | Execute the release-vendored cache attachment contract without a network source fallback. |
 | **`flywheel-bazel`** | `bazelisk` wrapper with endpoint-free `--config=flywheel[-executor]`. Supplies cache/executor endpoints from runtime env or inputs. Refuses executor on non-cluster runners. |
 | **`lanes-load`** | Validate + load `.github/lanes.json`. Outputs matrix-ready `lanes_json`. |
 | **`lane-dispatch`** | Emit Blahaj `<spoke>-lane-env` provision payload. Supports `dry_run`. |
@@ -132,7 +134,9 @@ See per-action `action.yml` files for full input/output documentation.
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |
 | **`spoke-deploy-cloudflare-pages.yml`** | Sanctioned **opt-in** Cloudflare Pages deploy lane. Builds the adapter-static `build/` via `nix develop --command just setup/check/build`, then `wrangler pages deploy build`. Credential-skips when the org CF secrets are absent; PR events build only. Does **not** replace the scaffold default GitHub-Pages lane. |
 
-The restricted variants are a separate, default-off source surface. Existing
+The restricted variants are a separate, default-off source surface. Their
+`v2.12.1` release closes the transitive graph with exact self-release refs,
+full third-party commit SHAs, and checksum-verified scanner archives. Existing
 `spoke-ci.yml` and `spoke-lane-env.yml` callers do not enter a private runner
 group by upgrading their pin. Adoption is deliberately sequenced: the owner
 `-infra` overlay first creates or adopts the selected private group and proves
@@ -276,9 +280,10 @@ set `flywheel_config: flywheel` so `flywheel-bazel` forwards the remote cache.
 ## Contributing
 
 See [`RELEASING.md`](./RELEASING.md) for the release flow and SemVer
-policy. Each PR must amend `## [Unreleased]` in `CHANGELOG.md`. Internal
-composite-to-composite refs must use the current floating major tag, not
-`@main` or an older major.
+policy. Each PR must amend `## [Unreleased]` in `CHANGELOG.md`. Restricted
+workflow self-references must use an exact immutable release and all
+third-party Actions in that closure must use full commit SHAs; `@main` and the
+floating major are rejected by the closure validator.
 
 ## Migration from `@main`
 

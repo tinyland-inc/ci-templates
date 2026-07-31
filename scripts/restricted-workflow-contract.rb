@@ -3,16 +3,33 @@
 
 # Structural contract for the opt-in private-repository workflow variants.
 # The variants may route only through an explicit owner -infra group plus an
-# exact reviewed capability. The legacy shared workflows are checksum-pinned so
-# adding this surface cannot silently change ~190 existing consumers.
+# exact reviewed capability. Their transitive action graph is immutable and
+# source-closed. The legacy shared workflows are checksum-pinned so adding this
+# surface cannot silently change ~190 existing consumers.
 
 require "digest"
 require "open3"
+require "pathname"
 require "yaml"
 
 ROOT = File.expand_path("..", __dir__)
 GROUP_EXPR = "${{ inputs.runner_group }}"
 TRUST_JOB = "trust-gate"
+IMMUTABLE_RELEASE = "v2.12.1"
+CHECKOUT_SHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+DETERMINATE_NIX_SHA = "61cbfe2efc2d4e7a8a6d56967c3c1058e846c858"
+EXPECTED_CLOSURE_ACTIONS = %w[
+  cache-attachment-validate
+  flywheel-bazel
+  lane-dispatch
+  lane-reap
+  lane-status-check
+  lanes-load
+  nix-setup
+  repo-manifest-validate
+  secrets-scan
+  setup-nix
+].freeze
 
 SPECS = {
   "spoke-ci" => {
@@ -150,7 +167,9 @@ def validate_restricted(name, document, legacy, spec)
 
   spec[:runner_env].each do |job_name, input|
     values = Array(jobs.dig(job_name, "steps")).map do |step|
-      step.is_a?(Hash) ? step.dig("env", "RUNNER_LABELS") : nil
+      next unless step.is_a?(Hash)
+
+      step.dig("env", "RUNNER_LABELS") || step.dig("with", "runner_labels")
     end.compact
     expected = "${{ inputs.#{input} }}"
     errors << "#{name}: #{job_name} cache contract must consume #{expected}" unless values == [expected]
@@ -184,9 +203,10 @@ def validate_restricted(name, document, legacy, spec)
     end
   end
 
-  # Strip only the reviewed routing/trust delta. Everything else—permissions,
-  # matrices, steps, action pins, cache behavior, and ownership boundaries—must
-  # remain structurally equal to the legacy workflow.
+  # Strip the reviewed routing/trust delta plus the exact dependency-closure
+  # pins. Everything else—permissions, matrices, step behavior, cache behavior,
+  # and ownership boundaries—must remain structurally equal to the legacy
+  # workflow.
   normalized = deep_copy(document)
   normalized["name"] = legacy["name"]
   normalized_call = workflow_call(normalized)
@@ -213,8 +233,30 @@ def validate_restricted(name, document, legacy, spec)
     # The restricted variant can use its already-reviewed capability input
     # directly instead of the unsupported `runner.labels` context. Normalize
     # that routing-only expression back for the semantic comparison.
-    Array(job["steps"]).zip(Array(legacy_job["steps"])).each do |restricted_step, legacy_step|
+    restricted_steps = Array(job["steps"])
+    legacy_steps = Array(legacy_job["steps"])
+    restricted_steps.each_index do |index|
+      restricted_step = restricted_steps[index]
+      legacy_step = legacy_steps[index]
       next unless restricted_step.is_a?(Hash) && legacy_step.is_a?(Hash)
+
+      # The restricted release closes the old inline network fetch by invoking
+      # the release-vendored composite. Normalize that immutability-only delta
+      # back to the byte-pinned legacy step for the semantic comparison.
+      if legacy_step["name"].to_s.start_with?("Assert shared-cache attachment") &&
+         restricted_step["uses"] == "tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@#{IMMUTABLE_RELEASE}"
+        restricted_steps[index] = deep_copy(legacy_step)
+        next
+      end
+
+      restricted_uses = restricted_step["uses"].to_s
+      legacy_uses = legacy_step["uses"].to_s
+      if restricted_uses == "actions/checkout@#{CHECKOUT_SHA}" && legacy_uses == "actions/checkout@v6"
+        restricted_step["uses"] = legacy_uses
+      elsif restricted_uses.match?(%r{\Atinyland-inc/ci-templates/.+@#{Regexp.escape(IMMUTABLE_RELEASE)}\z}) &&
+            legacy_uses == restricted_uses.sub("@#{IMMUTABLE_RELEASE}", "@v2")
+        restricted_step["uses"] = legacy_uses
+      end
 
       if legacy_step.dig("env", "RUNNER_LABELS") == "${{ join(runner.labels, ',') }}"
         restricted_step["env"]["RUNNER_LABELS"] = legacy_step["env"]["RUNNER_LABELS"]
@@ -226,7 +268,140 @@ def validate_restricted(name, document, legacy, spec)
       end
     end
   end
-  errors << "#{name}: restricted workflow drifted beyond reviewed routing/trust delta" unless normalized == legacy
+  errors << "#{name}: restricted workflow drifted beyond reviewed routing/trust/immutability delta" unless normalized == legacy
+
+  errors
+end
+
+def collect_uses(document)
+  uses = []
+  walk = lambda do |node|
+    case node
+    when Hash
+      node.each do |key, value|
+        uses << value if key == "uses" && value.is_a?(String)
+        walk.call(value)
+      end
+    when Array
+      node.each { |value| walk.call(value) }
+    end
+  end
+  walk.call(document)
+  uses
+end
+
+def validate_immutable_ref(uses)
+  internal = uses.match(%r{\Atinyland-inc/ci-templates/\.github/actions/([^@\s]+)@(.+)\z})
+  if internal
+    action, ref = internal.captures
+    return "internal action #{action} must use @#{IMMUTABLE_RELEASE}, got @#{ref}" unless ref == IMMUTABLE_RELEASE
+
+    return nil
+  end
+
+  return "local action refs are not deterministic in a called workflow: #{uses}" if uses.start_with?("./")
+  return nil if uses.start_with?("docker://")
+
+  _owner_action, ref = uses.split("@", 2)
+  return "third-party action must use a full commit SHA: #{uses}" unless ref&.match?(/\A[0-9a-f]{40}\z/)
+
+  nil
+end
+
+def validate_restricted_dependency_closure
+  errors = []
+  queue = SPECS.values.map { |spec| File.join(ROOT, spec[:restricted]) }
+  visited = {}
+  action_names = []
+
+  until queue.empty?
+    path = queue.shift
+    next if visited[path]
+
+    visited[path] = true
+    document = load_yaml(path)
+    collect_uses(document).each do |uses|
+      if (error = validate_immutable_ref(uses))
+        errors << "#{Pathname.new(path).relative_path_from(Pathname.new(ROOT))}: #{error}"
+      end
+
+      match = uses.match(%r{\Atinyland-inc/ci-templates/\.github/actions/([^@\s]+)@})
+      next unless match
+
+      action = match[1]
+      action_path = File.join(ROOT, ".github/actions", action, "action.yml")
+      unless File.file?(action_path)
+        errors << "restricted closure references missing action .github/actions/#{action}/action.yml"
+        next
+      end
+      action_names << action
+      queue << action_path
+    end
+  end
+
+  actual_actions = action_names.uniq.sort
+  if actual_actions != EXPECTED_CLOSURE_ACTIONS
+    errors << "restricted action closure changed: expected #{EXPECTED_CLOSURE_ACTIONS.join(', ')}, got #{actual_actions.join(', ')}"
+  end
+
+  expected_external = [
+    "actions/checkout@#{CHECKOUT_SHA}",
+    "DeterminateSystems/determinate-nix-action@#{DETERMINATE_NIX_SHA}",
+  ].sort
+  actual_external = visited.keys.flat_map { |path| collect_uses(load_yaml(path)) }
+                           .reject { |uses| uses.start_with?("tinyland-inc/ci-templates/") }
+                           .uniq.sort
+  if actual_external != expected_external
+    errors << "restricted external action closure changed: expected #{expected_external.join(', ')}, got #{actual_external.join(', ')}"
+  end
+
+  closure_text = visited.keys.map { |path| File.read(path) }.join("\n")
+  %w[trufflehog/main scripts/install.sh raw.githubusercontent.com/tinyland-inc/ci-templates].each do |forbidden|
+    errors << "restricted closure retains mutable network dependency #{forbidden}" if closure_text.include?(forbidden)
+  end
+  errors << "restricted closure retains curl-to-shell execution" if closure_text.match?(/curl[^\n]*(?:\n[^\n]*)?\|\s*(?:sh|bash)\b/)
+  errors << "restricted closure retains curl-to-tar execution" if closure_text.match?(/curl[^\n]*(?:\n[^\n]*)?\|\s*tar\b/)
+
+  scanner_path = File.join(ROOT, ".github/actions/secrets-scan/action.yml")
+  scanner = load_yaml(scanner_path)
+  scanner_inputs = scanner["inputs"] || {}
+  expected_scanner_defaults = {
+    "trufflehog-version" => "3.95.3",
+    "trufflehog-sha256" => "5d836eae522540a32ca0f1a1e00efd4c3153a52462466a4b4008fac1e6c1a548",
+    "gitleaks-version" => "8.21.2",
+    "gitleaks-sha256" => "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba",
+  }
+  expected_scanner_defaults.each do |input, expected|
+    actual = scanner_inputs.dig(input, "default").to_s
+    errors << "secrets-scan #{input} must default to #{expected}, got #{actual}" unless actual == expected
+  end
+  scanner_text = File.read(scanner_path)
+  [
+    "sha256sum --check --status",
+    "trufflehog_${version}_linux_amd64.tar.gz",
+    "gitleaks_${version}_linux_x64.tar.gz",
+  ].each do |required|
+    errors << "secrets-scan is missing immutable archive guard #{required}" unless scanner_text.include?(required)
+  end
+
+  attachment_path = File.join(ROOT, ".github/actions/cache-attachment-validate/action.yml")
+  attachment_text = File.read(attachment_path)
+  unless attachment_text.include?('${{ github.action_path }}/../../../scripts/cache-attachment-contract.sh') &&
+         !attachment_text.match?(/\b(?:curl|wget)\b/)
+    errors << "cache attachment validation must execute only its release-vendored contract"
+  end
+
+  # Negative oracles prove the ref classifier rejects each historical escape.
+  {
+    "floating internal major" => "tinyland-inc/ci-templates/.github/actions/setup-nix@v2",
+    "mutable internal branch" => "tinyland-inc/ci-templates/.github/actions/setup-nix@main",
+    "third-party major" => "actions/checkout@v6",
+    "consumer-relative local action" => "./.github/actions/setup-nix",
+  }.each do |label, uses|
+    errors << "immutable-ref negative oracle accepted #{label}" if validate_immutable_ref(uses).nil?
+  end
+  errors << "immutable-ref positive oracle rejected checkout SHA" if validate_immutable_ref("actions/checkout@#{CHECKOUT_SHA}")
+  errors << "immutable-ref positive oracle rejected exact self release" if validate_immutable_ref("tinyland-inc/ci-templates/.github/actions/setup-nix@#{IMMUTABLE_RELEASE}")
 
   errors
 end
@@ -345,6 +520,7 @@ def runtime_gate_oracles(name, document, spec)
 end
 
 errors = []
+errors.concat(validate_restricted_dependency_closure)
 SPECS.each do |name, spec|
   legacy_path = File.join(ROOT, spec[:legacy])
   restricted_path = File.join(ROOT, spec[:restricted])
@@ -362,7 +538,7 @@ SPECS.each do |name, spec|
 end
 
 if errors.empty?
-  puts "restricted workflow contract passed (legacy bytes pinned; pre-scheduling, structural, and runtime negative oracles rejected)"
+  puts "restricted workflow contract passed (legacy bytes pinned; immutable closure and pre-scheduling/runtime negative oracles rejected)"
   exit 0
 end
 

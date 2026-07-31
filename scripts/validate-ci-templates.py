@@ -40,13 +40,15 @@ def validate_manifest() -> int:
 
 def check_internal_refs() -> int:
     ok = True
-    action_pattern = re.compile(r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@v2\b")
+    action_pattern = re.compile(
+        r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@([^\s#]+)"
+    )
     main_pattern = re.compile(r"tinyland-inc/ci-templates/.*@main")
 
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
-        for action in action_pattern.findall(text):
+        for action, _ref in action_pattern.findall(text):
             action_yml = ROOT / ".github/actions" / action / "action.yml"
             if not action_yml.exists():
                 print(f"{rel}: missing internal action {action_yml.relative_to(ROOT)}", file=sys.stderr)

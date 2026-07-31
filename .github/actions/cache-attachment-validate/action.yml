@@ -1,0 +1,47 @@
+name: cache-attachment-validate
+description: >-
+  Run the release-vendored cache attachment contract without fetching mutable
+  source from the network.
+
+inputs:
+  substrate_mode:
+    description: Fallback expected substrate mode when the repo manifest is silent.
+    required: false
+    default: ""
+  runner_labels:
+    description: Exact runner capability labels consumed by the contract.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Assert cache attachment
+      shell: bash
+      env:
+        SUBSTRATE_MODE_INPUT: ${{ inputs.substrate_mode }}
+        RUNNER_LABELS: ${{ inputs.runner_labels }}
+      run: |
+        set -euo pipefail
+
+        contract="${{ github.action_path }}/../../../scripts/cache-attachment-contract.sh"
+        if [[ ! -f "$contract" ]]; then
+          echo "::error::release-vendored cache attachment contract is missing: $contract"
+          exit 1
+        fi
+
+        declared_mode=""
+        if [[ -f tinyland.repo.json ]]; then
+          declared_mode="$(jq -r '.enrollment.substrateMode // empty' tinyland.repo.json)"
+        fi
+        if [[ -z "$declared_mode" ]]; then
+          declared_mode="$SUBSTRATE_MODE_INPUT"
+        fi
+
+        export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"
+        export GF_FLYWHEEL_PROFILE_STATE="$GF_BAZEL_SUBSTRATE_MODE"
+        export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"
+        echo "GF_FLYWHEEL_PROFILE_STATE=$GF_FLYWHEEL_PROFILE_STATE" >> "$GITHUB_ENV"
+        echo "::notice::cache-backed lane expected mode (manifest-driven): $GF_BAZEL_SUBSTRATE_MODE"
+        echo "::notice::Flywheel profile state: $GF_FLYWHEEL_PROFILE_STATE"
+
+        bash "$contract" --strict

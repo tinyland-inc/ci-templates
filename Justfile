@@ -52,8 +52,8 @@ js-bazel-runner-contract-check:
 flywheel-reapi-proof-contract-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py flywheel-reapi-proof-contract
 
-# Keep restricted private-repo workflow routing group+capability bound while
-# proving the fleet-wide legacy workflows remain byte-identical/default-off.
+# Keep restricted private-repo workflow routing group+capability bound, prove
+# its full dependency closure immutable, and preserve fleet-wide legacy bytes.
 restricted-workflow-contract-check:
     cd {{ root }} && ruby scripts/restricted-workflow-contract.rb
 
