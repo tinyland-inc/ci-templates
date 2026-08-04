@@ -7,6 +7,11 @@ description: >-
   way GFTB-infra pins flywheel-github-oidc-profile.sh — an explicit ref and
   content hash, never a floating download trusted onto PATH.
 
+  Supply path (TIN-3066): the publishing repository is private, so the public
+  releases/download URL 404s. Callers pass a contents:read `token` and the
+  asset is resolved and fetched through the authenticated REST release
+  endpoints. The unauthenticated path stays for public publishers only.
+
 inputs:
   version:
     description: "GloriousFlywheel release tag carrying the credhelper binaries (e.g. v0.35.0). Required — there is no floating 'latest'."
@@ -19,6 +24,15 @@ inputs:
     default: "tinyland-inc/GloriousFlywheel"
   install-dir:
     description: "Directory to install into (created if absent; prepended to PATH)."
+    default: ""
+  token:
+    description: >-
+      Optional GitHub token carrying contents:read on `repository`. When set,
+      the asset is resolved and fetched through the authenticated REST release
+      endpoints, which is the only path that works once the publishing
+      repository is private. When empty the unchanged public release download
+      URL is used. Either way the bytes are sha256-verified against `sha256`
+      before chmod/PATH exposure.
     default: ""
 
 outputs:
@@ -37,6 +51,7 @@ runs:
         GF_CREDHELPER_SHA256: ${{ inputs.sha256 }}
         GF_CREDHELPER_REPOSITORY: ${{ inputs.repository }}
         GF_CREDHELPER_INSTALL_DIR: ${{ inputs.install-dir }}
+        GF_CREDHELPER_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
 
@@ -58,8 +73,40 @@ runs:
         url="https://github.com/${GF_CREDHELPER_REPOSITORY}/releases/download/${GF_CREDHELPER_VERSION}/${asset}"
 
         echo "::notice::gf-credhelper-install: fetching ${asset} @ ${GF_CREDHELPER_VERSION}"
-        curl --fail --silent --show-error --location --retry 3 \
-          --output "$dest" "$url"
+        if [ -n "${GF_CREDHELPER_TOKEN}" ]; then
+          # Authenticated supply path. The public releases/download URL 404s for
+          # a private publishing repository no matter what credential is
+          # attached, so the asset must be resolved by name through the REST
+          # release record and then fetched from the per-asset endpoint with
+          # Accept: application/octet-stream. curl drops custom Authorization
+          # headers across the storage redirect, so the token never leaves
+          # api.github.com.
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "::error::gf-credhelper-install: jq is required to resolve a release asset through the authenticated path."
+            exit 1
+          fi
+          api="https://api.github.com/repos/${GF_CREDHELPER_REPOSITORY}/releases/tags/${GF_CREDHELPER_VERSION}"
+          asset_url="$(
+            curl --fail --silent --show-error --location --retry 3 \
+              --header "Authorization: Bearer ${GF_CREDHELPER_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "$api" \
+              | jq -r --arg name "$asset" \
+                  '.assets[] | select(.name == $name) | .url'
+          )"
+          if [ -z "$asset_url" ] || [ "$asset_url" = "null" ]; then
+            echo "::error::gf-credhelper-install: release ${GF_CREDHELPER_VERSION} of ${GF_CREDHELPER_REPOSITORY} publishes no asset named ${asset}."
+            exit 1
+          fi
+          curl --fail --silent --show-error --location --retry 3 \
+            --header "Authorization: Bearer ${GF_CREDHELPER_TOKEN}" \
+            --header "Accept: application/octet-stream" \
+            --output "$dest" "$asset_url"
+        else
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$dest" "$url"
+        fi
 
         if command -v sha256sum >/dev/null 2>&1; then
           actual="$(sha256sum "$dest" | awk '{ print $1 }')"
