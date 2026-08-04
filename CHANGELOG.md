@@ -5,6 +5,19 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`gf-credhelper-install` authenticated asset supply path (TIN-3066)** — the
+  action fetched the release binary from the public
+  `github.com/<repo>/releases/download/...` URL, which 404s unconditionally now
+  that `tinyland-inc/GloriousFlywheel` is private, breaking every consumer of
+  the non-Nix credhelper distribution channel. A new optional `token` input
+  resolves the asset by name through `GET /repos/{repo}/releases/tags/{tag}`
+  and downloads it from the per-asset REST endpoint with
+  `Accept: application/octet-stream`. The public path is byte-for-byte
+  unchanged when no token is supplied, and both paths still sha256-verify the
+  fetched bytes against the caller-supplied pin before `chmod`/PATH exposure.
+
 ## [2.12.1] — 2026-07-31
 
 ### Fixed
