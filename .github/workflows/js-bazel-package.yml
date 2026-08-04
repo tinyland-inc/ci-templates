@@ -114,6 +114,33 @@ on:
           default (non-cache-backed) path.
         type: string
         default: ""
+      reapi_credhelper_version:
+        description: >-
+          Pinned GloriousFlywheel release tag carrying gf-reapi-credhelper
+          binaries (Wave-1B, TIN-3366 R12). Required only when cache_backed=true
+          resolves the authenticated gf-reapi-cell :8980 front door (nix-setup's
+          new default endpoint); no floating default. Threaded to nix-setup's
+          credential mint, which fails closed when cache_backed=true and this
+          is unset rather than running unauthenticated against the enforced
+          front door.
+        type: string
+        default: ""
+      reapi_credhelper_sha256_linux_amd64:
+        description: "Expected sha256 of the linux/amd64 gf-reapi-credhelper binary at reapi_credhelper_version."
+        type: string
+        default: ""
+      reapi_credhelper_sha256_linux_arm64:
+        description: "Expected sha256 of the linux/arm64 gf-reapi-credhelper binary at reapi_credhelper_version."
+        type: string
+        default: ""
+      reapi_credhelper_sha256_darwin_amd64:
+        description: "Expected sha256 of the darwin/amd64 gf-reapi-credhelper binary at reapi_credhelper_version."
+        type: string
+        default: ""
+      reapi_credhelper_sha256_darwin_arm64:
+        description: "Expected sha256 of the darwin/arm64 gf-reapi-credhelper binary at reapi_credhelper_version."
+        type: string
+        default: ""
       package_dir:
         description: "Directory containing the Bazel-built publishable package"
         type: string
@@ -276,9 +303,19 @@ jobs:
     needs: resolve-runner
     runs-on: ${{ fromJson(needs.resolve-runner.outputs.validate_runner_labels_json) }}
     timeout-minutes: 30
+    # Wave-1B (TIN-3366 R12): id-token: write is required for nix-setup's
+    # GitHub OIDC credential mint, attempted only when cache_backed=true (see
+    # the nix-setup step below). contents: read matches this job's prior
+    # implicit default.
+    permissions:
+      contents: read
+      id-token: write
     env:
       BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
       NODE_VERSION: ${{ matrix.node-version }}
+      # Wave-1B (TIN-3366 R12): vars-overridable REAPI token-exchange endpoint
+      # consumed by nix-setup's credential mint.
+      GF_REAPI_TOKEN_EXCHANGE_ENDPOINT: ${{ vars.GF_REAPI_TOKEN_EXCHANGE_ENDPOINT || 'http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange' }}
     strategy:
       fail-fast: false
       matrix:
@@ -387,6 +424,19 @@ jobs:
       - name: Configure self-hosted cache contract
         if: ${{ runner.environment != 'github-hosted' }}
         uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
+        with:
+          # Wave-1B (TIN-3366 R12, 2026-08-04): mint only when this lane
+          # explicitly opted into cache_backed. Unopted callers (the vast
+          # majority today) get only nix-setup's new default-endpoint env var
+          # (inert on this job's default bazelisk path, which passes no
+          # --remote_cache flag at all) and attempt no OIDC mint, so they need
+          # no new permission and see no new failure mode.
+          mint-reapi-credential: ${{ inputs.cache_backed && 'true' || 'false' }}
+          reapi-credhelper-version: ${{ inputs.reapi_credhelper_version }}
+          reapi-credhelper-sha256-linux-amd64: ${{ inputs.reapi_credhelper_sha256_linux_amd64 }}
+          reapi-credhelper-sha256-linux-arm64: ${{ inputs.reapi_credhelper_sha256_linux_arm64 }}
+          reapi-credhelper-sha256-darwin-amd64: ${{ inputs.reapi_credhelper_sha256_darwin_amd64 }}
+          reapi-credhelper-sha256-darwin-arm64: ${{ inputs.reapi_credhelper_sha256_darwin_arm64 }}
 
       - name: Resolve working directory
         shell: bash
@@ -769,11 +819,22 @@ jobs:
           # shellcheck source=/dev/null
           source "$BAZEL_FETCH_RETRY_HELPER"
           targets_quoted="$(printf '%q ' "${bazel_targets[@]}")"
+          # Wave-1B (TIN-3366 R12): forward the credential helper / instance
+          # name nix-setup's mint step exports when the resolved endpoint is
+          # the authenticated gf-reapi-cell front door. Both are empty (no-op)
+          # on the legacy/unauthenticated cache path.
+          extra_remote_args=""
+          if [ -n "${BAZEL_CREDENTIAL_HELPER:-}" ]; then
+            extra_remote_args="${extra_remote_args} --credential_helper=${BAZEL_CREDENTIAL_HELPER}"
+          fi
+          if [ -n "${BAZEL_REMOTE_INSTANCE_NAME:-}" ]; then
+            extra_remote_args="${extra_remote_args} --remote_instance_name=${BAZEL_REMOTE_INSTANCE_NAME}"
+          fi
           # CACHE-FIRST: ci-cached config + injected remote cache, read-only
           # (no upload), and no remote executor is wired. The remote cache
           # hit/transfer lines in this step's log are the real-attach proof.
           run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
-            "npx --yes @bazel/bazelisk build ${targets_quoted}--config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
+            "npx --yes @bazel/bazelisk build ${targets_quoted}--config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE}${extra_remote_args} --remote_upload_local_results=false --verbose_failures"
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash
