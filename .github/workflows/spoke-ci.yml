@@ -48,6 +48,21 @@ on:
           flywheel-eligible CAS surface. Ignored on the default path.
         type: string
         default: "//:node_modules //:sveltekit_types //:svelte_check_test"
+      bazel_cache:
+        description: >-
+          Explicit Bazel remote cache endpoint, forwarded verbatim to
+          nix-setup's `bazel-cache` input on the cache_backed=true path
+          (Wave-1B, TIN-3366 R19). This is the flip mechanism: nix-setup
+          prefers this explicit input over the inherited BAZEL_REMOTE_CACHE
+          env, which otherwise wins (it is always populated on fleet
+          runners). Empty (default) means "no opinion" — nix-setup falls
+          back to the inherited env, unchanged from pre-R19 behavior. Set to
+          grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980 to reach the
+          authenticated front door; requires reapi_credhelper_version /
+          sha256 below to also be set or the mint fails closed. Ignored on
+          the default (cache_backed=false) path.
+        type: string
+        default: ""
       playwright_enabled:
         type: boolean
         default: false
@@ -93,11 +108,12 @@ on:
       reapi_credhelper_version:
         description: >-
           Pinned GloriousFlywheel release tag carrying gf-reapi-credhelper
-          binaries (Wave-1B, TIN-3366 R12). Required when cache_backed=true,
-          since nix-setup's cache_backed path now defaults BAZEL_REMOTE_CACHE
-          to the authenticated gf-reapi-cell :8980 front door; no floating
-          default. The mint fails closed rather than running the cache-backed
-          lane unauthenticated against the enforced front door.
+          binaries (Wave-1B, TIN-3366 R19). Required when cache_backed=true
+          AND bazel_cache above is set to the authenticated gf-reapi-cell
+          :8980 front door — there is no baked default endpoint, so this is
+          only load-bearing once a caller opts into the front door
+          explicitly. The mint fails closed rather than running the
+          cache-backed lane unauthenticated against the enforced front door.
         type: string
         default: ""
       reapi_credhelper_sha256_linux_amd64:
@@ -178,7 +194,7 @@ jobs:
 
   flywheel-build:
     needs: [secrets-scan, repo-manifest, lanes-load]
-    # Wave-1B (TIN-3366 R12): id-token: write is required for nix-setup's
+    # Wave-1B (TIN-3366 R19): id-token: write is required for nix-setup's
     # GitHub OIDC credential mint, attempted only on the cache_backed=true
     # path below. statuses: write preserves the workflow-level default this
     # job's lane-status-check step relies on (job-level permissions replace,
@@ -208,12 +224,13 @@ jobs:
       # exports BAZEL_REMOTE_CACHE / ATTIC_SERVER so the contract + cache-backed
       # build below can attach the shared Bazel cache. This is the spoke wiring
       # fix: spoke-ci's default setup-nix does not export the cache endpoint.
-      # Wave-1B (TIN-3366 R12): this step only runs when cache_backed=true, so
+      # Wave-1B (TIN-3366 R19): this step only runs when cache_backed=true, so
       # mint-reapi-credential is unconditionally "true" here — the opt-in
       # already happened via cache_backed.
       - if: ${{ inputs.cache_backed }}
         uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
         with:
+          bazel-cache: ${{ inputs.bazel_cache }}
           mint-reapi-credential: "true"
           reapi-credhelper-version: ${{ inputs.reapi_credhelper_version }}
           reapi-credhelper-sha256-linux-amd64: ${{ inputs.reapi_credhelper_sha256_linux_amd64 }}
@@ -302,7 +319,7 @@ jobs:
             echo "::error::cache_backed=true but BAZEL_REMOTE_CACHE is unset. nix-setup exports it from cluster DNS on self-hosted runners; the cache-backed lane fails closed rather than silently building local-only."
             exit 1
           fi
-          # Wave-1B (TIN-3366 R12): forward the credential helper / instance
+          # Wave-1B (TIN-3366 R19): forward the credential helper / instance
           # name nix-setup's mint step exports when the resolved endpoint is
           # the authenticated gf-reapi-cell front door. Both are empty (no-op)
           # on the legacy/unauthenticated cache path.
@@ -351,7 +368,7 @@ jobs:
 
   bazel-graph:
     needs: [secrets-scan]
-    # Wave-1B (TIN-3366 R12): id-token: write is required for nix-setup's
+    # Wave-1B (TIN-3366 R19): id-token: write is required for nix-setup's
     # GitHub OIDC credential mint, attempted only on the cache_backed=true
     # path below.
     permissions:
@@ -368,11 +385,12 @@ jobs:
       - if: ${{ !inputs.cache_backed }}
         uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
       # Cache-backed path: nix-setup exports BAZEL_REMOTE_CACHE from cluster
-      # DNS. Wave-1B (TIN-3366 R12): this step only runs when cache_backed=true,
+      # DNS. Wave-1B (TIN-3366 R19): this step only runs when cache_backed=true,
       # so mint-reapi-credential is unconditionally "true" here.
       - if: ${{ inputs.cache_backed }}
         uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
         with:
+          bazel-cache: ${{ inputs.bazel_cache }}
           mint-reapi-credential: "true"
           reapi-credhelper-version: ${{ inputs.reapi_credhelper_version }}
           reapi-credhelper-sha256-linux-amd64: ${{ inputs.reapi_credhelper_sha256_linux_amd64 }}
@@ -429,7 +447,7 @@ jobs:
             echo "::error::cache_backed=true but BAZEL_REMOTE_CACHE is unset; failing closed rather than building local-only."
             exit 1
           fi
-          # Wave-1B (TIN-3366 R12): forward the credential helper / instance
+          # Wave-1B (TIN-3366 R19): forward the credential helper / instance
           # name nix-setup's mint step exports when the resolved endpoint is
           # the authenticated gf-reapi-cell front door. Both are empty (no-op)
           # on the legacy/unauthenticated cache path.
