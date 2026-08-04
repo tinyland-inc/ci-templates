@@ -9,18 +9,28 @@ inputs:
     description: "Attic cache name"
     default: "main"
   bazel-cache:
-    description: "Bazel remote cache endpoint. Optional override for BAZEL_REMOTE_CACHE. This is the escape hatch (Wave-1B, TIN-3366 R12): set it to pin a legacy or alternate endpoint instead of the Wave-1B default below."
+    description: >-
+      Bazel remote cache endpoint. Optional override for BAZEL_REMOTE_CACHE.
+      This input is the flip mechanism (Wave-1B, TIN-3366 R19): resolution
+      order is this explicit input, then the inherited BAZEL_REMOTE_CACHE
+      env, then fail-closed (no baked default endpoint — TIN-2353 acceptance
+      #2 still holds). Pass this input explicitly (e.g.
+      grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980) to reach the
+      authenticated front door; the ambient BAZEL_REMOTE_CACHE fleet env
+      (:9092) otherwise wins since it is always populated on fleet runners.
     default: ""
   mint-reapi-credential:
     description: >-
-      Explicit per-caller opt-in (Wave-1B, TIN-3366 R12). When "true" and the
-      resolved Bazel cache endpoint is the authenticated gf-reapi-cell front
-      door, mint a short-lived credential via GitHub OIDC token exchange and
-      wire it into BAZEL_CREDENTIAL_HELPER / BAZEL_REMOTE_INSTANCE_NAME for
+      Explicit per-caller opt-in (Wave-1B, TIN-3366 R19). When "true" and the
+      resolved Bazel cache endpoint (via the bazel-cache input or the
+      BAZEL_REMOTE_CACHE env) is the authenticated gf-reapi-cell front door,
+      mint a short-lived credential via GitHub OIDC token exchange and wire
+      it into BAZEL_CREDENTIAL_HELPER / BAZEL_REMOTE_INSTANCE_NAME for
       downstream flywheel-bazel steps. Default "false": callers that have not
-      opted in get only the new default-endpoint env var (inert unless a
-      later step explicitly reads it) and no OIDC attempt, no new permission
-      requirement — nothing moves until a caller sets this true.
+      opted in and have not passed the bazel-cache input see no behavior
+      change at all (no OIDC attempt, no new permission requirement) —
+      nothing moves until a caller both sets this true and explicitly passes
+      the front-door endpoint via the bazel-cache input.
     default: "false"
   reapi-token-exchange-endpoint:
     description: >-
@@ -73,8 +83,9 @@ outputs:
     value: ${{ steps.detect.outputs.bazel_cache_reachable }}
   bazel_cache_requires_auth:
     description: >-
-      "true" when the resolved Bazel cache endpoint is the authenticated
-      gf-reapi-cell front door (Wave-1B, TIN-3366 R12). Informational unless
+      "true" when the resolved Bazel cache endpoint (via the bazel-cache
+      input or the BAZEL_REMOTE_CACHE env) is the authenticated gf-reapi-cell
+      front door (Wave-1B, TIN-3366 R19). Informational unless
       mint-reapi-credential=true, in which case this action attempts the
       OIDC mint itself.
     value: ${{ steps.detect.outputs.bazel_cache_requires_auth }}
@@ -129,24 +140,23 @@ runs:
             fi
           fi
 
+          # Wave-1B (TIN-3366 R19, ratified 2026-08-04): the flip mechanism is
+          # INPUT PREFERENCE, not a baked default. Resolution order is the
+          # explicit bazel-cache input, then the inherited BAZEL_REMOTE_CACHE
+          # env, then fail-closed with a warning — there is still no baked
+          # default endpoint here (TIN-2353 acceptance #2 holds). An earlier
+          # draft of this change (R12) added a third branch that defaulted to
+          # the gf-reapi-cell front door whenever neither input nor env
+          # resolved anything; that branch was retired because the fleet/tofu
+          # runner env populates BAZEL_REMOTE_CACHE (:9092) on every
+          # tinyland-nix* pool, so the default branch was unreachable in
+          # practice and the "flip" was a fleet-wide no-op. Reaching the
+          # authenticated front door now requires a caller to pass the
+          # bazel-cache input explicitly (e.g. a per-repo pin-bump PR) —
+          # nothing moves without that.
           BAZEL_URL="${{ inputs.bazel-cache }}"
           if [ -z "$BAZEL_URL" ]; then
             BAZEL_URL="${BAZEL_REMOTE_CACHE:-}"
-          fi
-
-          # Wave-1B (TIN-3366 R12, ratified 2026-08-04): previously no baked
-          # default existed here (TIN-2353 acceptance #2) — the fleet/tofu
-          # runner env was sole authority, and unset meant running cacheless.
-          # This release flips that: when neither the bazel-cache input nor
-          # BAZEL_REMOTE_CACHE env resolves anything, default to the
-          # authenticated gf-reapi-cell REAPI front door instead of running
-          # cacheless. The bazel-cache input and BAZEL_REMOTE_CACHE env are
-          # the escape hatch — both still take priority above and are
-          # unaffected by this default.
-          gf_reapi_front_door_default="grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980"
-          if [ -z "$BAZEL_URL" ]; then
-            BAZEL_URL="$gf_reapi_front_door_default"
-            echo "::notice::nix-setup: no explicit Bazel cache endpoint configured; defaulting to the Wave-1B authenticated front door ($BAZEL_URL, TIN-3366 R12)."
           fi
 
           if [ -n "$BAZEL_URL" ]; then
@@ -160,7 +170,8 @@ runs:
 
             # The gf-reapi-cell front door enforces authz (docs/contracts/
             # gf-reapi-cache-front-door.json: routable_cache_requires_runtime_auth)
-            # regardless of how BAZEL_URL was resolved (default or explicit).
+            # regardless of whether BAZEL_URL was resolved via the input or
+            # the inherited env.
             if [ "$BAZEL_HOST" = "gf-reapi-cell.gf-rbe.svc.cluster.local" ]; then
               bazel_cache_requires_auth=true
             fi
@@ -183,9 +194,11 @@ runs:
       env:
         RUNNER_LABELS: ${{ join(runner.labels, ',') }}
 
-    # --- Wave-1B (TIN-3366 R12) credential wiring. Only runs when the caller ---
-    # --- explicitly opted in via mint-reapi-credential; see that input's     ---
-    # --- description for the no-op contract on unopted callers.             ---
+    # --- Wave-1B (TIN-3366 R19) credential wiring. Only runs when the caller ---
+    # --- explicitly opted in via mint-reapi-credential AND the resolved      ---
+    # --- endpoint (via the bazel-cache input or inherited env) is the        ---
+    # --- authenticated front door; see that input's description for the     ---
+    # --- no-op contract on unopted / non-front-door callers.                ---
     - name: Install gf-reapi-credhelper
       if: ${{ steps.detect.outputs.bazel_cache_requires_auth == 'true' && inputs.mint-reapi-credential == 'true' && inputs.reapi-credhelper-version != '' }}
       uses: ./.github/actions/gf-credhelper-install
