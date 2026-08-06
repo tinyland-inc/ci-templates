@@ -33,7 +33,7 @@ tags = ["cloudflare", "tinyland"]
 [[rules]]
 id = "tinyland-porkbun-api-key"
 description = "Porkbun API key with pk1_ or sk1_ prefix"
-regex = '''(pk1|sk1)_[A-Za-z0-9]{60,}'''
+regex = '''(?:pk1|sk1)_[A-Za-z0-9]{60,}'''
 keywords = ["pk1_", "sk1_"]
 tags = ["porkbun", "tinyland"]
 
@@ -47,6 +47,6 @@ tags = ["age", "sops", "tinyland"]
 [[rules]]
 id = "tinyland-tailscale-auth-key"
 description = "Tailscale auth, API, or client key"
-regex = '''tskey-(auth|api|client)-[A-Za-z0-9-]{40,}'''
+regex = '''tskey-(?:auth|api|client)-[A-Za-z0-9-]{40,}'''
 keywords = ["tskey-"]
 tags = ["tailscale", "tinyland"]
