@@ -1,0 +1,117 @@
+name: CodeQL
+
+# CT-04 (TIN-3398): honest-language-matrix CodeQL for ci-templates itself.
+#
+# Net-new design — there is no site.scaffold precedent to port (confirmed
+# live: site.scaffold has no .github/workflows/codeql.yml and its ruleset
+# requires only a `merge-gate` check). Scope is deliberately the three
+# languages CodeQL can actually analyze here: ruby (scripts/*.rb), python
+# (scripts/*.py), and actions (the .github/workflows/*.yml + actions/*
+# YAML itself, CodeQL's purpose-built analyzer for workflow-injection and
+# untrusted-checkout patterns). CodeQL has no shell analyzer, so the
+# largest remaining attack surface — inline `run:` shell with expression
+# interpolation, plus scripts/*.sh — is NOT covered by this workflow. See
+# "What CodeQL does not cover" at the bottom of this file for the explicit
+# inventory the CT-04 issue requires.
+#
+# Shell coverage (scripts/*.sh via shellcheck) was scoped out of THIS PR:
+# a review pass found shellcheck red-on-arrival against unmodified
+# scripts/*.sh on main (SC2016 info-level findings shellcheck's default
+# severity floor treats as fatal), which is a pre-existing repo issue
+# unrelated to CodeQL, this PR's actual deliverable. Rather than land a
+# job that fails on its own first run, or quietly disable/rewrite
+# semantics in scripts it doesn't own, shellcheck enforcement is deferred
+# to its own follow-up PR that also wires it into the Justfile `check`
+# chain (doctrine: Justfile is the single validation entrypoint) instead
+# of invoking `apt-get install shellcheck` directly on a hosted runner.
+#
+# Runner-class decision (recorded per the issue's explicit ask, does NOT
+# carry over CT-01's tinyland-nix default silently): this workflow runs on
+# ubuntu-latest, not the tinyland-nix ARC pool. Rationale:
+#   1. All three languages use build-mode: none (ruby/python are
+#      interpreted, "actions" analyzes YAML directly) — there is nothing
+#      here that benefits from the Nix devShell, Bazel remote cache, or
+#      Attic that tinyland-nix exists to provide.
+#   2. github/codeql-action pulls the CodeQL bundle from GitHub's CDN on
+#      every run; that's a hosted-runner-native path with first-party
+#      caching, and an unnecessary egress dependency to add to the
+#      self-hosted ARC pool's footprint.
+#   3. The ARC pool is under documented capacity pressure (fleet pod-cap
+#      crunch, ADR-005 slot stopgap) — a scan job with zero cluster-native
+#      requirement should not consume shared tinyland-nix slots.
+# If CodeQL's resource profile or org policy changes this calculus, flip
+# `runs-on` below and drop a note in the PR that lands the change.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, Monday 06:17 UTC — offset off the hour to avoid GH Actions'
+    # top-of-hour scheduling thundering herd.
+    - cron: "17 6 * * 1"
+  workflow_dispatch: {}
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  # Only cancel in-progress runs for PR pushes (redundant re-runs on the
+  # same PR head); never cancel a push:main run — that's the run the
+  # zero-open-alerts completion-metric clauses read from, and a rapid
+  # second push:main should not clobber it mid-scan.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: CodeQL analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Minimum documented grants for github/codeql-action: contents: read to
+      # check out, security-events: write for the SARIF upload to code
+      # scanning, actions: read for workflow metadata resolution.
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ruby, python, actions]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3.37.6
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3.37.6
+        with:
+          category: "/language:${{ matrix.language }}"
+
+# What CodeQL does NOT cover here, and what covers it instead (CT-04
+# acceptance criterion #4):
+#   - Inline `run:` shell blocks embedded in workflow/action YAML: not
+#     extracted or analyzed by either job in this file. The `actions`
+#     CodeQL language analyzes workflow *structure* (triggers, permissions,
+#     expression injection into `run:` via ${{ }} interpolation points) but
+#     does not execute a general shell-script analyzer over the block
+#     bodies themselves. Extraction/analysis of embedded `run:` blocks is
+#     flagged as a real gap, not silently dropped — tracked as follow-up
+#     work, not solved by this PR.
+#   - scripts/*.sh: NOT covered by this workflow. Shellcheck enforcement
+#     was scoped out of this PR (see note near the top of this file) and
+#     is tracked as follow-up work, not silently dropped.
+#   - Vendored JSON (schemas/*.json, tinyland.repo.json): not code in any
+#     CodeQL-supported sense here; out of scope by construction.
+#   - Runtime/dependency vulnerabilities (transitive gem/pip CVEs): out of
+#     scope for CT-04 — GitHub's native Dependabot alerts already cover
+#     this repo (security_and_analysis.dependabot_security_updates=enabled,
+#     confirmed live) and CT-04 does not duplicate that surface.
