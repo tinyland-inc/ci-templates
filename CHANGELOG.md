@@ -5,6 +5,20 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Deprecated
+
+- **Docs-only (TIN-3066): blahaj receiver path marked retired-era** — README,
+  the `lane-dispatch` / `lane-reap` / `lane-ttl-reap` / `public-preview-dispatch`
+  action descriptions, the `spoke-lane-env` / `spoke-lane-ttl-reap` /
+  `spoke-public-preview` workflow headers, `docs/roadmap.md`, and
+  `docs/spec/dev-remote.md` now carry a Superseded (2026-08-05) banner: the
+  blahaj receiver path was evicted (blahaj #1255); lane lifecycle belongs to
+  the app owner overlay — see site.scaffold
+  `docs/patterns/production-convergence.md` and the pending scaffold #119
+  recut. Zero behavioral diff: released action/workflow behavior is untouched
+  (spokes pin immutable tags); the behavior recut ships via the versioned
+  release train.
+
 ### Fixed
 
 - **`gf-credhelper-install` authenticated asset supply path (TIN-3066)** — the

@@ -1,5 +1,12 @@
 # dev-remote spec (v1.1+)
 
+> **Superseded (2026-08-05):** the blahaj receiver path was evicted
+> (blahaj #1255); lane lifecycle belongs to the app owner overlay — see
+> site.scaffold `docs/patterns/production-convergence.md` and the pending
+> scaffold #119 recut. This spec's "Blahaj-side" handler and cluster-side
+> requirements are retired-era: if dev-remote is ever implemented, the
+> receiver lands in the app owner overlay, not at `tinyland-inc/blahaj`.
+
 > **Status**: Design draft. Not yet implemented. Tracked from
 > [`docs/roadmap.md`](../roadmap.md).
 >
