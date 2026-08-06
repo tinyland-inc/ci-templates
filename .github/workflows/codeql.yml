@@ -70,6 +70,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      # Minimum documented grants for github/codeql-action: contents: read to
+      # check out, security-events: write for the SARIF upload to code
+      # scanning, actions: read for workflow metadata resolution.
       contents: read
       security-events: write
       actions: read
