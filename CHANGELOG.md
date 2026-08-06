@@ -5,6 +5,19 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **CT-03 (TIN-3397): strict gitleaks as an enforced PR gate** —
+  `.github/workflows/secrets-scan.yml` dogfoods this repo's own
+  `.github/actions/secrets-scan` composite (TruffleHog + Gitleaks) on every
+  `pull_request` and `push: main`. PR mode scans only the PR's diff range
+  (`base.sha..head.sha` via a new opt-in `gitleaks-log-opts` composite
+  input, default empty = unchanged full-history behavior for existing
+  consumers); push:main scans full history. Fails closed on any finding.
+  The composite action's gitleaks step also gained `--redact` (previously
+  missing on the CI path — `--verbose` alone would have printed matched
+  secret values to the job log).
+
 ## [2.13.0] — 2026-08-06
 
 ### Deprecated

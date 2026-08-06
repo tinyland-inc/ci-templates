@@ -26,6 +26,12 @@ inputs:
       Useful for spokes that keep their gitleaks config under tools/,
       config/, or similar. The first existing file wins.
     default: ""
+  gitleaks-log-opts:
+    description: |
+      Passed through to `gitleaks detect --log-opts`, e.g. a PR's
+      "<base-sha>..<head-sha>" diff range. Empty (default) scans full
+      history, preserving prior behavior for existing consumers.
+    default: ""
 
 outputs:
   findings_count:
@@ -129,9 +135,16 @@ runs:
       run: |
         set +e
         report="${RUNNER_TEMP:-/tmp}/gitleaks-report.json"
-        ARGS=(detect --source . --verbose --report-format json --report-path "$report" --exit-code 1)
+        # --redact is load-bearing: without it, --verbose prints the raw
+        # matched secret to the job log. Findings must stay identifiable
+        # by rule id only, never by value (CT-03/TIN-3397 acceptance
+        # criterion: "no secret material on a deliberate positive").
+        ARGS=(detect --source . --verbose --redact --report-format json --report-path "$report" --exit-code 1)
         if [ -n "${{ steps.cfg.outputs.config }}" ]; then
           ARGS+=(--config "${{ steps.cfg.outputs.config }}")
+        fi
+        if [ -n "${{ inputs.gitleaks-log-opts }}" ]; then
+          ARGS+=(--log-opts "${{ inputs.gitleaks-log-opts }}")
         fi
         gitleaks "${ARGS[@]}"
         rc=$?
