@@ -1,0 +1,16 @@
+# Default owner for all paths
+* @Jesssullivan
+
+# Reusable workflows and composite actions (widest blast radius: every
+# spoke repo in the org inherits from here).
+/.github/workflows/* @Jesssullivan
+/.github/actions/* @Jesssullivan
+
+# Contract / guard scripts that back the `just check` chain.
+/scripts/* @Jesssullivan
+
+# Vendored dispatch/manifest schemas consumed by spoke repos.
+/schemas/* @Jesssullivan
+
+# Shared bazelrc fragments (cache/endpoint policy surface).
+/bazelrc/* @Jesssullivan
