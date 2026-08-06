@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/schemas/lane-ttl-reap-dispatch.schema.json",
 	"title": "Tinyland lane TTL reap repository_dispatch payload",
-	"description": "Canonical scheduled TTL backstop payload. Spokes request a sweep; Blahaj owns listing and idempotent destruction of expired lane environments.",
+	"description": "RETIRED-ERA HISTORICAL ARTIFACT (2026-08-05): the Blahaj receiver path is retired; the PR-env lifecycle producer is the product's owner-overlay repository (see site.scaffold docs/patterns/owner-overlay-apply-plane.md). Retained for historical reference only. Canonical scheduled TTL backstop payload. Spokes request a sweep; Blahaj owns listing and idempotent destruction of expired lane environments.",
 	"type": "object",
 	"required": ["event_type", "client_payload"],
 	"additionalProperties": false,

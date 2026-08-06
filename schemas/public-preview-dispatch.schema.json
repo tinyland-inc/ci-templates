@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/schemas/public-preview-dispatch.schema.json",
 	"title": "Tinyland public preview repository_dispatch payload",
-	"description": "Canonical payload shape for explicit public/client review aliases. The spoke requests a preview; Blahaj owns Cloudflare DNS, Access, Tunnel ingress, and cleanup.",
+	"description": "RETIRED-ERA HISTORICAL ARTIFACT (2026-08-05): the Blahaj receiver path is retired; the PR-env lifecycle producer is the product's owner-overlay repository (see site.scaffold docs/patterns/owner-overlay-apply-plane.md). Retained for historical reference only. Canonical payload shape for explicit public/client review aliases. The spoke requests a preview; Blahaj owns Cloudflare DNS, Access, Tunnel ingress, and cleanup.",
 	"type": "object",
 	"required": ["event_type", "client_payload"],
 	"additionalProperties": false,

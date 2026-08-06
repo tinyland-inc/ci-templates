@@ -1,3 +1,10 @@
+# DEPRECATED (TIN-489, post-#1255): inherits spoke-lane-env.yml's
+# Blahaj-repository_dispatch PR-env lifecycle, which Blahaj (cluster
+# substrate only, post-#1255) no longer owns. The producer is the
+# application's owner-overlay repository (see tinyland-inc/site.scaffold
+# docs/patterns/owner-overlay-apply-plane.md). Kept callable, unchanged,
+# only so existing private-repo callers don't break — do not point a new
+# spoke at this.
 name: spoke-lane-env-restricted
 on:
   workflow_call:

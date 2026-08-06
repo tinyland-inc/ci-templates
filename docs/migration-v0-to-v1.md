@@ -21,6 +21,14 @@ so the mechanical swap is all most consumers need.
 
 ## What's new in v1.0.0 that you may want to adopt
 
+> **Superseded (TIN-489, post-#1255)**: `spoke-lane-env.yml` is the retired
+> Blahaj-`repository_dispatch` PR-env path — kept callable, not the current
+> path. A new spoke wires PR-env create+destroy+TTL as one owner-overlay
+> workflow instead; see `tinyland-inc/site.scaffold`
+> `docs/patterns/owner-overlay-apply-plane.md` and the README's PR-env
+> lifecycle producer note. The section below is left as historical v1.0.0
+> migration guidance.
+
 If you currently hand-roll a `pr-env-lanes.yml` (e.g. MassageIthaca-style),
 replace it with the `spoke-lane-env.yml` reusable workflow:
 
