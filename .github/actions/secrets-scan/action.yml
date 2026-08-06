@@ -32,6 +32,14 @@ inputs:
       "<base-sha>..<head-sha>" diff range. Empty (default) scans full
       history, preserving prior behavior for existing consumers.
     default: ""
+  redact:
+    description: |
+      Pass --redact to gitleaks so --verbose never prints a matched
+      secret value, only the rule id. Defaults to "false" to preserve
+      prior behavior for existing consumers (golden rule 2); callers
+      that want redacted output set this to "true" explicitly (e.g.
+      secrets-scan.yml / CT-03, TIN-3397).
+    default: "false"
 
 outputs:
   findings_count:
@@ -132,19 +140,27 @@ runs:
     - name: Run gitleaks
       id: gitleaks
       shell: bash
+      env:
+        GITLEAKS_LOG_OPTS: ${{ inputs.gitleaks-log-opts }}
+        GITLEAKS_REDACT: ${{ inputs.redact }}
       run: |
         set +e
         report="${RUNNER_TEMP:-/tmp}/gitleaks-report.json"
-        # --redact is load-bearing: without it, --verbose prints the raw
-        # matched secret to the job log. Findings must stay identifiable
-        # by rule id only, never by value (CT-03/TIN-3397 acceptance
-        # criterion: "no secret material on a deliberate positive").
-        ARGS=(detect --source . --verbose --redact --report-format json --report-path "$report" --exit-code 1)
+        ARGS=(detect --source . --verbose --report-format json --report-path "$report" --exit-code 1)
+        # --redact is opt-in via the `redact` input (default "false",
+        # preserving prior consumer behavior per golden rule 2): without
+        # it, --verbose prints the raw matched secret to the job log.
+        # Callers that need findings identifiable by rule id only, never
+        # by value, set redact: "true" (CT-03/TIN-3397's secrets-scan.yml
+        # does this explicitly).
+        if [ "$GITLEAKS_REDACT" = "true" ]; then
+          ARGS+=(--redact)
+        fi
         if [ -n "${{ steps.cfg.outputs.config }}" ]; then
           ARGS+=(--config "${{ steps.cfg.outputs.config }}")
         fi
-        if [ -n "${{ inputs.gitleaks-log-opts }}" ]; then
-          ARGS+=(--log-opts "${{ inputs.gitleaks-log-opts }}")
+        if [ -n "$GITLEAKS_LOG_OPTS" ]; then
+          ARGS+=(--log-opts "$GITLEAKS_LOG_OPTS")
         fi
         gitleaks "${ARGS[@]}"
         rc=$?
