@@ -5,6 +5,20 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`scripts/restricted-workflow-contract.rb` `spoke-lane-env` byte pin re-cut
+  (TIN-489 drift)** — `42e5171` (2.13.0, "stop teaching Blahaj-dispatch PR-env
+  routing") added a DEPRECATED comment header to `spoke-lane-env.yml` (and the
+  matching header to `spoke-lane-env-restricted.yml`) without re-cutting the
+  legacy-bytes pin at line 97. The change is docs-only — a comment block, no
+  step/job/input semantics touched, and both the legacy and restricted variants
+  received the same header so the reviewed routing/trust delta stays intact —
+  so this re-cuts `legacy_sha256` to the current on-main bytes
+  (`8e7e444fc3b5029dd0984a0e8b985f5b62ac7fc13363015c7602b24651517c32`) rather
+  than reverting the deprecation notice. `ruby scripts/restricted-workflow-contract.rb`
+  and `just check` are green again.
+
 ## [2.13.0] — 2026-08-06
 
 ### Deprecated
