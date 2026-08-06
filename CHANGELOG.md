@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.13.0] — 2026-08-06
+
 ### Deprecated
 
 - **Docs-only (TIN-489): PR-env producer routing points at the owner overlay** —
@@ -37,6 +39,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
   (merged 2026-08-06, `8862f359`). Zero behavioral diff: released
   action/workflow behavior is untouched (spokes pin immutable tags); the
   behavior recut ships via the versioned release train.
+
+## [2.12.2] — 2026-08-04
 
 ### Fixed
 
