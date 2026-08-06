@@ -7,12 +7,23 @@ Tinyland CI house style.
 > may break without notice. See [`RELEASING.md`](./RELEASING.md) for the
 > SemVer contract.
 
+> **Superseded (2026-08-05):** the blahaj receiver path was evicted
+> (blahaj #1255); lane lifecycle belongs to the app owner overlay — see
+> site.scaffold `docs/patterns/production-convergence.md` and the pending
+> scaffold #119 recut. The `lane-dispatch` / `lane-reap` / `lane-ttl-reap` /
+> `public-preview-dispatch` actions and the `spoke-lane-env*` /
+> `spoke-lane-ttl-reap` / `spoke-public-preview` workflows below document the
+> retired-era receiver contract as released (spokes pin immutable tags, so
+> released behavior is unchanged), but `tinyland-inc/blahaj` no longer hosts
+> the receivers. Do not wire new spokes at blahaj; the behavior recut ships
+> via the versioned release train.
+
 Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
 
 - **Spoke CI** (lint, type-check, build, test, Bazel graph, optional
   Playwright) via `spoke-ci.yml` reusable workflow.
-- **Per-PR ephemeral env lifecycle** (build image, dispatch to Blahaj,
-  reap on close) via `spoke-lane-env.yml`.
+- **Per-PR ephemeral env lifecycle** (build image, dispatch to the
+  retired-era Blahaj receiver, reap on close) via `spoke-lane-env.yml`.
 - **Static projection snapshot refresh** via `spoke-pulse-ingest.yml`.
 - **GloriousFlywheel REAPI binding** via the `flywheel-bazel` composite
   action.
@@ -22,9 +33,12 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
 - **Repo-shape manifest validation** via `repo-manifest-validate`.
 - **Schema-validated `lanes.json` loading** via `lanes-load`.
 - **Blahaj `repository_dispatch` payload construction** via
-  `lane-dispatch` / `lane-reap`.
+  `lane-dispatch` / `lane-reap` (retired-era receiver — see Superseded
+  note above).
 - **Public client preview dispatch** via `public-preview-dispatch`;
-  Blahaj owns Cloudflare DNS, Access, Tunnel ingress, and cleanup.
+  the retired-era Blahaj receiver owned Cloudflare DNS, Access, Tunnel
+  ingress, and cleanup — that ownership now sits with the app owner
+  overlay.
 - **Scheduled expired-lane cleanup dispatch** via `lane-ttl-reap`.
 - **GloriousFlywheel proof dispatch** via `flywheel-reapi-proof`.
 - **Per-lane GitHub commit status checks** via `lane-status-check`.

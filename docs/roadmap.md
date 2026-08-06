@@ -2,6 +2,14 @@
 
 Beyond v1.0.0.
 
+> **Superseded (2026-08-05):** the blahaj receiver path was evicted
+> (blahaj #1255); lane lifecycle belongs to the app owner overlay — see
+> site.scaffold `docs/patterns/production-convergence.md` and the pending
+> scaffold #119 recut. Roadmap items below that assume a Blahaj-side
+> receiver or handler (lane envs, dev-remote, public previews, webhook
+> receiver) are retired-era: any successor lands in the app owner overlay,
+> not at `tinyland-inc/blahaj`.
+
 ## v1.1+ (planned)
 
 ### `lane-preview-tunnel` composite

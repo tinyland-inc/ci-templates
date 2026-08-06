@@ -11,6 +11,14 @@ description: |
 
   Contract: tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §4 + §7.
 
+  Superseded (2026-08-05): the blahaj receiver path was evicted
+  (blahaj #1255); lane lifecycle belongs to the app owner overlay — see
+  site.scaffold docs/patterns/production-convergence.md and the pending
+  scaffold #119 recut. Released behavior is unchanged (spokes pin
+  immutable tags), but tinyland-inc/blahaj no longer hosts the receiver;
+  do not wire new spokes at blahaj. The behavior recut ships via the
+  versioned release train.
+
 inputs:
   pr_number:
     description: GitHub PR number.

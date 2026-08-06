@@ -2,7 +2,15 @@ name: lane-ttl-reap
 description: |
   Construct + emit the Blahaj `<spoke>-lane-ttl-reap`
   `repository_dispatch` payload for scheduled expired-lane cleanup.
-  Blahaj owns listing and idempotent destruction.
+  Blahaj owned listing and idempotent destruction (retired-era claim).
+
+  Superseded (2026-08-05): the blahaj receiver path was evicted
+  (blahaj #1255); lane lifecycle belongs to the app owner overlay — see
+  site.scaffold docs/patterns/production-convergence.md and the pending
+  scaffold #119 recut. Released behavior is unchanged (spokes pin
+  immutable tags), but tinyland-inc/blahaj no longer hosts the receiver;
+  do not wire new spokes at blahaj. The behavior recut ships via the
+  versioned release train.
 
 inputs:
   spoke:
