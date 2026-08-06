@@ -5,6 +5,20 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **CT-04 (TIN-3398): CodeQL over the honest ruby/python/actions matrix** —
+  `.github/workflows/codeql.yml` runs `security-extended` CodeQL analysis on
+  `pull_request`, `push:main`, and a weekly schedule, on `ubuntu-latest`
+  (rationale recorded in-file; does not inherit CT-01's `tinyland-nix`
+  default). Third-party actions are pinned to full commit SHAs
+  (`actions/checkout@…d23441a4… # v6.1.0`,
+  `github/codeql-action/{init,analyze}@…c4dd10e4… # v3.37.6`) per
+  `.greptile/rules.md:7`; the `analyze` job carries `timeout-minutes: 20`.
+  Shell coverage (`scripts/*.sh` via shellcheck) is explicitly deferred to a
+  follow-up PR wired into the Justfile `check` chain, not shipped here —
+  the file states plainly what CodeQL does and does not cover.
+
 ## [2.13.0] — 2026-08-06
 
 ### Deprecated
