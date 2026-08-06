@@ -17,16 +17,16 @@ Versioning: [SemVer 2.0](https://semver.org/).
   validation logic), then runs `actionlint` over `.github/workflows/*.yml` +
   `.github/actions/*/action.yml`. New `.github/actionlint.yaml` declares this
   repo's org-namespaced ARC capability-class `runs-on` labels as known
-  self-hosted-runner labels; one exact-text `-ignore` (not a rule-id blanket)
-  suppresses the repo's known pre-existing `runner.labels` context-property
-  false positive, mirroring PR #95's approach. `flake.nix` gains `actionlint`
-  in the dev shell; `Justfile` gains a standalone `actionlint-check` recipe
-  (kept out of `check` so the 15-target chain stays exactly what it is).
-  Fixed a real, pre-existing `SC2086` word-splitting bug in `spoke-ci.yml`'s
-  cache-backed Bazel step (unquoted `${BAZEL_TARGETS}`) by adopting the same
-  `read -r -a` array-expansion pattern already used in `spoke-ci-restricted.yml`
-  and `js-bazel-package.yml` — required to land this PR's own `validate`
-  check green.
+  self-hosted-runner labels; two exact-text `-ignore` patterns (not rule-id
+  blanket ignores) suppress the repo's two known pre-existing findings: the
+  `runner.labels` context-property false positive (mirroring PR #95's
+  approach) and a real, pre-existing `SC2086` shellcheck finding in
+  `spoke-ci.yml:252` that is out of scope for this PR (fixing it requires
+  re-cutting `restricted-workflow-contract.rb`'s `spoke-ci` legacy byte pin,
+  a separate restricted-workflow-governance change). `flake.nix` gains
+  `actionlint` in the dev shell; `Justfile` gains a standalone
+  `actionlint-check` recipe (kept out of `check` so the 15-target chain stays
+  exactly what it is).
 
 ### Removed
 

@@ -24,7 +24,7 @@ on:
 
 concurrency:
   group: validate-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -50,17 +50,27 @@ jobs:
       # ci-templates' own CI first). `.github/actionlint.yaml` declares this
       # repo's org-namespaced ARC capability-class `runs-on` labels as known
       # self-hosted-runner labels (config, not suppression — it mirrors
-      # RunnerLabelTaxonomy::SHARED_CAPABILITY_LABELS). The single `-ignore`
-      # below suppresses, by exact diagnostic text (not a rule-id blanket
-      # ignore), the repo's one known pre-existing false positive: actionlint
-      # 1.7.x's built-in `runner` context type does not yet include the
-      # `labels` property GitHub Actions added to it, so
-      # `${{ join(runner.labels, ',') }}` (used in nix-setup / spoke-ci /
-      # js-bazel-package to detect the ARC capability-class label) is flagged
-      # as an undefined property. Mirrors PR #95's validation approach.
+      # RunnerLabelTaxonomy::SHARED_CAPABILITY_LABELS). Two `-ignore` patterns
+      # below suppress, each by exact diagnostic text (not a rule-id blanket
+      # ignore), the repo's two known pre-existing false positives /
+      # out-of-scope findings:
+      #   1. actionlint 1.7.x's built-in `runner` context type does not yet
+      #      include the `labels` property GitHub Actions added to it, so
+      #      `${{ join(runner.labels, ',') }}` (used in nix-setup / spoke-ci /
+      #      js-bazel-package to detect the ARC capability-class label) is
+      #      flagged as an undefined property. Mirrors PR #95's approach.
+      #   2. `spoke-ci.yml:252`'s unquoted `${BAZEL_TARGETS}` (SC2086, info)
+      #      is a real, pre-existing shellcheck finding on `main` — it is NOT
+      #      introduced by this PR and is explicitly out of scope for CT-01
+      #      (fixing it means re-cutting `scripts/restricted-workflow-
+      #      contract.rb`'s `spoke-ci` legacy byte pin, a
+      #      restricted-workflow-governance change this PR does not make).
+      #      Tracked for follow-up under the pin-drift/governance workstream,
+      #      not silently fixed here.
       - name: actionlint
         run: |
           nix develop --no-eval-cache --command \
             actionlint -color \
               -config-file .github/actionlint.yaml \
-              -ignore 'property "labels" is not defined'
+              -ignore 'property "labels" is not defined' \
+              -ignore 'SC2086:info:8:38: Double quote to prevent globbing and word splitting'
