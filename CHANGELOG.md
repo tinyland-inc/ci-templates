@@ -7,6 +7,25 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Deprecated
 
+- **Docs-only (TIN-489): PR-env producer routing points at the owner overlay** —
+  `spoke-lane-env.yml` and `spoke-lane-env-restricted.yml` now carry
+  DEPRECATED headers; the README quick start, composite-action and workflow
+  tables, `docs/migration-v0-to-v1.md`, and `docs/restricted-private-runners.md`
+  mark the Blahaj-dispatch PR-env path retired-era. The PR-env lifecycle
+  producer is the product's owner-overlay repository — see site.scaffold
+  `docs/patterns/owner-overlay-apply-plane.md`. The vendored
+  `schemas/blahaj-dispatch.schema.json`,
+  `schemas/lane-ttl-reap-dispatch.schema.json`, and
+  `schemas/public-preview-dispatch.schema.json` are marked retired-era
+  historical artifacts (the scaffold #119 recut deleted their upstream
+  sources): each schema's top-level `description` now opens with a
+  RETIRED-ERA HISTORICAL ARTIFACT note pointing at the owner-overlay
+  producer (`description` is a non-validating annotation, so validation
+  behavior is unchanged). The "pending scaffold #119 recut" phrasing is
+  corrected repo-wide: #119 merged 2026-08-06 (`8862f359`). Zero
+  behavioral diff: released action/workflow behavior is untouched and
+  everything stays callable.
+
 - **Docs-only (TIN-3066): blahaj receiver path marked retired-era** — README,
   the `lane-dispatch` / `lane-reap` / `lane-ttl-reap` / `public-preview-dispatch`
   action descriptions, the `spoke-lane-env` / `spoke-lane-ttl-reap` /
@@ -14,10 +33,10 @@ Versioning: [SemVer 2.0](https://semver.org/).
   `docs/spec/dev-remote.md` now carry a Superseded (2026-08-05) banner: the
   blahaj receiver path was evicted (blahaj #1255); lane lifecycle belongs to
   the app owner overlay — see site.scaffold
-  `docs/patterns/production-convergence.md` and the pending scaffold #119
-  recut. Zero behavioral diff: released action/workflow behavior is untouched
-  (spokes pin immutable tags); the behavior recut ships via the versioned
-  release train.
+  `docs/patterns/owner-overlay-apply-plane.md` and the scaffold #119 recut
+  (merged 2026-08-06, `8862f359`). Zero behavioral diff: released
+  action/workflow behavior is untouched (spokes pin immutable tags); the
+  behavior recut ships via the versioned release train.
 
 ### Fixed
 

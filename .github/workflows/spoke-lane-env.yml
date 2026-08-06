@@ -1,3 +1,9 @@
+# DEPRECATED (TIN-489, post-#1255): Blahaj is cluster substrate only and no
+# longer owns an application's PR-env create/destroy/TTL lifecycle. The
+# producer is the application's owner-overlay repository (see
+# tinyland-inc/site.scaffold docs/patterns/owner-overlay-apply-plane.md).
+# Kept callable, unchanged, only so existing callers don't break — do not
+# point a new spoke at this.
 name: spoke-lane-env
 on:
   workflow_call:

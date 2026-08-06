@@ -1,5 +1,15 @@
 # Restricted private-repository workflows
 
+> **`spoke-lane-env-restricted.yml` is deprecated (TIN-489, post-#1255)**:
+> it inherits `spoke-lane-env.yml`'s Blahaj-`repository_dispatch` PR-env
+> routing, which Blahaj (cluster substrate only, post-#1255) no longer owns.
+> PR-env create+destroy+TTL is the application's owner-overlay repository's
+> capability now — see the ci-templates README's PR-env lifecycle producer
+> note and `tinyland-inc/site.scaffold`
+> `docs/patterns/owner-overlay-apply-plane.md`. It is kept callable, unchanged,
+> only so existing callers don't break; do not point a new private spoke at
+> it. `spoke-ci-restricted.yml` (CI, not PR-env) is unaffected by this note.
+
 `spoke-ci-restricted.yml` and `spoke-lane-env-restricted.yml` are explicit
 opt-in variants of the existing spoke workflows. They preserve the legacy
 behavior, matrices, permissions, cache-first behavior, and lane lifecycle, but

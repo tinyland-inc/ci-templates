@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/schemas/blahaj-dispatch.schema.json",
 	"title": "Tinyland Blahaj lane-env repository_dispatch payload",
-	"description": "Canonical payload shape for the `<spoke>-lane-env` repository_dispatch event sent from any spoke CI workflow to tinyland-inc/blahaj. One schema with an `operation` discriminator covers both provision and destroy. See docs/CI-SCHEMA.md §4.",
+	"description": "RETIRED-ERA HISTORICAL ARTIFACT (2026-08-05): the Blahaj receiver path is retired; the PR-env lifecycle producer is the product's owner-overlay repository (see site.scaffold docs/patterns/owner-overlay-apply-plane.md). Retained for historical reference only. Canonical payload shape for the `<spoke>-lane-env` repository_dispatch event sent from any spoke CI workflow to tinyland-inc/blahaj. One schema with an `operation` discriminator covers both provision and destroy. See docs/CI-SCHEMA.md §4.",
 	"type": "object",
 	"required": ["event_type", "client_payload"],
 	"additionalProperties": false,
