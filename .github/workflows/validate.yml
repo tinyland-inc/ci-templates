@@ -1,0 +1,66 @@
+name: validate
+
+# CT-01 (TIN-3396): ci-templates' first PR validation lane. This repo ships
+# ~190 repos' shared CI surface but, until this workflow, never validated its
+# own changes on a pull request — the full `just check` chain (15 targets;
+# see Justfile) only ran when a human remembered to run it locally. This
+# wires the existing chain up; it does not add new validation logic.
+#
+# Runner-class decision (issue #107 acceptance criterion 4): `tinyland-nix`,
+# not a hosted `ubuntu-*` runner. scripts/runner_label_taxonomy.rb and
+# scripts/lint-runs-on.rb (the authoritative `runs-on` grammar for this repo)
+# treat `tinyland-nix` as the canonical shared ARC capability-class label, and
+# commit 12ba7835 ("retire implicit hosted execution") is explicit precedent
+# against reintroducing hosted execution here. site.scaffold's own thin CI
+# wrapper (`ci.yml`) also resolves to `default_runner_class: tinyland-nix`.
+# An implicitly-hosted validate lane would repeat exactly the mistake that
+# commit retired.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: tinyland-nix
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Nix Setup
+        uses: ./.github/actions/nix-setup
+
+      - name: just check (full 15-target validation chain)
+        run: nix develop --no-eval-cache --command just check
+
+      # actionlint over this repo's own workflows + composite actions
+      # (dogfood — a lint regression in ci-templates' own surface must break
+      # ci-templates' own CI first). `.github/actionlint.yaml` declares this
+      # repo's org-namespaced ARC capability-class `runs-on` labels as known
+      # self-hosted-runner labels (config, not suppression — it mirrors
+      # RunnerLabelTaxonomy::SHARED_CAPABILITY_LABELS). The single `-ignore`
+      # below suppresses, by exact diagnostic text (not a rule-id blanket
+      # ignore), the repo's one known pre-existing false positive: actionlint
+      # 1.7.x's built-in `runner` context type does not yet include the
+      # `labels` property GitHub Actions added to it, so
+      # `${{ join(runner.labels, ',') }}` (used in nix-setup / spoke-ci /
+      # js-bazel-package to detect the ARC capability-class label) is flagged
+      # as an undefined property. Mirrors PR #95's validation approach.
+      - name: actionlint
+        run: |
+          nix develop --no-eval-cache --command \
+            actionlint -color \
+              -config-file .github/actionlint.yaml \
+              -ignore 'property "labels" is not defined'

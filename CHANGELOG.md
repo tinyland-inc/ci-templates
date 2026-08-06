@@ -5,6 +5,29 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **CT-01 (TIN-3396): the first PR validation lane ci-templates has ever
+  had** — new `.github/workflows/validate.yml` runs on `pull_request`
+  (branches: `main`) and `push` (branches: `main`), on `runs-on: tinyland-nix`
+  (the shared ARC capability-class label; see `validate.yml`'s header comment
+  for the runner-class rationale against `scripts/runner_label_taxonomy.rb`).
+  The job runs the full existing 15-target `just check` chain via this
+  repo's own `.github/actions/nix-setup` (dogfooding the product, not new
+  validation logic), then runs `actionlint` over `.github/workflows/*.yml` +
+  `.github/actions/*/action.yml`. New `.github/actionlint.yaml` declares this
+  repo's org-namespaced ARC capability-class `runs-on` labels as known
+  self-hosted-runner labels; one exact-text `-ignore` (not a rule-id blanket)
+  suppresses the repo's known pre-existing `runner.labels` context-property
+  false positive, mirroring PR #95's approach. `flake.nix` gains `actionlint`
+  in the dev shell; `Justfile` gains a standalone `actionlint-check` recipe
+  (kept out of `check` so the 15-target chain stays exactly what it is).
+  Fixed a real, pre-existing `SC2086` word-splitting bug in `spoke-ci.yml`'s
+  cache-backed Bazel step (unquoted `${BAZEL_TARGETS}`) by adopting the same
+  `read -r -a` array-expansion pattern already used in `spoke-ci-restricted.yml`
+  and `js-bazel-package.yml` — required to land this PR's own `validate`
+  check green.
+
 ### Removed
 
 - **TIN-489: zero-caller TTL half of the deprecated lane family evicted from
@@ -21,7 +44,6 @@ Versioning: [SemVer 2.0](https://semver.org/).
   tag), so evicting that half before the spoke-side sender cleanup would break
   it at the next `v2` re-point. Do not re-point `v2` past a future eviction of
   that half until the darkmap sender is retired.
-
 ## [2.13.0] — 2026-08-06
 
 ### Deprecated

@@ -257,7 +257,8 @@ jobs:
           fi
           # CACHE-FIRST: ci-cached config + injected remote cache, read-only
           # (no upload); no remote executor is wired.
-          nix develop --command bazelisk build ${BAZEL_TARGETS} \
+          read -r -a bazel_targets <<< "$BAZEL_TARGETS"
+          nix develop --command bazelisk build "${bazel_targets[@]}" \
             --config=ci-cached \
             --remote_cache="${BAZEL_REMOTE_CACHE}" \
             --remote_upload_local_results=false \
