@@ -11,13 +11,15 @@ Tinyland CI house style.
 > (blahaj #1255); lane lifecycle belongs to the app owner overlay — see
 > site.scaffold `docs/patterns/owner-overlay-apply-plane.md` and the merged
 > scaffold #119 recut (2026-08-06, `8862f359`). The `lane-dispatch` /
-> `lane-reap` / `lane-ttl-reap` / `public-preview-dispatch` actions and the
-> `spoke-lane-env*` / `spoke-lane-ttl-reap` / `spoke-public-preview`
+> `lane-reap` / `public-preview-dispatch` actions and the
+> `spoke-lane-env*` / `spoke-public-preview`
 > workflows below document the retired-era receiver contract as released
 > (spokes pin immutable tags, so released behavior is unchanged), but
 > `tinyland-inc/blahaj` no longer hosts the receivers. Do not wire new
 > spokes at blahaj; the behavior recut ships via the versioned release
-> train.
+> train. The zero-caller TTL half (`lane-ttl-reap` action,
+> `spoke-lane-ttl-reap.yml`, `schemas/lane-ttl-reap-dispatch.schema.json`)
+> was removed from `main` on 2026-08-07 (TIN-489); released tags retain it.
 
 Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
 
@@ -40,7 +42,6 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
   the retired-era Blahaj receiver owned Cloudflare DNS, Access, Tunnel
   ingress, and cleanup — that ownership now sits with the app owner
   overlay.
-- **Scheduled expired-lane cleanup dispatch** via `lane-ttl-reap`.
 - **GloriousFlywheel proof dispatch** via `flywheel-reapi-proof`.
 - **Per-lane GitHub commit status checks** via `lane-status-check`.
 
@@ -131,7 +132,6 @@ gitleaks working-tree scan.
 | **`lanes-load`** | Validate + load `.github/lanes.json`. Outputs matrix-ready `lanes_json`. |
 | **`lane-dispatch`** *(deprecated)* | Emit Blahaj `<spoke>-lane-env` provision payload. Supports `dry_run`. PR-env create is an owner-overlay capability now; see the Superseded note above. |
 | **`lane-reap`** *(deprecated)* | Emit Blahaj destroy payload. Idempotent. PR-env destroy is an owner-overlay capability now. |
-| **`lane-ttl-reap`** *(deprecated)* | Emit Blahaj expired-lane sweep payload for scheduled TTL backstops. TTL reap is an owner-overlay capability now. |
 | **`public-preview-dispatch`** *(deprecated)* | Emit Blahaj public/client preview payload with Cloudflare Access allowlist. The owner overlay is the preview producer now. |
 | **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run, correlated by a unique request id. |
 | **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
@@ -149,7 +149,6 @@ See per-action `action.yml` files for full input/output documentation.
 | **`spoke-lane-env.yml`** *(deprecated)* | Retired-era Blahaj-dispatch PR-env workflow, kept callable only. The PR-env producer is the product's owner-overlay repository — see site.scaffold `docs/patterns/owner-overlay-apply-plane.md` and the merged scaffold #119 recut. Do not point a new spoke at it. |
 | **`spoke-ci-restricted.yml`** | Explicit private-repo opt-in variant of `spoke-ci.yml`; every job requires an owner `-infra` runner group plus its reviewed capability label. |
 | **`spoke-lane-env-restricted.yml`** *(deprecated)* | Explicit private-repo opt-in variant of `spoke-lane-env.yml`; preserves lane semantics while requiring group+capability routing and rejecting fork execution before checkout. Same PR-env producer deprecation applies. |
-| **`spoke-lane-ttl-reap.yml`** *(deprecated)* | Reusable scheduled TTL backstop dispatcher for Blahaj lane cleanup. TTL reap is an owner-overlay capability now. |
 | **`spoke-public-preview.yml`** *(deprecated)* | Reusable public/client preview dispatcher for Cloudflare Access-gated aliases. The owner overlay is the preview producer now. |
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |
 | **`spoke-deploy-cloudflare-pages.yml`** | Sanctioned **opt-in** Cloudflare Pages deploy lane. Builds the adapter-static `build/` via `nix develop --command just setup/check/build`, then `wrangler pages deploy build`. Credential-skips when the org CF secrets are absent; PR events build only. Does **not** replace the scaffold default GitHub-Pages lane. |
@@ -231,14 +230,15 @@ are vendored from `tinyland-inc/site.scaffold/docs/schemas/`. The
 schema-doc repo is the source of truth; this repo vendors at known
 stable paths so composite actions can `jsonschema` against them.
 
-`schemas/blahaj-dispatch.schema.json`,
-`schemas/lane-ttl-reap-dispatch.schema.json`, and
+`schemas/blahaj-dispatch.schema.json` and
 `schemas/public-preview-dispatch.schema.json` are retired-era historical
 artifacts: the merged scaffold #119 recut deleted their upstream sources
 from `site.scaffold/docs/schemas/`, so they no longer have a source of
 truth there. The vendored copies remain only because the deprecated
 Blahaj-dispatch composites above still validate against them; do not
 treat them as current contract surface.
+(`schemas/lane-ttl-reap-dispatch.schema.json` was removed with the
+`lane-ttl-reap` composite, its only consumer, on 2026-08-07.)
 
 `tinyland-repo-manifest.schema.json` carries first-class, validated **enrollment**
 fields (TIN-2109): `enrollment.forgeScope`, `enrollment.operatorOverlay`,
