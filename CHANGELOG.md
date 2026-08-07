@@ -5,6 +5,23 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- **TIN-489: zero-caller TTL half of the deprecated lane family evicted from
+  `main`** — `spoke-lane-ttl-reap.yml`, the `lane-ttl-reap` composite action,
+  and `schemas/lane-ttl-reap-dispatch.schema.json` (the composite was its only
+  consumer; GFTB, transfemme-tailoring, and blahaj vendor their own copies).
+  Estate-wide code search (tinyland-inc + Jesssullivan + Great-Falls-Tool-Bus,
+  positive-controlled against known `spoke-ci.yml` callers) found zero
+  workflow callers for any of the three; the blahaj receiver they dispatched
+  to was already evicted (blahaj #1255). Released tags retain the files, so
+  pinned callers are unaffected. **Kept on `main`**: `spoke-lane-env.yml`,
+  `spoke-lane-env-restricted.yml`, `lane-dispatch`, `lane-reap` —
+  `darkmap.phasi.space` still calls `spoke-lane-env.yml@v2` (a moving major
+  tag), so evicting that half before the spoke-side sender cleanup would break
+  it at the next `v2` re-point. Do not re-point `v2` past a future eviction of
+  that half until the darkmap sender is retired.
+
 ## [2.13.0] — 2026-08-06
 
 ### Deprecated
