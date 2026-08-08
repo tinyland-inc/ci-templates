@@ -5,6 +5,45 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Org-routed DEPOSIT (writer) lane — the shared adopter unlock (RULING 31)** —
+  new reusable workflow `.github/workflows/spoke-deposit.yml` plus its driver
+  `scripts/flywheel-deposit.sh`. A spoke calls it on `push` to its default
+  branch to deposit its **real** Bazel action graph (`deposit_targets`, e.g.
+  `//:ci_validation_suite`) into the shared GloriousFlywheel cache, routed to the
+  spoke's own REAPI instance (`instance_name`, org-`<owner>` or consumer-`<slug>`)
+  via a GitHub Actions OIDC → gf-reapi-token-exchange → gf-reapi-cell round trip.
+  It is the **writer** counterpart of spoke-ci.yml's read-only cache-attachment
+  lane and reuses the proven org-tenant mechanism (fleet-projected
+  `flywheel-github-oidc-profile`, sha256-pinned, with a credentialed source-only
+  SSH fallback; `gf-credhelper-install` via a one-owner/one-repo/contents:read App
+  token). **The write boundary is enforced in three independent layers** so
+  `GF_BAZEL_REMOTE_UPLOAD=true` is unreachable off a trusted default-branch push:
+  (1) the job's `if:` runs only on `push` to `refs/heads/<default_branch>`;
+  (2) the driver recomputes `trustedDefaultBranchPush` and requests `cache-write`
+  only on that event **and** when the enforce-cell front-door endpoint is present,
+  with no code path to `upload=true` otherwise; (3) the gf-reapi-cell exchange
+  mints `ModeCacheWrite` only for the exact default-branch push subject (PRs /
+  dispatches get `ModeCacheRead`). CACHE-FIRST only: no remote executor is wired.
+  The workflow declares `id-token: write` on its own job (reusable-workflow
+  permissions are not caller-widenable); it does not touch the default spoke-ci
+  path. Endpoints/identity stay runtime authority, never baked (TIN-2358).
+
+### Changed
+
+- **spoke-ci.yml: `flywheel-test` and `playwright` jobs use `nix-setup@v2`
+  instead of `setup-nix@v2`** so `BAZEL_REMOTE_CACHE` / `ATTIC_SERVER` are
+  exported from cluster DNS and `just check` / `just test-e2e` attach the shared
+  Bazel cache instead of running cache-COLD. This completes the spoke-wiring fix
+  begun by the `cache_backed` paths of `flywheel-build` + `bazel-graph` (which
+  already switch to `nix-setup`). `nix-setup` adds the preinstalled cluster Nix to
+  PATH and exports the endpoint; it invents no endpoint (TIN-2353). On the
+  self-hosted `tinyland-nix` cluster runners these jobs target, the daemon is
+  already reachable (the same reliance the shipped `cache_backed` flywheel-build
+  path already makes). No behavioral change for the default (non-cache-backed)
+  matrix build path.
+
 ## [2.13.0] — 2026-08-06
 
 ### Deprecated
