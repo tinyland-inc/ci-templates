@@ -154,6 +154,11 @@ runs:
         if [[ -n "${BAZEL_CREDENTIAL_HELPER:-}" ]]; then
           remote_args+=(--credential_helper="$BAZEL_CREDENTIAL_HELPER")
         fi
+        if [[ -n "${BAZEL_REMOTE_INSTANCE_NAME:-}" ]]; then
+          # Set by nix-setup's Wave-1B (TIN-3366 R12) credential mint when the
+          # resolved endpoint is the tenant-scoped gf-reapi-cell front door.
+          remote_args+=(--remote_instance_name="$BAZEL_REMOTE_INSTANCE_NAME")
+        fi
         if [[ -n "${BAZEL_REMOTE_HEADER:-}" ]]; then
           remote_args+=(--remote_header="$BAZEL_REMOTE_HEADER")
         fi

@@ -68,7 +68,7 @@ SPECS = {
   "spoke-ci" => {
     legacy: ".github/workflows/spoke-ci.yml",
     restricted: ".github/workflows/spoke-ci-restricted.yml",
-    legacy_sha256: "7595e40678a4a5209308b28bbbebd76c8fd6dc8eff0b75b6d34dc595b552cfe5",
+    legacy_sha256: "c51773687fc5a071cfb5374b858f39b5eaef72d039388cf87353b76515bb68cf",
     inputs: {
       "runner_group" => "tinyland-infra",
       "nix_runner_label" => "tinyland-nix",

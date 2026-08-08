@@ -9,7 +9,60 @@ inputs:
     description: "Attic cache name"
     default: "main"
   bazel-cache:
-    description: "Bazel remote cache endpoint. Optional override for BAZEL_REMOTE_CACHE; no endpoint is invented by this action."
+    description: >-
+      Bazel remote cache endpoint. Optional override for BAZEL_REMOTE_CACHE.
+      This input is the flip mechanism (Wave-1B, TIN-3366 R19): resolution
+      order is this explicit input, then the inherited BAZEL_REMOTE_CACHE
+      env, then fail-closed (no baked default endpoint — TIN-2353 acceptance
+      #2 still holds). Pass this input explicitly (e.g.
+      grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980) to reach the
+      authenticated front door; the ambient BAZEL_REMOTE_CACHE fleet env
+      (:9092) otherwise wins since it is always populated on fleet runners.
+    default: ""
+  mint-reapi-credential:
+    description: >-
+      Explicit per-caller opt-in (Wave-1B, TIN-3366 R19). When "true" and the
+      resolved Bazel cache endpoint (via the bazel-cache input or the
+      BAZEL_REMOTE_CACHE env) is the authenticated gf-reapi-cell front door,
+      mint a short-lived credential via GitHub OIDC token exchange and wire
+      it into BAZEL_CREDENTIAL_HELPER / BAZEL_REMOTE_INSTANCE_NAME for
+      downstream flywheel-bazel steps. Default "false": callers that have not
+      opted in and have not passed the bazel-cache input see no behavior
+      change at all (no OIDC attempt, no new permission requirement) —
+      nothing moves until a caller both sets this true and explicitly passes
+      the front-door endpoint via the bazel-cache input.
+    default: "false"
+  reapi-token-exchange-endpoint:
+    description: >-
+      REAPI token-exchange endpoint used to mint the credential above.
+      Falls back to the GF_REAPI_TOKEN_EXCHANGE_ENDPOINT env var (typically
+      set by the calling workflow, vars-overridable) and then to the fleet
+      default http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange.
+    default: ""
+  reapi-token-exchange-audience:
+    description: "OIDC audience claim requested for the token-exchange mint."
+    default: "gloriousflywheel-token-exchange"
+  reapi-token-exchange-ttl:
+    description: "Requested TTL for the minted credential."
+    default: "45m"
+  reapi-credhelper-version:
+    description: >-
+      Pinned GloriousFlywheel release tag carrying gf-reapi-credhelper
+      binaries (TIN-2724 non-Nix distribution channel). Required when
+      mint-reapi-credential=true — there is no floating "latest"; unset fails
+      closed rather than guessing an unverified pin.
+    default: ""
+  reapi-credhelper-sha256-linux-amd64:
+    description: "Expected sha256 of the linux/amd64 gf-reapi-credhelper binary at reapi-credhelper-version."
+    default: ""
+  reapi-credhelper-sha256-linux-arm64:
+    description: "Expected sha256 of the linux/arm64 gf-reapi-credhelper binary at reapi-credhelper-version."
+    default: ""
+  reapi-credhelper-sha256-darwin-amd64:
+    description: "Expected sha256 of the darwin/amd64 gf-reapi-credhelper binary at reapi-credhelper-version."
+    default: ""
+  reapi-credhelper-sha256-darwin-arm64:
+    description: "Expected sha256 of the darwin/arm64 gf-reapi-credhelper binary at reapi-credhelper-version."
     default: ""
 
 outputs:
@@ -28,6 +81,14 @@ outputs:
   bazel_cache_reachable:
     description: "`true` if the Bazel remote cache DNS resolved, else `false`."
     value: ${{ steps.detect.outputs.bazel_cache_reachable }}
+  bazel_cache_requires_auth:
+    description: >-
+      "true" when the resolved Bazel cache endpoint (via the bazel-cache
+      input or the BAZEL_REMOTE_CACHE env) is the authenticated gf-reapi-cell
+      front door (Wave-1B, TIN-3366 R19). Informational unless
+      mint-reapi-credential=true, in which case this action attempts the
+      OIDC mint itself.
+    value: ${{ steps.detect.outputs.bazel_cache_requires_auth }}
 
 runs:
   using: "composite"
@@ -41,6 +102,7 @@ runs:
         runner_class=""
         attic_reachable=false
         bazel_cache_reachable=false
+        bazel_cache_requires_auth=false
 
         # Resolve runner_class from runner.labels (passed via env). Capability
         # classes are org-namespaced — `<org-pool>` + `-nix|-nix-heavy|-nix-kvm|
@@ -78,6 +140,20 @@ runs:
             fi
           fi
 
+          # Wave-1B (TIN-3366 R19, ratified 2026-08-04): the flip mechanism is
+          # INPUT PREFERENCE, not a baked default. Resolution order is the
+          # explicit bazel-cache input, then the inherited BAZEL_REMOTE_CACHE
+          # env, then fail-closed with a warning — there is still no baked
+          # default endpoint here (TIN-2353 acceptance #2 holds). An earlier
+          # draft of this change (R12) added a third branch that defaulted to
+          # the gf-reapi-cell front door whenever neither input nor env
+          # resolved anything; that branch was retired because the fleet/tofu
+          # runner env populates BAZEL_REMOTE_CACHE (:9092) on every
+          # tinyland-nix* pool, so the default branch was unreachable in
+          # practice and the "flip" was a fleet-wide no-op. Reaching the
+          # authenticated front door now requires a caller to pass the
+          # bazel-cache input explicitly (e.g. a per-repo pin-bump PR) —
+          # nothing moves without that.
           BAZEL_URL="${{ inputs.bazel-cache }}"
           if [ -z "$BAZEL_URL" ]; then
             BAZEL_URL="${BAZEL_REMOTE_CACHE:-}"
@@ -91,6 +167,14 @@ runs:
             else
               echo "::warning::Configured Bazel cache DNS unreachable ($BAZEL_HOST) — Flywheel Bazel commands will fail fast unless another step supplies BAZEL_REMOTE_CACHE"
             fi
+
+            # The gf-reapi-cell front door enforces authz (docs/contracts/
+            # gf-reapi-cache-front-door.json: routable_cache_requires_runtime_auth)
+            # regardless of whether BAZEL_URL was resolved via the input or
+            # the inherited env.
+            if [ "$BAZEL_HOST" = "gf-reapi-cell.gf-rbe.svc.cluster.local" ]; then
+              bazel_cache_requires_auth=true
+            fi
           else
             echo "::notice::No BAZEL_REMOTE_CACHE configured by input or environment; Flywheel Bazel commands will fail fast if selected."
           fi
@@ -103,11 +187,156 @@ runs:
           echo "runner_class=$runner_class"
           echo "attic_reachable=$attic_reachable"
           echo "bazel_cache_reachable=$bazel_cache_reachable"
+          echo "bazel_cache_requires_auth=$bazel_cache_requires_auth"
         } >> "$GITHUB_OUTPUT"
 
-        echo "::notice::nix-setup runner_class=${runner_class:-<none>} attic=$attic_reachable bazel_cache=$bazel_cache_reachable"
+        echo "::notice::nix-setup runner_class=${runner_class:-<none>} attic=$attic_reachable bazel_cache=$bazel_cache_reachable requires_auth=$bazel_cache_requires_auth"
       env:
         RUNNER_LABELS: ${{ join(runner.labels, ',') }}
+
+    # --- Wave-1B (TIN-3366 R19) credential wiring. Only runs when the caller ---
+    # --- explicitly opted in via mint-reapi-credential AND the resolved      ---
+    # --- endpoint (via the bazel-cache input or inherited env) is the        ---
+    # --- authenticated front door; see that input's description for the     ---
+    # --- no-op contract on unopted / non-front-door callers.                ---
+    - name: Install gf-reapi-credhelper
+      if: ${{ steps.detect.outputs.bazel_cache_requires_auth == 'true' && inputs.mint-reapi-credential == 'true' && inputs.reapi-credhelper-version != '' }}
+      uses: ./.github/actions/gf-credhelper-install
+      with:
+        version: ${{ inputs.reapi-credhelper-version }}
+        sha256: ${{ runner.os == 'Linux' && (runner.arch == 'ARM64' && inputs.reapi-credhelper-sha256-linux-arm64 || inputs.reapi-credhelper-sha256-linux-amd64) || (runner.arch == 'ARM64' && inputs.reapi-credhelper-sha256-darwin-arm64 || inputs.reapi-credhelper-sha256-darwin-amd64) }}
+
+    - name: Mint REAPI credential (GitHub OIDC token exchange)
+      if: ${{ steps.detect.outputs.bazel_cache_requires_auth == 'true' && inputs.mint-reapi-credential == 'true' }}
+      id: mint
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [ -z "${{ inputs.reapi-credhelper-version }}" ]; then
+          echo "::error::nix-setup: mint-reapi-credential=true but reapi-credhelper-version is unset — no pinned gf-reapi-credhelper release to install. This caller opted in explicitly; failing closed rather than running the cache-backed lane unauthenticated against the enforced gf-reapi-cell front door."
+          exit 1
+        fi
+        if [ -z "${GF_REAPI_CREDENTIAL_HELPER_BIN:-}" ]; then
+          echo "::error::nix-setup: gf-reapi-credhelper was not installed (checksum input missing or install step failed) — cannot mint a credential without it."
+          exit 1
+        fi
+
+        endpoint="${{ inputs.reapi-token-exchange-endpoint }}"
+        endpoint="${endpoint:-${GF_REAPI_TOKEN_EXCHANGE_ENDPOINT:-}}"
+        endpoint="${endpoint:-http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange}"
+
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          echo "::error::nix-setup: mint-reapi-credential=true but the GitHub Actions id-token environment is unavailable — grant 'permissions: id-token: write' on the calling job."
+          exit 1
+        fi
+
+        token_dir="${RUNNER_TEMP}/gf-reapi-token-exchange"
+        mkdir -p "$token_dir"
+        chmod 700 "$token_dir"
+        token_file="$token_dir/gf-reapi-cell-token.jwt"
+        profile_file="$token_dir/gf-reapi-cell-profile.env"
+        oidc_response="$token_dir/github-oidc-response.json"
+        oidc_curl_config="$token_dir/github-oidc.curl"
+        exchange_response="$token_dir/token-exchange-response.json"
+        exchange_curl_config="$token_dir/token-exchange.curl"
+        umask 077
+
+        oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${{ inputs.reapi-token-exchange-audience }}"
+        printf 'header = "Authorization: bearer %s"\n' "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" >"$oidc_curl_config"
+        chmod 600 "$oidc_curl_config"
+        curl -fsS --config "$oidc_curl_config" "$oidc_url" >"$oidc_response"
+
+        github_oidc_token="$(python3 - "$oidc_response" <<'PY'
+        import json
+        import sys
+
+        with open(sys.argv[1], encoding="utf-8") as fh:
+            data = json.load(fh)
+        token = data.get("value", "")
+        if not token:
+            raise SystemExit("GitHub Actions OIDC response did not include value")
+        print(token)
+        PY
+        )"
+
+        request_body="$(GF_REAPI_MINT_TTL="${{ inputs.reapi-token-exchange-ttl }}" python3 - <<'PY'
+        import json
+        import os
+
+        print(json.dumps({
+            "request": "cache",
+            "ttl": os.environ["GF_REAPI_MINT_TTL"],
+            "credential_helper_scope": "gf-reapi-cell.gf-rbe.svc.cluster.local",
+            "credential_helper_bin": os.environ["GF_REAPI_CREDENTIAL_HELPER_BIN"],
+        }, separators=(",", ":")))
+        PY
+        )"
+
+        {
+          printf 'header = "Authorization: Bearer %s"\n' "$github_oidc_token"
+          printf 'header = "Content-Type: application/json"\n'
+        } >"$exchange_curl_config"
+        chmod 600 "$exchange_curl_config"
+        curl -fsS -X POST --config "$exchange_curl_config" --data "$request_body" "$endpoint" >"$exchange_response"
+
+        python3 - "$exchange_response" "$token_file" "$profile_file" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+
+        response_path, token_path, profile_path = map(Path, sys.argv[1:])
+        data = json.loads(response_path.read_text(encoding="utf-8"))
+        token = data.get("token", "")
+        if not token:
+            raise SystemExit("hosted token exchange response did not include token")
+
+        token_path.write_text(token + "\n", encoding="utf-8")
+        token_path.chmod(0o600)
+
+        credential_helper = data.get("credential_helper", "")
+        instance_name = data.get("instance_name", "")
+        profile_lines = [
+            "# Generated by hosted gf-reapi-token-exchange; do not commit this file.",
+            f"export GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE={str(token_path)!r}",
+        ]
+        if credential_helper:
+            profile_lines.append(f"export BAZEL_CREDENTIAL_HELPER={credential_helper!r}")
+        if instance_name:
+            profile_lines.append(f"export BAZEL_REMOTE_INSTANCE_NAME={instance_name!r}")
+        profile_path.write_text("\n".join(profile_lines) + "\n", encoding="utf-8")
+        profile_path.chmod(0o600)
+        PY
+
+        # Source the profile fragment and the credhelper binary IN THIS SAME
+        # SHELL, then re-emit clean KEY=VALUE lines to $GITHUB_ENV ourselves.
+        # Never `cat profile.env >> $GITHUB_ENV` directly — profile.env is a
+        # bash-sourceable fragment (export KEY='pyrepr-quoted-value'), not
+        # GITHUB_ENV's plain KEY=VALUE format; piping it in raw silently
+        # produces garbage env vars for downstream steps (the exact bug
+        # caught in lab#1147).
+        # shellcheck disable=SC1090
+        source "$profile_file"
+        : "${GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE:?profile.env did not set GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE}"
+
+        new_credential_helper_line="gf-reapi-cell.gf-rbe.svc=${GF_REAPI_CREDENTIAL_HELPER_BIN}"
+        if [ -n "${BAZEL_CREDENTIAL_HELPER:-}" ]; then
+          combined_credential_helper="$(printf '%s\n%s' "${BAZEL_CREDENTIAL_HELPER}" "${new_credential_helper_line}")"
+        else
+          combined_credential_helper="${new_credential_helper_line}"
+        fi
+
+        {
+          echo "GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE=${GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE}"
+          echo "BAZEL_CREDENTIAL_HELPER<<GF_REAPI_EOF"
+          echo "$combined_credential_helper"
+          echo "GF_REAPI_EOF"
+        } >>"$GITHUB_ENV"
+        if [ -n "${BAZEL_REMOTE_INSTANCE_NAME:-}" ]; then
+          echo "BAZEL_REMOTE_INSTANCE_NAME=${BAZEL_REMOTE_INSTANCE_NAME}" >>"$GITHUB_ENV"
+        fi
+
+        echo "::notice::nix-setup: minted REAPI credential for gf-reapi-cell.gf-rbe.svc.cluster.local (ttl=${{ inputs.reapi-token-exchange-ttl }})"
 
     - name: Add Nix to PATH
       shell: bash
