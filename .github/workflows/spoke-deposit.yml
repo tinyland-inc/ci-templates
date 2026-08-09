@@ -1,0 +1,299 @@
+name: spoke-deposit
+
+# Org-routed, main-push-only, upload=true DEPOSIT (writer) lane — the shared
+# adopter unlock (RULING 31). Any enrolled spoke calls this reusable workflow to
+# deposit its REAL Bazel action graph into the shared GloriousFlywheel cache
+# (CAS + action cache), routed to the spoke's own REAPI instance via a GitHub
+# Actions OIDC -> gf-reapi-token-exchange -> gf-reapi-cell round trip. It is the
+# writer counterpart of spoke-ci.yml's read-only cache-attachment lane.
+#
+# THE SAFETY BOUNDARY (defence in depth; matches the cell's server-side gate):
+# cache-WRITE (GF_BAZEL_REMOTE_UPLOAD=true) is unreachable off a trusted
+# default-branch push. Three independent layers enforce it:
+#   1. This job's `if:` runs the deposit ONLY on event==push to the default branch.
+#   2. scripts/flywheel-deposit.sh recomputes trustedDefaultBranchPush and only
+#      requests cache-write on push+refs/heads/<default> AND when the enforce-cell
+#      front-door endpoint is present; every other event stays cache-read
+#      (upload=false) with no code path to upload=true.
+#   3. The gf-reapi-cell exchange (policy.go GrantForGitHubClaims) mints
+#      ModeCacheWrite only for the exact default-branch push subject; PRs and
+#      dispatches get ModeCacheRead, so a wrong flag could deposit nothing.
+#
+# CACHE-FIRST only: no remote executor is wired (TIN-1997 Option D). Endpoints and
+# identity are runtime authority, never baked here (endpoint-free contract,
+# TIN-2358): nix-setup exports BAZEL_REMOTE_CACHE from cluster DNS, and the
+# token-exchange / enforce-cell endpoints come from the fleet profile in the pod.
+#
+# The caller must invoke this on: push: branches: [<default>] (plus optional
+# workflow_dispatch for a read-only dry run). Reusable-workflow permissions cannot
+# be widened by the caller, so id-token: write is declared here and applies only
+# to this workflow's job.
+
+on:
+  workflow_call:
+    inputs:
+      deposit_targets:
+        description: >-
+          Space-separated REAL Bazel targets whose action graph is deposited
+          (e.g. "//:ci_validation_suite" or "//app:build //app:test"). This is
+          the adopter's real graph, not a synthetic proof genrule.
+        type: string
+        required: true
+      deposit_bazel_command:
+        description: "Bazel verb for the deposit. One of build | test."
+        type: string
+        default: build
+      instance_name:
+        description: >-
+          Expected REAPI instance the exchanged token must authorize
+          (org-<owner> for a runtime-enabled org tenant, or consumer-<slug> for a
+          registered consumer). The lane fails closed if the minted instance does
+          not match. Identity is caller authority — never a baked default.
+        type: string
+        required: true
+      tenant_name:
+        description: "Expected tenant. Defaults to instance_name when empty."
+        type: string
+        default: ""
+      default_branch:
+        description: "Trusted default branch. cache-write is reachable ONLY on a push to this ref."
+        type: string
+        default: main
+      runner_class:
+        description: "Self-hosted org capability-class label for the deposit job (e.g. tinyland-nix)."
+        type: string
+        default: tinyland-nix
+      oidc_profile_sha256:
+        description: "Lowercase sha256 pin for the fleet-projected flywheel-github-oidc-profile helper."
+        type: string
+        required: true
+      gf_oidc_profile_pin_commit:
+        description: >-
+          GloriousFlywheel commit that carries scripts/flywheel-github-oidc-profile.sh
+          for the credentialed source-only fallback supply path (used only when no
+          fleet-projected helper is present).
+        type: string
+        default: ""
+      credhelper_version:
+        description: "GloriousFlywheel release tag carrying the gf-reapi-credhelper binary (e.g. v0.2.0)."
+        type: string
+        required: true
+      credhelper_sha256:
+        description: "Expected sha256 of this platform's gf-reapi-credhelper binary."
+        type: string
+        required: true
+      credhelper_repository:
+        description: "Repository publishing the credhelper release."
+        type: string
+        default: tinyland-inc/GloriousFlywheel
+      credhelper_token_owner:
+        description: "Owner for the minted App installation token used to fetch the private credhelper asset."
+        type: string
+        default: tinyland-inc
+      credhelper_token_repository:
+        description: "Repository (unqualified) the App token is scoped to for credhelper contents:read."
+        type: string
+        default: GloriousFlywheel
+      dispatch_app_client_id:
+        description: >-
+          Client id of the GitHub App used to mint the contents:read token for the
+          private credhelper asset. Pass vars.TINYLAND_CI_DISPATCH_CLIENT_ID.
+        type: string
+        default: ""
+      ci_templates_ref:
+        description: >-
+          Immutable ci-templates releasing tag used to fetch the pinned
+          scripts/flywheel-deposit.sh when the caller has not vendored it. Must be
+          a release tag, never floating v2.
+        type: string
+        default: v2.14.0
+    secrets:
+      GF_CORE_DEPLOY_KEY:
+        description: "Deploy key for the source-only fallback fetch of the OIDC profile helper. Optional when the fleet projects the verified helper."
+        required: false
+      DISPATCH_APP_PRIVATE_KEY:
+        description: "Private key for the credhelper-read App token. Pass the TINYLAND_CI_DISPATCH_APP_PRIVATE_KEY secret."
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: spoke-deposit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deposit:
+    name: flywheel-deposit (${{ inputs.instance_name }})
+    # LAYER 1 of the write boundary: the deposit job body only runs on a push to
+    # the trusted default branch. A PR, a non-default push, a schedule, or a
+    # workflow_dispatch skips the job entirely (never reaches the writer).
+    if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', inputs.default_branch) }}
+    runs-on: ${{ inputs.runner_class || 'tinyland-nix' }}
+    timeout-minutes: 30
+    env:
+      GFW_DEPOSIT_INSTANCE_NAME: ${{ inputs.instance_name }}
+      GFW_DEPOSIT_TENANT_NAME: ${{ inputs.tenant_name }}
+      GFW_DEPOSIT_TARGETS: ${{ inputs.deposit_targets }}
+      GFW_DEPOSIT_BAZEL_COMMAND: ${{ inputs.deposit_bazel_command }}
+      GFW_DEPOSIT_DEFAULT_BRANCH: ${{ inputs.default_branch }}
+      GF_OIDC_PROFILE_SHA256: ${{ inputs.oidc_profile_sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      # Endpoint-free cache attach: nix-setup exports BAZEL_REMOTE_CACHE from
+      # cluster DNS (it invents no endpoint, TIN-2353) and puts the preinstalled
+      # cluster Nix on PATH. Failure is fatal downstream: the deposit driver
+      # fails closed if BAZEL_REMOTE_CACHE is unset.
+      - name: Attach shared Bazel cache (fleet runtime env)
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
+
+      # Verify the fleet OIDC front door and put a sha256-pinned
+      # flywheel-github-oidc-profile on PATH. Prefer the fleet-projected binary;
+      # fall back to a source-only, credentialed, pinned-commit SSH fetch of the
+      # single upstream helper when GF_CORE_DEPLOY_KEY is supplied. Key material
+      # is a 600-mode file passed via -i with IdentitiesOnly=yes, never printed,
+      # trap-wiped on every exit path. Verified against the pin before chmod/PATH.
+      - name: Verify fleet OIDC front door (pinned)
+        id: oidc-frontdoor
+        shell: bash
+        env:
+          GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+          GF_OIDC_PROFILE_PIN_COMMIT: ${{ inputs.gf_oidc_profile_pin_commit }}
+        run: |
+          set -euo pipefail
+
+          verify_pin() {
+            local path="$1" actual
+            actual="$(sha256sum "${path}" | awk '{ print $1 }')"
+            [ "${actual}" = "${GF_OIDC_PROFILE_SHA256}" ]
+          }
+
+          helper="$(command -v flywheel-github-oidc-profile || true)"
+          if [ -n "${helper}" ]; then
+            case "${helper}" in
+              /*) ;;
+              *) echo "::error::fleet-projected flywheel-github-oidc-profile did not resolve to an absolute path."; exit 1 ;;
+            esac
+            if verify_pin "${helper}"; then
+              printf 'helper=%s\n' "${helper}" >> "${GITHUB_OUTPUT}"
+              echo "verified fleet-projected flywheel-github-oidc-profile (sha256 ${GF_OIDC_PROFILE_SHA256})"
+              exit 0
+            fi
+            echo "::warning::fleet-projected helper bytes do not match the pin; trying the credentialed pinned supply path."
+          else
+            echo "::warning::fleet-projected helper unavailable; trying the credentialed pinned supply path."
+          fi
+
+          if [ -z "${GF_CORE_DEPLOY_KEY:-}" ]; then
+            echo "::error::no fleet-projected helper and GF_CORE_DEPLOY_KEY is unavailable; no supply path for flywheel-github-oidc-profile."
+            exit 1
+          fi
+          if [ -z "${GF_OIDC_PROFILE_PIN_COMMIT:-}" ]; then
+            echo "::error::gf_oidc_profile_pin_commit is required for the credentialed fallback supply path."
+            exit 1
+          fi
+
+          gf_pin_path="scripts/flywheel-github-oidc-profile.sh"
+          tools_dir="${RUNNER_TEMP}/gf-tools"
+          ssh_dir="${RUNNER_TEMP}/gf-ssh"
+          core_dir="${RUNNER_TEMP}/gf-core"
+          rm -rf "${ssh_dir}" "${core_dir}"
+          mkdir -p "${tools_dir}" "${ssh_dir}"
+          chmod 700 "${ssh_dir}"
+          key_file="${ssh_dir}/gf_core_deploy_key"
+          known_hosts="${ssh_dir}/known_hosts"
+
+          cleanup() {
+            local rc=$?
+            rm -f "${key_file}"
+            rm -rf "${ssh_dir}" "${core_dir}"
+            exit "${rc}"
+          }
+          trap cleanup EXIT
+
+          umask 077
+          printf '%s\n' "${GF_CORE_DEPLOY_KEY}" >"${key_file}"
+          chmod 600 "${key_file}"
+
+          printf 'github.com %s\n' \
+            'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+            >"${known_hosts}"
+          export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${known_hosts}"
+
+          git init --quiet "${core_dir}"
+          git -C "${core_dir}" remote add origin "git@github.com:tinyland-inc/GloriousFlywheel.git"
+          git -C "${core_dir}" -c protocol.version=2 fetch --quiet --filter=blob:none --depth 1 origin "${GF_OIDC_PROFILE_PIN_COMMIT}"
+          git -C "${core_dir}" checkout --quiet FETCH_HEAD -- "${gf_pin_path}"
+
+          fetched="${core_dir}/${gf_pin_path}"
+          if [ ! -f "${fetched}" ]; then
+            echo "::error::pinned commit ${GF_OIDC_PROFILE_PIN_COMMIT} did not contain ${gf_pin_path}."
+            exit 1
+          fi
+          if ! verify_pin "${fetched}"; then
+            actual="$(sha256sum "${fetched}" | awk '{ print $1 }')"
+            echo "::error::flywheel-github-oidc-profile sha256 mismatch: expected ${GF_OIDC_PROFILE_SHA256}, got ${actual}"
+            exit 1
+          fi
+
+          dest="${tools_dir}/flywheel-github-oidc-profile"
+          cp "${fetched}" "${dest}"
+          chmod +x "${dest}"
+          printf 'helper=%s\n' "${dest}" >> "${GITHUB_OUTPUT}"
+          echo "installed pinned flywheel-github-oidc-profile via the credentialed supply path (sha256 ${GF_OIDC_PROFILE_SHA256})"
+
+      # Mint a one-owner, one-repo, contents:read App installation token so
+      # gf-credhelper-install can fetch the private credhelper asset through the
+      # authenticated REST release endpoint. Skipped when no App is provisioned.
+      - name: Mint GloriousFlywheel release-read token
+        id: gf-release-token
+        if: ${{ inputs.dispatch_app_client_id != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.dispatch_app_client_id }}
+          private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.credhelper_token_owner }}
+          repositories: ${{ inputs.credhelper_token_repository }}
+          permission-contents: read
+
+      - name: Install released GF credential helper
+        uses: tinyland-inc/ci-templates/.github/actions/gf-credhelper-install@v2
+        with:
+          version: ${{ inputs.credhelper_version }}
+          sha256: ${{ inputs.credhelper_sha256 }}
+          repository: ${{ inputs.credhelper_repository }}
+          token: ${{ steps.gf-release-token.outputs.token }}
+
+      # LAYER 2 of the write boundary lives inside the driver: it recomputes
+      # trustedDefaultBranchPush and only requests cache-write (upload=true) on a
+      # push to the default branch with the enforce-cell endpoint present.
+      - name: Deposit real action graph (org-routed, upload on trusted main push)
+        shell: bash
+        env:
+          GFW_OIDC_PROFILE_HELPER: ${{ steps.oidc-frontdoor.outputs.helper }}
+          CI_TEMPLATES_REF: ${{ inputs.ci_templates_ref }}
+        run: |
+          set -euo pipefail
+          if ! command -v nix >/dev/null 2>&1; then
+            echo "::error::nix is unavailable; refusing to claim a Flywheel deposit."
+            exit 1
+          fi
+          # The deposit driver ships in this ci-templates repo. Prefer the caller's
+          # vendored copy; else fetch the immutable pinned copy (CI_TEMPLATES_REF is
+          # the releasing tag, never floating v2). The driver runs in the caller's
+          # repo root and builds the caller's REAL action graph.
+          script="${RUNNER_TEMP}/flywheel-deposit.sh"
+          if [ -f "scripts/flywheel-deposit.sh" ]; then
+            script="scripts/flywheel-deposit.sh"
+          else
+            curl -fsSL \
+              "https://raw.githubusercontent.com/tinyland-inc/ci-templates/${CI_TEMPLATES_REF}/scripts/flywheel-deposit.sh" \
+              -o "${script}"
+            chmod +x "${script}"
+          fi
+          bash "${script}"

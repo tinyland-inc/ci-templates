@@ -298,7 +298,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
+      # nix-setup (not setup-nix): export BAZEL_REMOTE_CACHE / ATTIC_SERVER from
+      # cluster DNS so `just check` attaches the shared Bazel cache instead of
+      # running cache-COLD. Mirrors the spoke-ci.yml flywheel-test wiring fix
+      # (TIN-2353); endpoint stays runtime authority.
+      - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2.12.1
 
       - run: nix develop --command just setup
       - run: nix develop --command just check
@@ -362,6 +366,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
+      # nix-setup (not setup-nix): export BAZEL_REMOTE_CACHE / ATTIC_SERVER from
+      # cluster DNS so the e2e devShell attaches the shared cache. Mirrors the
+      # spoke-ci.yml playwright wiring fix (TIN-2353).
+      - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2.12.1
       - run: nix develop --command just setup
       - run: nix develop --command just test-e2e

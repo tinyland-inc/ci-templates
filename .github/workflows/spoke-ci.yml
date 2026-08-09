@@ -285,7 +285,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      # nix-setup (not setup-nix): the detect step resolves the runner class and,
+      # on self-hosted cluster runners, exports BAZEL_REMOTE_CACHE / ATTIC_SERVER
+      # from cluster DNS into $GITHUB_ENV. `just check` runs Bazel through the
+      # spoke's flake devShell; with setup-nix the endpoint was never exported, so
+      # every `just check` verb ran cache-COLD. This is the flywheel-test half of
+      # the spoke-wiring fix (the flywheel-build + bazel-graph cache_backed paths
+      # already switched to nix-setup). nix-setup adds the preinstalled cluster
+      # Nix to PATH; it does not invent an endpoint (TIN-2353).
+      - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
 
       - run: nix develop --command just setup
       - run: nix develop --command just check
@@ -370,6 +378,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      # nix-setup (not setup-nix): export BAZEL_REMOTE_CACHE / ATTIC_SERVER from
+      # cluster DNS so the e2e devShell + any Bazel-fronted asset build attaches
+      # the shared cache instead of running cache-cold. Same spoke-wiring fix as
+      # flywheel-test; endpoint stays runtime authority (TIN-2353).
+      - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
       - run: nix develop --command just setup
       - run: nix develop --command just test-e2e
