@@ -1,0 +1,344 @@
+name: spoke-gitops-stack
+
+# TIN-2597 GITOPS-STACK CHASSIS. ONE parameterized reusable workflow
+# condensed from FIVE byte-near-identical copies in
+# Great-Falls-Tool-Bus/great-falls-tool-bus-infra
+# (.github/workflows/{mail-crs,list-crs,form-crs,archive-stack,web-stack}.yml)
+# plus the shape Medical-Massage-Specialists' pr-env-lifecycle /
+# application-apply-ceremony lanes converge on independently. Read against
+# each: mail-crs.yml, list-crs.yml, form-crs.yml and archive-stack.yml are
+# the SAME FILE with four strings swapped (stack name, k8s/<dir>, just verb
+# prefix, protected-environment secret display name) -- diffed 2026-08-13,
+# zero other deltas. web-stack.yml is the same two-job chassis
+# (validate -> gated apply) with three additive capabilities layered on:
+# a fail-closed typed confirm sentinel, a resolved-image input (CD and
+# manual dispatch converge on one job env), and an in-cluster health gate.
+# This workflow keeps the four-file shape as the DEFAULT path and makes
+# each web-stack addition an explicit opt-in input, so it is the superset,
+# not a fifth divergent shape.
+#
+# WHAT THIS DOES NOT DO: it does not decide when to fire (that is every
+# caller's own on: block -- workflow_dispatch, push, or the CD
+# repository_dispatch signal web-stack.yml receives from its site repo all
+# stay in the THIN caller file, one per stack, in the overlay repo). It does
+# not know what a stack's manifests must assert (that stays
+# scripts/validate-<stack>.sh in the overlay repo -- see the sibling
+# gitops-manifest-validate composite for the templated HELPER shape those
+# scripts can adopt, independent of whether the overlay adopts this
+# workflow). It does not mint or store the apply credential (that is the
+# protected-environment secret the caller maps in, via the credential-gate
+# composite this workflow calls). Same posture as every other file in this
+# repo: express the shared chassis, absorb none of the tenant content.
+#
+# THE APPLY STEP IS A THIN SINGLE-VERB GATE ON PURPOSE (R172-R174 EXPRESS-
+# not-ABSORB posture). Today "apply" resolves to one nix-job step running
+# `just <just_recipe_prefix>-apply` -- an overlay-owned Justfile recipe, not
+# raw kubectl in this file. When the TIN-2609 owner-overlay controller's
+# Accept/Refuse operand-class interface lands, that is a ONE-LINE swap
+# inside the SAME step (the recipe becomes `gf-controller accept <operand>`
+# or the run fails on `refuse`) -- this chassis grows no new ceremony to
+# absorb it, because it was never doing more than calling one verb.
+
+on:
+  workflow_call:
+    inputs:
+      stack_name:
+        description: "Display name for job naming and the step summary, e.g. \"Archive Stack\"."
+        type: string
+        required: true
+      stack_dir:
+        description: "k8s overlay directory this stack validates/applies, e.g. k8s/archive. Documentation + step-summary only in the default (Justfile-delegating) validate path."
+        type: string
+        required: true
+      just_recipe_prefix:
+        description: >-
+          Justfile recipe prefix. Verbs called: <prefix>-validate,
+          <prefix>-server-dry-run, <prefix>-apply, and (if has_health_gate)
+          <prefix>-health. Matches today's archive-stack / form-stack /
+          list-stack / web-stack naming; mail-crs.yml is the one irregular
+          case (its recipes are mail-cr-*, not mail-crs-*) -- pass the
+          recipe prefix as it actually exists in the overlay's Justfile, not
+          a derived guess.
+        type: string
+        required: true
+      protected_environment:
+        description: "GitHub environment gating the server/apply job, e.g. mail, web-apply."
+        type: string
+        required: true
+      gf_core_ref:
+        description: "Pinned tinyland-inc/GloriousFlywheel commit SHA (verified before every job runs, matching today's GF_CORE_REF + \"Verify GloriousFlywheel core checkout\" step)."
+        type: string
+        required: true
+      kubeconfig_secret_display_name:
+        description: "Primary kubeconfig secret's name, for the credential-gate error message (e.g. MAIL_APPLY_KUBECONFIG_B64)."
+        type: string
+        required: true
+      kubeconfig_secret_display_name_alias:
+        description: "Compatibility-alias secret name for the error message. Empty = no alias documented (web-stack today)."
+        type: string
+        required: false
+        default: ""
+      remediation_ref:
+        description: "Doc/contract path naming where to provision the kubeconfig secret, surfaced in the credential-gate error."
+        type: string
+        required: false
+        default: ""
+      rewrite_in_cluster_server:
+        description: "Passthrough to gitops-credential-gate. false for web-stack's tailnet-routed SA kubeconfig."
+        type: boolean
+        required: false
+        default: true
+      action:
+        description: "server-dry-run (default) or apply. Caller forwards its own workflow_dispatch `action` choice input here unchanged."
+        type: string
+        required: false
+        default: "server-dry-run"
+      has_health_gate:
+        description: "Run <prefix>-health after apply and publish it to the step summary (web-stack.yml's In-cluster health gate step)."
+        type: boolean
+        required: false
+        default: false
+      require_confirm_sentinel:
+        description: "Require a typed confirm=apply sentinel before any apply step (web-stack.yml's fail-closed dispatch gate). Caller forwards its own `confirm` dispatch input via the confirm_value input below."
+        type: boolean
+        required: false
+        default: false
+      confirm_value:
+        description: "The operator-typed sentinel value, checked only when require_confirm_sentinel is true. Must equal \"apply\"."
+        type: string
+        required: false
+        default: ""
+      apply_image:
+        description: "Optional resolved image reference forwarded into the server-dry-run/apply job env as APPLY_IMAGE (web-stack.yml's digest-pinned image input)."
+        type: string
+        required: false
+        default: ""
+      apply_replicas:
+        description: "Optional replica count forwarded into the server-dry-run/apply job env as APPLY_REPLICAS."
+        type: string
+        required: false
+        default: ""
+      enable_ci_green_gate:
+        description: >-
+          Opt-in CD merge-on-green gate (web-stack.yml's "CI-green gate
+          (SITE ci.yml success for this commit) [CD only]" step): runs
+          ci_green_gate_recipe via nix-job, gated to repository_dispatch
+          only, BEFORE the server-dry-run/apply steps. The manual
+          workflow_dispatch path is never gated by this (its authorization
+          is the confirm sentinel / protected environment).
+        type: boolean
+        required: false
+        default: false
+      ci_green_gate_recipe:
+        description: "Just recipe implementing the CI-green check, e.g. web-cd-ci-green-gate. Required when enable_ci_green_gate is true; does not follow the <prefix>-<verb> convention because it checks a DIFFERENT repo's CI, not this stack's own."
+        type: string
+        required: false
+        default: ""
+      ci_green_repo:
+        description: "owner/repo whose ci.yml run must have concluded success for ci_green_sha, forwarded as CI_GREEN_REPO."
+        type: string
+        required: false
+        default: ""
+      ci_green_sha:
+        description: "Commit SHA to check, forwarded as CI_GREEN_SHA (typically the CD signal's client_payload.sha)."
+        type: string
+        required: false
+        default: ""
+      runner_label:
+        description: "Runner label for both jobs."
+        type: string
+        required: false
+        default: "tinyland-nix"
+    secrets:
+      KUBECONFIG_B64:
+        description: "Primary kubeconfig secret value, e.g. secrets.MAIL_APPLY_KUBECONFIG_B64 from the caller's protected environment."
+        required: false
+      KUBECONFIG_B64_ALIAS:
+        description: "Compatibility-alias kubeconfig secret value. Leave unset if the stack has no alias."
+        required: false
+      CI_GREEN_READ_TOKEN:
+        description: "Optional read token for the ci_green_repo's run metadata. Falls back to the ambient github.token, matching web-stack.yml's SITE_CI_READ_TOKEN fallback -- only needed when enable_ci_green_gate is true and the target repo is not readable with the default token."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate ${{ inputs.stack_name }}
+    runs-on: ${{ inputs.runner_label }}
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout public GloriousFlywheel core
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ inputs.gf_core_ref }}
+          path: GloriousFlywheel
+          persist-credentials: false
+
+      - name: Verify GloriousFlywheel core checkout
+        shell: bash
+        env:
+          GF_CORE_REF: ${{ inputs.gf_core_ref }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
+
+      - name: Validate manifests (overlay-owned Justfile recipe)
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          GF_JUST_RECIPE_PREFIX: ${{ inputs.just_recipe_prefix }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${{ inputs.gf_core_ref }}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just "${GF_JUST_RECIPE_PREFIX}-validate"
+
+  apply:
+    name: Server dry-run or apply (${{ inputs.stack_name }})
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch'
+    needs: validate
+    runs-on: ${{ inputs.runner_label }}
+    environment: ${{ inputs.protected_environment }}
+    steps:
+      - name: Confirm apply intent (fail-closed sentinel, opt-in)
+        if: inputs.require_confirm_sentinel && inputs.action == 'apply'
+        shell: bash
+        env:
+          CONFIRM_VALUE: ${{ inputs.confirm_value }}
+        run: |
+          if [[ "${CONFIRM_VALUE}" != "apply" ]]; then
+            echo "::error::Refusing to apply: set confirm=apply to authorize this cutover (fail-closed, operator-dispatch-only)."
+            exit 1
+          fi
+
+      - name: Credential gate + materialize kubeconfig
+        id: credentials
+        # Fully-qualified self-reference, not ./local: this step runs in the
+        # calling repo's checkout, which does not contain this repo's tree.
+        # Bump alongside this repo's own @v2 tag per AGENTS.md golden rule 1
+        # (never @main for internal refs).
+        uses: tinyland-inc/ci-templates/.github/actions/gitops-credential-gate@v2
+        with:
+          kubeconfig_b64: ${{ secrets.KUBECONFIG_B64 }}
+          kubeconfig_b64_alias: ${{ secrets.KUBECONFIG_B64_ALIAS }}
+          secret_name: ${{ inputs.kubeconfig_secret_display_name }}
+          secret_name_alias: ${{ inputs.kubeconfig_secret_display_name_alias }}
+          environment_name: ${{ inputs.protected_environment }}
+          remediation_ref: ${{ inputs.remediation_ref }}
+          kubeconfig_filename: "${{ inputs.just_recipe_prefix }}.kubeconfig"
+          rewrite_in_cluster_server: ${{ inputs.rewrite_in_cluster_server }}
+
+      - name: Checkout overlay
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout public GloriousFlywheel core
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ inputs.gf_core_ref }}
+          path: GloriousFlywheel
+          persist-credentials: false
+
+      - name: Verify GloriousFlywheel core checkout
+        shell: bash
+        env:
+          GF_CORE_REF: ${{ inputs.gf_core_ref }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
+
+      - name: CI-green gate (opt-in, repository_dispatch only)
+        if: inputs.enable_ci_green_gate && github.event_name == 'repository_dispatch'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          GH_TOKEN: ${{ secrets.CI_GREEN_READ_TOKEN != '' && secrets.CI_GREEN_READ_TOKEN || github.token }}
+          CI_GREEN_SHA: ${{ inputs.ci_green_sha }}
+          CI_GREEN_REPO: ${{ inputs.ci_green_repo }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            nix develop . -c just "${{ inputs.ci_green_gate_recipe }}"
+
+      - name: Server dry-run
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          GITOPS_STACK_KUBECONFIG: ${{ steps.credentials.outputs.kubeconfig_path }}
+          GF_JUST_RECIPE_PREFIX: ${{ inputs.just_recipe_prefix }}
+          APPLY_IMAGE: ${{ inputs.apply_image }}
+          APPLY_REPLICAS: ${{ inputs.apply_replicas }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${{ inputs.gf_core_ref }}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just "${GF_JUST_RECIPE_PREFIX}-server-dry-run"
+
+      # THE THIN SINGLE-VERB GATE. See header comment: this line is the
+      # entire apply authority today, and stays a single delegated verb
+      # when it later re-points at the owner-overlay controller's
+      # Accept/Refuse interface.
+      - name: Apply
+        if: inputs.action == 'apply'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          GITOPS_STACK_KUBECONFIG: ${{ steps.credentials.outputs.kubeconfig_path }}
+          GF_JUST_RECIPE_PREFIX: ${{ inputs.just_recipe_prefix }}
+          APPLY_IMAGE: ${{ inputs.apply_image }}
+          APPLY_REPLICAS: ${{ inputs.apply_replicas }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${{ inputs.gf_core_ref }}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just "${GF_JUST_RECIPE_PREFIX}-apply"
+
+      - name: In-cluster health gate (opt-in)
+        if: inputs.action == 'apply' && inputs.has_health_gate
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          GITOPS_STACK_KUBECONFIG: ${{ steps.credentials.outputs.kubeconfig_path }}
+          GF_JUST_RECIPE_PREFIX: ${{ inputs.just_recipe_prefix }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${{ inputs.gf_core_ref }}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just "${GF_JUST_RECIPE_PREFIX}-health" | tee "${RUNNER_TEMP}/gitops-stack-health.txt"
+            {
+              echo "## ${{ inputs.stack_name }} apply"
+              echo ""
+              echo "On-cluster health gate:"
+              echo ""
+              echo '```'
+              cat "${RUNNER_TEMP}/gitops-stack-health.txt"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"

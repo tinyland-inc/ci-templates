@@ -5,6 +5,23 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Proposed (draft, not tagged — see docs/gitops-stack-chassis.md)
+
+- **TIN-2597 GITOPS-STACK CHASSIS**: `spoke-gitops-stack.yml` + two new
+  composites, `gitops-credential-gate` and `gitops-manifest-validate`.
+  Condenses the byte-near-identical apply chassis copy-pasted across
+  Great-Falls-Tool-Bus/great-falls-tool-bus-infra's `mail-crs.yml` /
+  `list-crs.yml` / `form-crs.yml` / `archive-stack.yml` / `web-stack.yml`
+  into one parameterized reusable workflow, generalizing the
+  fail-soft-diagnosed / fail-closed-admission kubeconfig gate pattern those
+  five files (and, independently, MassageIthaca's
+  `application-apply-ceremony.yml`) all reinvent per stack. Extracted per
+  the ratified R172-R174 extract-and-promote posture — condensation, not
+  new product surface: no behavior changes for the five existing GFTB
+  workflows or MMS's ceremony until each opts in with its own PR in its own
+  repo. DRAFT: authored unsigned, held for operator + mms-peer review before
+  any GFTB/MMS caller is migrated.
+
 ### Removed
 
 - **TIN-489: zero-caller TTL half of the deprecated lane family evicted from

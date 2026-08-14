@@ -1,0 +1,74 @@
+# EXAMPLE ONLY — not a real workflow file, not wired to any repo.
+#
+# What great-falls-tool-bus-infra's .github/workflows/mail-crs.yml (154
+# lines today) becomes if it opts into spoke-gitops-stack.yml: the on:
+# block and every trigger stay in the overlay repo (this file is exactly
+# what would live there), and everything the four/five copies duplicated
+# moves into the one reusable workflow this proposal adds to ci-templates.
+#
+# NOT AUTHORED IN great-falls-tool-bus-infra BY THIS PR. Migrating the real
+# mail-crs.yml (and list-crs.yml, form-crs.yml, archive-stack.yml,
+# web-stack.yml) is each stack's own follow-up PR in that repo, on its own
+# review cycle, after this chassis is reviewed and tagged.
+
+name: Mail CRs
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mail-crs.yml"
+      - "Justfile"
+      - "k8s/mail/**"
+      - "scripts/validate-mail-crs.sh"
+      - "docs/ci-credentials.md"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mail-crs.yml"
+      - "Justfile"
+      - "k8s/mail/**"
+      - "scripts/validate-mail-crs.sh"
+      - "docs/ci-credentials.md"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        default: "server-dry-run"
+        type: choice
+        options: [server-dry-run, apply]
+
+jobs:
+  mail-crs:
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-gitops-stack.yml@v3
+    with:
+      stack_name: "Mail CRs"
+      stack_dir: "k8s/mail"
+      just_recipe_prefix: "mail-cr"
+      protected_environment: "mail"
+      gf_core_ref: "2281b576bce0e8dd776a047b84e7464f5b508a62"
+      kubeconfig_secret_display_name: "MAIL_APPLY_KUBECONFIG_B64"
+      kubeconfig_secret_display_name_alias: "GFTB_MAIL_KUBECONFIG_B64"
+      action: ${{ github.event.inputs.action || 'server-dry-run' }}
+    secrets:
+      KUBECONFIG_B64: ${{ secrets.MAIL_APPLY_KUBECONFIG_B64 }}
+      KUBECONFIG_B64_ALIAS: ${{ secrets.GFTB_MAIL_KUBECONFIG_B64 }}
+
+# 154 lines -> ~40 (this file). list-crs.yml / form-crs.yml /
+# archive-stack.yml are the same shape with stack_name / stack_dir /
+# just_recipe_prefix swapped and kubeconfig_secret_display_name_alias
+# unchanged (all four share the mail environment + secret pair).
+#
+# web-stack.yml's version additionally sets protected_environment:
+# web-apply, kubeconfig_secret_display_name: WEB_APPLY_KUBECONFIG_B64 (no
+# alias -> omit kubeconfig_secret_display_name_alias and
+# KUBECONFIG_B64_ALIAS), rewrite_in_cluster_server: false,
+# require_confirm_sentinel: true, has_health_gate: true, enable_ci_green_gate:
+# true with ci_green_gate_recipe: web-cd-ci-green-gate / ci_green_repo:
+# great-falls-tool-bus/greatfallstoolbus.org / ci_green_sha forwarded from
+# its repository_dispatch client_payload.sha, and forwards apply_image /
+# apply_replicas from its own richer workflow_dispatch inputs. The
+# repository_dispatch trigger itself still lives in the caller (this file's
+# `on:` block would gain a `repository_dispatch: types: [web-image-published]`
+# entry) -- spoke-gitops-stack.yml only receives the already-normalized
+# inputs either trigger shape resolves to.
