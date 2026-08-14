@@ -78,6 +78,19 @@ on:
         type: string
         required: false
         default: ""
+      kubeconfig_env_var_name:
+        description: >-
+          Env var name the overlay's own <prefix>-server-dry-run/-apply/-health
+          Justfile recipes read the materialized kubeconfig path from --
+          THEIR name, verbatim, not a chassis-invented one (e.g.
+          GFTB_MAIL_KUBECONFIG for mail-cr/list-stack/form-stack/
+          archive-stack -- all four read this exact var per GFTB's Justfile
+          `_mail-kubeconfig-inputs` recipe -- or WEB_APPLY_KUBECONFIG for
+          web-stack). Exported into every later step's shell environment via
+          GITHUB_ENV under this exact name; the four/five source stacks do
+          not share one name, so this has no safe default.
+        type: string
+        required: true
       remediation_ref:
         description: "Doc/contract path naming where to provision the kubeconfig secret, surfaced in the credential-gate error."
         type: string
@@ -94,41 +107,62 @@ on:
         required: false
         default: "server-dry-run"
       has_health_gate:
-        description: "Run <prefix>-health after apply and publish it to the step summary (web-stack.yml's In-cluster health gate step)."
+        description: >-
+          Run <prefix>-health after apply and publish it to the step summary
+          (web-stack.yml's In-cluster health gate step). Defaults true --
+          web-stack.yml, the one source file this capability comes from,
+          runs it unconditionally, so a caller with no <prefix>-health
+          Justfile recipe (today: mail-cr/list-stack/form-stack/
+          archive-stack) must explicitly pass false rather than the chassis
+          silently skipping a gate its origin required.
         type: boolean
         required: false
-        default: false
+        default: true
       require_confirm_sentinel:
-        description: "Require a typed confirm=apply sentinel before any apply step (web-stack.yml's fail-closed dispatch gate). Caller forwards its own `confirm` dispatch input via the confirm_value input below."
+        description: >-
+          Require a typed confirm=apply sentinel before any apply step
+          (web-stack.yml's fail-closed dispatch gate). Caller forwards its
+          own `confirm` dispatch input via the confirm_value input below.
+          Defaults true to match web-stack.yml's unconditional posture; a
+          caller with no equivalent dispatch input (today:
+          mail-cr/list-stack/form-stack/archive-stack) must explicitly pass
+          false, an audited opt-out rather than a silent omission.
         type: boolean
         required: false
-        default: false
+        default: true
       confirm_value:
         description: "The operator-typed sentinel value, checked only when require_confirm_sentinel is true. Must equal \"apply\"."
         type: string
         required: false
         default: ""
       apply_image:
-        description: "Optional resolved image reference forwarded into the server-dry-run/apply job env as APPLY_IMAGE (web-stack.yml's digest-pinned image input)."
+        description: "Optional resolved image reference forwarded into the server-dry-run/apply job env as WEB_APPLY_IMAGE -- web-stack.yml's own Justfile var name, verbatim (web-stack.yml's digest-pinned image input)."
         type: string
         required: false
         default: ""
       apply_replicas:
-        description: "Optional replica count forwarded into the server-dry-run/apply job env as APPLY_REPLICAS."
+        description: "Optional replica count forwarded into the server-dry-run/apply job env as WEB_APPLY_REPLICAS -- web-stack.yml's own Justfile var name, verbatim."
         type: string
         required: false
         default: ""
       enable_ci_green_gate:
         description: >-
-          Opt-in CD merge-on-green gate (web-stack.yml's "CI-green gate
-          (SITE ci.yml success for this commit) [CD only]" step): runs
+          CD merge-on-green gate (web-stack.yml's "CI-green gate (SITE
+          ci.yml success for this commit) [CD only]" step): runs
           ci_green_gate_recipe via nix-job, gated to repository_dispatch
           only, BEFORE the server-dry-run/apply steps. The manual
           workflow_dispatch path is never gated by this (its authorization
-          is the confirm sentinel / protected environment).
+          is the confirm sentinel / protected environment). Defaults true to
+          match web-stack.yml's unconditional posture on its CD trigger; a
+          caller with a repository_dispatch trigger but no CI-green
+          equivalent must explicitly pass false (an audited opt-out). Inert
+          by construction for a caller with no repository_dispatch trigger
+          at all (this step's own `if:` never matches), so
+          mail-cr/list-stack/form-stack/archive-stack need not set it today,
+          though the worked example still sets it false for the record.
         type: boolean
         required: false
-        default: false
+        default: true
       ci_green_gate_recipe:
         description: "Just recipe implementing the CI-green check, e.g. web-cd-ci-green-gate. Required when enable_ci_green_gate is true; does not follow the <prefix>-<verb> convention because it checks a DIFFERENT repo's CI, not this stack's own."
         type: string
@@ -215,7 +249,15 @@ jobs:
     environment: ${{ inputs.protected_environment }}
     steps:
       - name: Confirm apply intent (fail-closed sentinel, opt-in)
-        if: inputs.require_confirm_sentinel && inputs.action == 'apply'
+        # Manual operator path only -- matches web-stack.yml's own gating
+        # (`if: github.event_name == 'workflow_dispatch'`) verbatim. The CD
+        # (repository_dispatch) path's authorization is the CI-green gate
+        # below, never this typed sentinel: a repository_dispatch payload
+        # has no operator-typed confirm_value at all, so without this
+        # event_name guard every CD deploy would hit the else branch below
+        # and hard-fail merge-on-green (confirm_value is always empty on
+        # that trigger).
+        if: inputs.require_confirm_sentinel && inputs.action == 'apply' && github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           CONFIRM_VALUE: ${{ inputs.confirm_value }}
@@ -225,13 +267,51 @@ jobs:
             exit 1
           fi
 
+      # TOOLCHAIN BEFORE FIRST USE. gitops-credential-gate's in-cluster
+      # server-URL rewrite (rewrite_in_cluster_server, default true) shells
+      # out to bare `kubectl` -- its own PRECONDITION doc names a prior
+      # setup-nix step as the way to satisfy that. Every kubectl call in the
+      # GFTB source workflows this chassis condenses runs inside
+      # `nix develop ... -c kubectl`, never bare, so bare kubectl is not
+      # assumed present on this runner class; without this step the
+      # credential-gate step below is the FIRST thing in the job that could
+      # touch kubectl, before any toolchain exists on PATH.
+      - name: Setup Nix (toolchain for the credential gate below)
+        if: inputs.rewrite_in_cluster_server
+        # Fully-qualified self-reference, pinned exact per RELEASING.md's
+        # composite-internal-refs discipline (exact vX.Y.Z, not floating
+        # @v2/@main). Unlike gitops-credential-gate below, setup-nix already
+        # ships unchanged in the latest real release, so it gets the actual
+        # tag rather than a SHA pin.
+        uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.13.0
+
+      - name: Ensure kubectl on PATH (only used for the in-cluster rewrite)
+        if: inputs.rewrite_in_cluster_server
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v kubectl >/dev/null 2>&1 || nix profile install nixpkgs#kubectl
+
       - name: Credential gate + materialize kubeconfig
         id: credentials
         # Fully-qualified self-reference, not ./local: this step runs in the
         # calling repo's checkout, which does not contain this repo's tree.
-        # Bump alongside this repo's own @v2 tag per AGENTS.md golden rule 1
-        # (never @main for internal refs).
-        uses: tinyland-inc/ci-templates/.github/actions/gitops-credential-gate@v2
+        # SHA-pinned, not @v2: this repo has cut no vX.Y.Z release
+        # containing gitops-credential-gate yet (still under "## [Unreleased]"
+        # in CHANGELOG.md as of this commit) -- @v2 (latest: v2.13.0) 404s on
+        # this path today, it is not merely a floating-tag policy violation.
+        # Per RELEASING.md's composite-internal-refs rule (exact immutable
+        # release or a SHA, never @main/@vMAJOR for internal refs) and the
+        # third-party-Action convention this repo already follows elsewhere
+        # in this file (actions/checkout pinned by commit), pin to this PR's
+        # own already-pushed head (tinyland-inc/ci-templates#133 @
+        # 1eabc3d) where this composite's unmodified content already lives.
+        # Bump to the exact vX.Y.Z tag (proposed v3.0.0 per
+        # docs/gitops-stack-chassis.md) once this chassis is released --
+        # RELEASING.md step 3 sanctions naming that exact version here
+        # before the release commit lands, once it is confirmed rather than
+        # still an open question.
+        uses: tinyland-inc/ci-templates/.github/actions/gitops-credential-gate@1eabc3d98146a22fb7b383e3131cd162b646938d
         with:
           kubeconfig_b64: ${{ secrets.KUBECONFIG_B64 }}
           kubeconfig_b64_alias: ${{ secrets.KUBECONFIG_B64_ALIAS }}
@@ -241,6 +321,29 @@ jobs:
           remediation_ref: ${{ inputs.remediation_ref }}
           kubeconfig_filename: "${{ inputs.just_recipe_prefix }}.kubeconfig"
           rewrite_in_cluster_server: ${{ inputs.rewrite_in_cluster_server }}
+
+      - name: Export kubeconfig path under the overlay's own env var name
+        # THE LIVE ENV-VAR CONTRACT, verbatim: GFTB's Justfile recipes read
+        # a fixed var name per stack family (GFTB_MAIL_KUBECONFIG for
+        # mail-cr/list-stack/form-stack/archive-stack,
+        # WEB_APPLY_KUBECONFIG for web-stack) -- see
+        # `_mail-kubeconfig-inputs` / `_web-apply-kubeconfig-only` in
+        # great-falls-tool-bus-infra's Justfile. A chassis-invented name
+        # (e.g. the former GITOPS_STACK_KUBECONFIG) is never read by any
+        # real recipe, so every server-dry-run/apply/health call would fail
+        # closed on a missing-kubeconfig error even with a valid credential.
+        # Exported via GITHUB_ENV so it is present, under the caller's exact
+        # name, in every later step's shell -- including inside each
+        # nix-job step's `nix develop -c just ...` invocation -- without
+        # threading it through each step's own `env:` block by a name this
+        # workflow cannot know statically.
+        shell: bash
+        env:
+          KUBECONFIG_ENV_VAR_NAME: ${{ inputs.kubeconfig_env_var_name }}
+          KUBECONFIG_PATH: ${{ steps.credentials.outputs.kubeconfig_path }}
+        run: |
+          set -euo pipefail
+          echo "${KUBECONFIG_ENV_VAR_NAME}=${KUBECONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Checkout overlay
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -285,10 +388,14 @@ jobs:
       - name: Server dry-run
         uses: ./GloriousFlywheel/.github/actions/nix-job
         env:
-          GITOPS_STACK_KUBECONFIG: ${{ steps.credentials.outputs.kubeconfig_path }}
+          # Kubeconfig path is already in the job env under the caller's own
+          # name (previous step); not re-declared here under an invented one.
           GF_JUST_RECIPE_PREFIX: ${{ inputs.just_recipe_prefix }}
-          APPLY_IMAGE: ${{ inputs.apply_image }}
-          APPLY_REPLICAS: ${{ inputs.apply_replicas }}
+          # WEB_APPLY_IMAGE / WEB_APPLY_REPLICAS: web-stack.yml's own Justfile
+          # var names (web-stack-apply reads these two exact names), not a
+          # chassis-generic APPLY_IMAGE/APPLY_REPLICAS no recipe reads.
+          WEB_APPLY_IMAGE: ${{ inputs.apply_image }}
+          WEB_APPLY_REPLICAS: ${{ inputs.apply_replicas }}
         with:
           push-cache: "false"
           command: |
@@ -306,10 +413,12 @@ jobs:
         if: inputs.action == 'apply'
         uses: ./GloriousFlywheel/.github/actions/nix-job
         env:
-          GITOPS_STACK_KUBECONFIG: ${{ steps.credentials.outputs.kubeconfig_path }}
+          # Kubeconfig path is already in the job env under the caller's own
+          # name (Export step above); not re-declared here under an invented
+          # one. WEB_APPLY_IMAGE/WEB_APPLY_REPLICAS: see Server dry-run above.
           GF_JUST_RECIPE_PREFIX: ${{ inputs.just_recipe_prefix }}
-          APPLY_IMAGE: ${{ inputs.apply_image }}
-          APPLY_REPLICAS: ${{ inputs.apply_replicas }}
+          WEB_APPLY_IMAGE: ${{ inputs.apply_image }}
+          WEB_APPLY_REPLICAS: ${{ inputs.apply_replicas }}
         with:
           push-cache: "false"
           command: |
@@ -323,7 +432,8 @@ jobs:
         if: inputs.action == 'apply' && inputs.has_health_gate
         uses: ./GloriousFlywheel/.github/actions/nix-job
         env:
-          GITOPS_STACK_KUBECONFIG: ${{ steps.credentials.outputs.kubeconfig_path }}
+          # Kubeconfig path is already in the job env under the caller's own
+          # name (Export step above).
           GF_JUST_RECIPE_PREFIX: ${{ inputs.just_recipe_prefix }}
         with:
           push-cache: "false"

@@ -11,13 +11,21 @@ MMS migrates.
 Five near-identical GitHub Actions workflows in
 `Great-Falls-Tool-Bus/great-falls-tool-bus-infra`:
 
-| File | k8s dir | just prefix | protected env | secret (+ alias) | health gate |
-|---|---|---|---|---|---|
-| `mail-crs.yml` | `k8s/mail` | `mail-cr` | `mail` | `MAIL_APPLY_KUBECONFIG_B64` (+ `GFTB_MAIL_KUBECONFIG_B64`) | no |
-| `list-crs.yml` | `k8s/list` | `list-stack` | `mail` | `MAIL_APPLY_KUBECONFIG_B64` (+ `GFTB_MAIL_KUBECONFIG_B64`) | no |
-| `form-crs.yml` | `k8s/form` | `form-stack` | `mail` | `MAIL_APPLY_KUBECONFIG_B64` (+ `GFTB_MAIL_KUBECONFIG_B64`) | no |
-| `archive-stack.yml` | `k8s/archive` | `archive-stack` | `mail` | `MAIL_APPLY_KUBECONFIG_B64` (+ `GFTB_MAIL_KUBECONFIG_B64`) | no |
-| `web-stack.yml` | `k8s/web` | `web-stack` | `web-apply` | `WEB_APPLY_KUBECONFIG_B64` (no alias) | yes |
+| File | k8s dir | just prefix | protected env | secret (+ alias) | materialized kubeconfig env var | health gate |
+|---|---|---|---|---|---|---|
+| `mail-crs.yml` | `k8s/mail` | `mail-cr` | `mail` | `MAIL_APPLY_KUBECONFIG_B64` (+ `GFTB_MAIL_KUBECONFIG_B64`) | `GFTB_MAIL_KUBECONFIG` | no |
+| `list-crs.yml` | `k8s/list` | `list-stack` | `mail` | `MAIL_APPLY_KUBECONFIG_B64` (+ `GFTB_MAIL_KUBECONFIG_B64`) | `GFTB_MAIL_KUBECONFIG` | no |
+| `form-crs.yml` | `k8s/form` | `form-stack` | `mail` | `MAIL_APPLY_KUBECONFIG_B64` (+ `GFTB_MAIL_KUBECONFIG_B64`) | `GFTB_MAIL_KUBECONFIG` | no |
+| `archive-stack.yml` | `k8s/archive` | `archive-stack` | `mail` | `MAIL_APPLY_KUBECONFIG_B64` (+ `GFTB_MAIL_KUBECONFIG_B64`) | `GFTB_MAIL_KUBECONFIG` | no |
+| `web-stack.yml` | `k8s/web` | `web-stack` | `web-apply` | `WEB_APPLY_KUBECONFIG_B64` (no alias) | `WEB_APPLY_KUBECONFIG` | yes |
+
+The "materialized kubeconfig env var" column is the name each stack's own
+Justfile recipe (`_mail-kubeconfig-inputs` / `_web-apply-kubeconfig-only`)
+reads the decoded kubeconfig's path from — **not** the same string as the
+secret column (that's the base64 secret; this is the on-disk path var).
+`spoke-gitops-stack.yml`'s `kubeconfig_env_var_name` input carries this
+name verbatim per caller (see "Review fixes applied" below — the first
+draft invented a chassis-generic name instead, which no real recipe reads).
 
 Diffed 2026-08-13: `mail-crs.yml`, `list-crs.yml`, `form-crs.yml` and
 `archive-stack.yml` are the **same file** with four strings swapped (stack
@@ -137,12 +145,20 @@ who calls it with that kubeconfig changes.
    traffic from `Great-Falls-Tool-Bus/great-falls-tool-bus-infra` — the
    fleet's per-org runner registration is out of scope for this proposal to
    verify.
-2. **Golden rule 2 ("default-off, opt-in")** technically does not bind a
-   brand-new workflow (there is no existing traffic to keep byte-identical
-   to) — but the design still treats every `web-stack.yml`-only capability
-   as an opt-in input rather than baking it into the default path, on the
-   theory that a chassis two stacks don't need shouldn't run for them. Flag
-   if that reasoning should not extend to future stacks.
+2. **Golden rule 2 ("default-off, opt-in") — REVISED after first review
+   pass.** The initial draft defaulted `require_confirm_sentinel`,
+   `has_health_gate`, and `enable_ci_green_gate` all to `false` (opt-in).
+   That inverted the risk: a future caller migrating something shaped like
+   `web-stack.yml` (which runs all three unconditionally) who simply forgot
+   one input would silently lose a fail-closed gate its origin required,
+   with no error — a silent capability downgrade, not a missing feature.
+   All three now default `true` (the *originals'* required posture) and the
+   four mail-family stacks — none of which have a confirm sentinel, health
+   check, or CI-green gate today — opt **out** explicitly instead (see the
+   worked example). `enable_ci_green_gate` is inert-by-construction for any
+   caller with no `repository_dispatch` trigger regardless of this default
+   (its own step `if:` requires that event), so this mostly matters for
+   `require_confirm_sentinel`/`has_health_gate` today.
 3. **`gitops-manifest-validate`'s `assertions_script` sourcing model** (the
    composite `source`s the caller's script rather than executing it as a
    subprocess) means the caller's assertions run in the same shell as
@@ -153,4 +169,53 @@ who calls it with that kubeconfig changes.
 4. **Versioning**: proposing this land as a new `v3` minor once merged
    (additive, no existing consumer touched) rather than folding into the
    current `v2` line immediately — MMS-peer to confirm against
-   `RELEASING.md`'s actual cadence rather than this doc guessing it.
+   `RELEASING.md`'s actual cadence rather than this doc guessing it. Until
+   that is confirmed, `spoke-gitops-stack.yml`'s own internal ref to
+   `gitops-credential-gate` is SHA-pinned to this PR's already-pushed head
+   (`1eabc3d`, PR #133) rather than `@v3.0.0` or the (wrong — see review
+   fixes below) original `@v2`: no `vX.Y.Z` tag contains this composite yet
+   (still `## [Unreleased]` in `CHANGELOG.md`), so an exact-tag pin would be
+   a dangling ref, and `RELEASING.md`'s composite-internal-refs rule forbids
+   the floating `@v2`/`@main` forms outright. Swap to the exact release tag
+   once cut.
+
+## Review fixes applied (2026-08-14 pass)
+
+The first draft above was reviewed against the actual GFTB source before any
+caller migration was authorized. Five defects, all now fixed in this same
+PR:
+
+- **B1 (env-var contract).** The kubeconfig path was exported under an
+  invented `GITOPS_STACK_KUBECONFIG` name that no Justfile recipe reads —
+  every real `<prefix>-server-dry-run`/`-apply`/`-health` call would have
+  failed closed even with a valid credential. Fixed: a new required
+  `kubeconfig_env_var_name` input (`GFTB_MAIL_KUBECONFIG` for the four
+  mail-family stacks, `WEB_APPLY_KUBECONFIG` for web-stack — GFTB's own
+  Justfile `_mail-kubeconfig-inputs`/`_web-apply-kubeconfig-only` recipes,
+  read verbatim) drives a `GITHUB_ENV` export under the caller's real name.
+  Same defect on the image/replica axis: `APPLY_IMAGE`/`APPLY_REPLICAS` are
+  now `WEB_APPLY_IMAGE`/`WEB_APPLY_REPLICAS`, `web-stack-apply`'s own exact
+  var names.
+- **B2 (gate defaults).** See open question 2 above — `require_confirm_sentinel`
+  / `has_health_gate` / `enable_ci_green_gate` now default `true`
+  (the originals' required posture); non-web-stack callers opt out.
+- **B3 (CD sentinel semantics).** The confirm-sentinel step's `if:` gained
+  `&& github.event_name == 'workflow_dispatch'`, restoring
+  `web-stack.yml`'s exact gating. Without it, once B2 flipped the default to
+  `true`, every CD (`repository_dispatch`) deploy would have hit the typed
+  sentinel with an always-empty `confirm_value` and hard-failed —
+  `web-stack.yml`'s live merge-on-green path is authorized by the CI-green
+  gate, never this sentinel.
+- **B4 (`@v2` self-reference).** Not merely a floating-tag style issue: no
+  `v2.x` release contains `gitops-credential-gate` at all yet, so `@v2`
+  404s today. SHA-pinned to this PR's own pushed head per RELEASING.md's
+  composite-internal-refs rule (see open question 4 above for the
+  exact-tag follow-up).
+- **B5 (toolchain ordering).** `gitops-credential-gate`'s in-cluster
+  server-URL rewrite shells out to bare `kubectl`, undocumented-precondition
+  style — every kubectl call in the GFTB source workflows instead runs
+  inside `nix develop ... -c kubectl`. The credential-gate step was the
+  first thing in the `apply` job that could touch kubectl, before any
+  toolchain existed on the runner's PATH. Fixed: a `setup-nix` step +
+  idempotent `nix profile install nixpkgs#kubectl` now run first, gated on
+  the same `rewrite_in_cluster_server` input that gates the rewrite itself.

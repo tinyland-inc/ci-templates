@@ -20,7 +20,18 @@ Versioning: [SemVer 2.0](https://semver.org/).
   new product surface: no behavior changes for the five existing GFTB
   workflows or MMS's ceremony until each opts in with its own PR in its own
   repo. DRAFT: authored unsigned, held for operator + mms-peer review before
-  any GFTB/MMS caller is migrated.
+  any GFTB/MMS caller is migrated. First review pass (2026-08-14) fixed five
+  defects found by reading GFTB's live workflows/Justfile against the draft:
+  the kubeconfig/image/replica env vars now match the overlay's own Justfile
+  names verbatim instead of chassis-invented ones; the confirm-sentinel,
+  health-gate, and CI-green-gate inputs now default to the *originals'*
+  required posture (opt-out, not opt-in); the confirm sentinel is scoped
+  back to `workflow_dispatch` only so it can't hard-fail CD deploys; the
+  credential-gate composite's internal self-ref is SHA-pinned instead of the
+  broken `@v2` (no released tag contains that composite yet); and a
+  toolchain-setup step now runs before the credential gate's first bare
+  `kubectl` call. See docs/gitops-stack-chassis.md's "Review fixes applied"
+  section.
 
 ### Removed
 
