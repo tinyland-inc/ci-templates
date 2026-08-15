@@ -20,6 +20,7 @@ on:
       - "Justfile"
       - "k8s/mail/**"
       - "scripts/validate-mail-crs.sh"
+      - "docs/mail-cr-apply-runbook.md"
       - "docs/ci-credentials.md"
   push:
     branches: [main]
@@ -28,6 +29,7 @@ on:
       - "Justfile"
       - "k8s/mail/**"
       - "scripts/validate-mail-crs.sh"
+      - "docs/mail-cr-apply-runbook.md"
       - "docs/ci-credentials.md"
   workflow_dispatch:
     inputs:
