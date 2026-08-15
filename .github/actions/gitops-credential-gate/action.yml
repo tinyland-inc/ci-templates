@@ -1,0 +1,157 @@
+name: gitops-credential-gate
+description: |
+  Fail-soft materialization gate for a protected-environment kubeconfig
+  secret. Extracted from the byte-identical "Validate mail kubeconfig
+  secret" / "Materialize namespace kubeconfig" step pair copy-pasted across
+  Great-Falls-Tool-Bus/great-falls-tool-bus-infra's mail-crs.yml,
+  form-crs.yml, list-crs.yml and archive-stack.yml (TIN-2528/2420/2380), and
+  aligned with web-stack.yml's independent WEB_APPLY_KUBECONFIG_B64 gate.
+
+  FAIL-SOFT, NOT FAIL-OPEN: "soft" describes the DIAGNOSIS, not the
+  admission decision. A missing or empty credential still refuses (exit 1,
+  `::error::`) before any checkout or apply step runs -- this composite
+  never proceeds past a missing secret. What it removes is the raw
+  `base64 -d` / `kubectl` crash four steps downstream that names no owner
+  and no remediation; this gate fails at the first possible step, names the
+  exact secret(s) it checked, and points at the manifest contract that
+  documents where to provision them. Compare
+  docs/architecture/recursive-dogfooding.md's evidence doctrine on this
+  point: a fail-closed gate is only trustworthy if its failure is legible.
+
+  ONE canonical secret name + any number of compatibility aliases are
+  accepted (GFTB's four mail-adjacent stacks share ONE protected `mail`
+  environment and therefore one canonical name,
+  MAIL_APPLY_KUBECONFIG_B64, with GFTB_MAIL_KUBECONFIG_B64 retained as a
+  historical alias -- this composite generalizes that shape instead of
+  encoding it).
+
+  SUBSTRATE SEAM: this composite EXPRESSES the credential-presence contract
+  (which secret, which environment, masked decode, 0600 temp file, optional
+  in-cluster server-URL rewrite) and STOPS THERE. It never chooses what the
+  kubeconfig is then used for -- that decision (server dry-run vs. apply,
+  which `just` recipe, which manifest dir) stays entirely with the caller.
+  It does not create, rotate, or know the shape of the credential's
+  contents; that is cert-manager/controller/operator territory per the
+  ratified extract-and-promote posture (R172-R174) -- this module absorbs
+  none of it.
+
+  PRECONDITION: `kubectl` must already be on PATH when
+  rewrite_in_cluster_server is "true" (e.g. via a prior setup-nix step or by
+  running this composite inside a nix-job `command:` block). This composite
+  does not install a toolchain -- that stays the caller's job, same as every
+  other action in this repo.
+
+inputs:
+  kubeconfig_b64:
+    description: >-
+      Primary secret value, e.g. `${{ secrets.MAIL_APPLY_KUBECONFIG_B64 }}`.
+      Caller must pass the raw secrets-context expression; this composite
+      cannot read `secrets.*` itself (composite actions never can).
+    required: false
+    default: ""
+  kubeconfig_b64_alias:
+    description: >-
+      Optional compatibility-alias secret value, e.g.
+      `${{ secrets.GFTB_MAIL_KUBECONFIG_B64 }}`. Accepted wherever the
+      primary is unset so a stack can rename its canonical secret without a
+      flag-day. Leave empty for stacks with no alias (web-stack.yml today).
+    required: false
+    default: ""
+  secret_name:
+    description: "Display name of the primary secret, for the error message."
+    required: true
+  secret_name_alias:
+    description: "Display name of the alias secret, for the error message. Empty = no alias documented."
+    required: false
+    default: ""
+  environment_name:
+    description: "Protected environment name the secret is scoped to, for the error message (e.g. mail, web-apply)."
+    required: true
+  remediation_ref:
+    description: "Doc path or contract file naming where to provision the secret (e.g. k8s/web/secrets.contract.yaml, docs/runbooks/oncluster-web-cutover.md)."
+    required: false
+    default: ""
+  kubeconfig_filename:
+    description: "Basename for the materialized kubeconfig under RUNNER_TEMP."
+    required: false
+    default: "gitops-stack.kubeconfig"
+  rewrite_in_cluster_server:
+    description: >-
+      When "true" AND the runner is itself in-cluster (KUBERNETES_SERVICE_HOST
+      set), rewrite the kubeconfig's cluster server to
+      https://kubernetes.default.svc before use -- the rewrite mail-crs.yml /
+      form-crs.yml / list-crs.yml / archive-stack.yml all perform identically.
+      web-stack.yml's SA kubeconfig is tailnet-routed by design and sets this
+      to "false".
+    required: false
+    default: "true"
+
+outputs:
+  kubeconfig_path:
+    description: "Absolute path to the materialized, chmod 600 kubeconfig."
+    value: ${{ steps.materialize.outputs.kubeconfig_path }}
+  credential_source:
+    description: "Which input supplied the value: primary or alias."
+    value: ${{ steps.gate.outputs.credential_source }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Require kubeconfig secret (fail-soft diagnosis, fail-closed admission)
+      id: gate
+      shell: bash
+      env:
+        GATE_PRIMARY: ${{ inputs.kubeconfig_b64 }}
+        GATE_ALIAS: ${{ inputs.kubeconfig_b64_alias }}
+        GATE_SECRET_NAME: ${{ inputs.secret_name }}
+        GATE_SECRET_NAME_ALIAS: ${{ inputs.secret_name_alias }}
+        GATE_ENV_NAME: ${{ inputs.environment_name }}
+        GATE_REMEDIATION_REF: ${{ inputs.remediation_ref }}
+      run: |
+        set -euo pipefail
+        if [[ -n "${GATE_PRIMARY:-}" ]]; then
+          echo "credential_source=primary" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [[ -n "${GATE_ALIAS:-}" ]]; then
+          echo "credential_source=alias" >> "$GITHUB_OUTPUT"
+          echo "::notice::using compatibility alias ${GATE_SECRET_NAME_ALIAS:-<unnamed alias>} for ${GATE_SECRET_NAME}; consider migrating the protected ${GATE_ENV_NAME} environment to the canonical name."
+          exit 0
+        fi
+        remediation=""
+        if [[ -n "${GATE_REMEDIATION_REF:-}" ]]; then
+          remediation=" See ${GATE_REMEDIATION_REF} for how to provision it."
+        fi
+        alias_note=""
+        if [[ -n "${GATE_SECRET_NAME_ALIAS:-}" ]]; then
+          alias_note=" (${GATE_SECRET_NAME_ALIAS} is also accepted as a compatibility alias)"
+        fi
+        echo "::error::${GATE_SECRET_NAME} is required in the protected ${GATE_ENV_NAME} environment${alias_note}.${remediation}"
+        exit 1
+
+    - name: Materialize kubeconfig
+      id: materialize
+      shell: bash
+      env:
+        GATE_PRIMARY: ${{ inputs.kubeconfig_b64 }}
+        GATE_ALIAS: ${{ inputs.kubeconfig_b64_alias }}
+        GATE_FILENAME: ${{ inputs.kubeconfig_filename }}
+        GATE_REWRITE: ${{ inputs.rewrite_in_cluster_server }}
+      run: |
+        set -euo pipefail
+        kubeconfig="${RUNNER_TEMP}/${GATE_FILENAME}"
+        if [[ -n "${GATE_PRIMARY:-}" ]]; then
+          value="${GATE_PRIMARY}"
+        else
+          value="${GATE_ALIAS}"
+        fi
+        printf '%s' "${value}" | base64 -d > "${kubeconfig}"
+        chmod 600 "${kubeconfig}"
+
+        if [[ "${GATE_REWRITE}" == "true" && -n "${KUBERNETES_SERVICE_HOST:-}" ]]; then
+          cluster_name="$(kubectl --kubeconfig "${kubeconfig}" config view --minify -o jsonpath='{.contexts[0].context.cluster}')"
+          kubectl --kubeconfig "${kubeconfig}" config set-cluster "${cluster_name}" --server=https://kubernetes.default.svc >/dev/null
+          echo "::notice::rewrote kubeconfig cluster server to https://kubernetes.default.svc (in-cluster runner detected)."
+        fi
+
+        echo "kubeconfig_path=${kubeconfig}" >> "$GITHUB_OUTPUT"

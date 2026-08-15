@@ -1,0 +1,81 @@
+name: gitops-manifest-validate
+description: |
+  Run a caller-authored, tenant-specific manifest assertions script against
+  a k8s overlay directory, with the shared fail/require_file/field/assert_eq
+  helper vocabulary and the two universal invariants (digest-pinned images,
+  kustomize-renders) pre-sourced. This is the "templated validate-*-stack.sh
+  trio" condensation: it templates the SHAPE five GFTB validators already
+  share byte-for-byte, not the tenant-specific assertions inside them (see
+  lib.sh for why those stay caller-authored).
+
+  Never contacts a cluster; never needs a secret. Offline validation only,
+  matching every one of its five GFTB source validators.
+
+inputs:
+  manifest_dir:
+    description: "Path to the k8s overlay directory to validate, e.g. k8s/mail, k8s/form."
+    required: true
+  assertions_script:
+    description: >-
+      Path to the caller-authored bash script containing the tenant-specific
+      assertions (the actual body of today's validate-mail-crs.sh etc, minus
+      its preamble and minus its final `kubectl kustomize` line). Sourced
+      after lib.sh, so `fail`, `require_file`, `field`, `assert_eq`,
+      `require_tools`, `assert_images_digest_pinned` and
+      `assert_kustomize_renders` are all in scope. Runs with `$1` bound to
+      manifest_dir, matching every source validator's own
+      `dir="${1:?usage: ...}"` convention.
+    required: true
+  extra_tools:
+    description: >-
+      Space-separated additional CLI tools required beyond yq/kubectl (e.g.
+      "jq" for form-stack.sh's and web-stack.sh's bot-policy JSON checks).
+    required: false
+    default: ""
+  skip_digest_pin_check:
+    description: >-
+      Set "true" only for a stack that legitimately has no image: fields to
+      check (this is a no-op today -- assert_images_digest_pinned matches
+      nothing on a pure-CR stack -- kept as an explicit opt-out so a future
+      stack shape doesn't silently inherit a check that makes no sense for
+      it).
+    required: false
+    default: "false"
+  skip_kustomize_render_check:
+    description: "Set \"true\" to skip the final kubectl kustomize render check (should stay \"false\" for every real stack)."
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run manifest assertions
+      shell: bash
+      env:
+        GMV_MANIFEST_DIR: ${{ inputs.manifest_dir }}
+        GMV_ASSERTIONS_SCRIPT: ${{ inputs.assertions_script }}
+        GMV_EXTRA_TOOLS: ${{ inputs.extra_tools }}
+        GMV_SKIP_DIGEST: ${{ inputs.skip_digest_pin_check }}
+        GMV_SKIP_KUSTOMIZE: ${{ inputs.skip_kustomize_render_check }}
+      run: |
+        set -euo pipefail
+        # shellcheck source=lib.sh
+        source "${{ github.action_path }}/lib.sh"
+
+        test -d "${GMV_MANIFEST_DIR}" || fail "missing manifest dir ${GMV_MANIFEST_DIR}"
+        test -f "${GMV_ASSERTIONS_SCRIPT}" || fail "missing assertions script ${GMV_ASSERTIONS_SCRIPT}"
+
+        # shellcheck disable=SC2086
+        require_tools ${GMV_EXTRA_TOOLS}
+
+        # shellcheck source=/dev/null
+        source "${GMV_ASSERTIONS_SCRIPT}" "${GMV_MANIFEST_DIR}"
+
+        if [[ "${GMV_SKIP_DIGEST}" != "true" ]]; then
+          assert_images_digest_pinned "${GMV_MANIFEST_DIR}"
+        fi
+        if [[ "${GMV_SKIP_KUSTOMIZE}" != "true" ]]; then
+          assert_kustomize_renders "${GMV_MANIFEST_DIR}"
+        fi
+
+        echo "gitops-manifest-validate: ${GMV_MANIFEST_DIR} passed (${GMV_ASSERTIONS_SCRIPT})"
