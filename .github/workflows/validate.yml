@@ -31,16 +31,24 @@ permissions:
 
 jobs:
   validate:
-    runs-on: tinyland-nix
+    # ubuntu-latest, deliberately: this repo has ZERO registered self-hosted
+    # runners (actions/runners total_count 0), and the prior tinyland-nix
+    # attempt queued 24h to GitHub's ceiling and was auto-cancelled with zero
+    # steps executed (run 31117501631). AGENTS.md's never-ubuntu-latest rule
+    # is scoped to the cache-backed js-bazel-package substrate lane, not
+    # repo-local validation; twelve direct jobs here already use it.
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
+      # setup-nix (detect-or-install), NOT nix-setup: the hosted image ships
+      # no Nix, and nix-setup only configures an already-present install.
       - name: Nix Setup
-        uses: ./.github/actions/nix-setup
+        uses: ./.github/actions/setup-nix
 
       - name: just check (full 15-target validation chain)
         run: nix develop --no-eval-cache --command just check

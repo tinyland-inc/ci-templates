@@ -9,11 +9,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 - **CT-01 (TIN-3396): the first PR validation lane ci-templates has ever
   had** — new `.github/workflows/validate.yml` runs on `pull_request`
-  (branches: `main`) and `push` (branches: `main`), on `runs-on: tinyland-nix`
-  (the shared ARC capability-class label; see `validate.yml`'s header comment
-  for the runner-class rationale against `scripts/runner_label_taxonomy.rb`).
+  (branches: `main`) and `push` (branches: `main`), on `runs-on:
+  ubuntu-latest` (this repo has zero registered self-hosted runners; the
+  prior `tinyland-nix` attempt queued to GitHub's 24-hour ceiling with zero
+  steps executed — see `validate.yml`'s header comment).
   The job runs the full existing 15-target `just check` chain via this
-  repo's own `.github/actions/nix-setup` (dogfooding the product, not new
+  repo's own `.github/actions/setup-nix` (detect-or-install; the hosted
+  image ships no Nix, so `nix-setup` alone cannot serve — still dogfooding
+  the product, not new
   validation logic), then runs `actionlint` over `.github/workflows/*.yml` +
   `.github/actions/*/action.yml`. New `.github/actionlint.yaml` declares this
   repo's org-namespaced ARC capability-class `runs-on` labels as known
