@@ -89,6 +89,12 @@ manifest-validate-selftest:
         echo "FAIL: validator did not reject an invalid manifest" >&2; rm -f "$bad"; exit 1; \
       else echo "manifest validator fails closed on invalid manifest"; rm -f "$bad"; fi
 
+# Lint workflows/actions with actionlint (mirrors the `validate` PR gate's
+# invocation; NOT part of `check` — kept separate so the 15-target chain
+# stays exactly what issue #107's acceptance criteria pin it to).
+actionlint-check:
+    cd {{ root }} && actionlint -color -config-file .github/actionlint.yaml -ignore 'property "labels" is not defined' -ignore 'SC2086:info:8:38: Double quote to prevent globbing and word splitting'
+
 # Scan current files for secrets.
 secrets-scan-dir:
     cd {{ root }} && gitleaks dir --config .gitleaks.toml --redact --verbose .

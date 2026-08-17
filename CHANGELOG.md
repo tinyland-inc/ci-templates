@@ -5,6 +5,32 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **CT-01 (TIN-3396): the first PR validation lane ci-templates has ever
+  had** — new `.github/workflows/validate.yml` runs on `pull_request`
+  (branches: `main`) and `push` (branches: `main`), on `runs-on:
+  ubuntu-latest` (this repo has zero registered self-hosted runners; the
+  prior `tinyland-nix` attempt queued to GitHub's 24-hour ceiling with zero
+  steps executed — see `validate.yml`'s header comment).
+  The job runs the full existing 15-target `just check` chain via this
+  repo's own `.github/actions/setup-nix` (detect-or-install; the hosted
+  image ships no Nix, so `nix-setup` alone cannot serve — still dogfooding
+  the product, not new
+  validation logic), then runs `actionlint` over `.github/workflows/*.yml` +
+  `.github/actions/*/action.yml`. New `.github/actionlint.yaml` declares this
+  repo's org-namespaced ARC capability-class `runs-on` labels as known
+  self-hosted-runner labels; two exact-text `-ignore` patterns (not rule-id
+  blanket ignores) suppress the repo's two known pre-existing findings: the
+  `runner.labels` context-property false positive (mirroring PR #95's
+  approach) and a real, pre-existing `SC2086` shellcheck finding in
+  `spoke-ci.yml:252` that is out of scope for this PR (fixing it requires
+  re-cutting `restricted-workflow-contract.rb`'s `spoke-ci` legacy byte pin,
+  a separate restricted-workflow-governance change). `flake.nix` gains
+  `actionlint` in the dev shell; `Justfile` gains a standalone
+  `actionlint-check` recipe (kept out of `check` so the 15-target chain stays
+  exactly what it is).
+
 ### Removed
 
 - **TIN-489: zero-caller TTL half of the deprecated lane family evicted from
@@ -21,7 +47,6 @@ Versioning: [SemVer 2.0](https://semver.org/).
   tag), so evicting that half before the spoke-side sender cleanup would break
   it at the next `v2` re-point. Do not re-point `v2` past a future eviction of
   that half until the darkmap sender is retired.
-
 ## [2.13.0] — 2026-08-06
 
 ### Deprecated

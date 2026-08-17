@@ -1,0 +1,16 @@
+# actionlint configuration for tinyland-inc/ci-templates.
+#
+# self-hosted-runner.labels: declares the org-namespaced ARC capability-class
+# labels this repo's own workflows use in `runs-on:` so actionlint's
+# `runner-label` rule stops flagging them as unknown GitHub-hosted labels.
+# This list mirrors RunnerLabelTaxonomy::SHARED_CAPABILITY_LABELS in
+# scripts/runner_label_taxonomy.rb (the dependency-free grammar authority for
+# `runs-on` strings in this repo) — keep the two in sync.
+self-hosted-runner:
+  labels:
+    - tinyland-docker
+    - tinyland-dind
+    - tinyland-nix
+    - tinyland-nix-gpu
+    - tinyland-nix-heavy
+    - tinyland-nix-kvm
