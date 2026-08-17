@@ -1,5 +1,5 @@
 name: "Greedy Cache"
-description: "Start Attic watch-store daemon for concurrent binary cache push as derivations build"
+description: "Start Attic watch-store daemon for concurrent binary cache push as derivations build. Opt-in `attic-public-read: true` degrades a missing/absent ATTIC_TOKEN to a loud warning (instead of the generic \"not configured\") when nix-setup has configured an anonymous read-only substituter; the watch-store push daemon still requires a valid token either way. Default (`attic-public-read: false`) execution is byte-identical to the pre-existing behavior."
 
 inputs:
   attic-server:
@@ -8,6 +8,12 @@ inputs:
   attic-cache:
     description: "Attic cache name to push to"
     default: "main"
+  attic-public-read:
+    description: "Opt-in, default \"false\" (byte-identical to pre-existing behavior when unset). Passed through to nix-setup; see its attic-public-read description. Never enables the watch-store push daemon by itself — that stays gated on a successful token-authenticated `attic login` exactly as before."
+    default: "false"
+  attic-public-key:
+    description: "Attic cache trusted public key passed through to nix-setup for the opt-in attic-public-read read-only substituter. Empty by default; see nix-setup's attic-public-key precedence."
+    default: ""
   watch-jobs:
     description: "Number of parallel upload jobs"
     default: "8"
@@ -23,7 +29,7 @@ outputs:
     description: "PID of the watch-store daemon"
     value: ${{ steps.start-daemon.outputs.pid }}
   cache-healthy:
-    description: "Whether the Attic cache is reachable"
+    description: "Whether the Attic cache is authenticated and push-capable (requires a valid ATTIC_TOKEN and successful login)."
     value: ${{ steps.health-check.outputs.healthy }}
 
 runs:
@@ -33,13 +39,28 @@ runs:
       with:
         attic-server: ${{ inputs.attic-server }}
         attic-cache: ${{ inputs.attic-cache }}
+        attic-public-read: ${{ inputs.attic-public-read }}
+        attic-public-key: ${{ inputs.attic-public-key }}
 
     - name: Health check
       id: health-check
       shell: bash
       run: |
         if [ -z "${ATTIC_SERVER:-}" ] || [ -z "${ATTIC_TOKEN:-}" ]; then
-          echo "::warning::Attic not configured — greedy cache disabled"
+          # attic-public-read (opt-in, default "false") only changes the
+          # WARNING TEXT here, never the outcome: the watch-store push daemon
+          # below stays gated on healthy=true either way, so it never starts
+          # without a valid authenticated login regardless of this input.
+          # ATTIC_PUBLIC_KEY is only ever non-empty when nix-setup's gated
+          # attic-public-read block actually configured an anonymous
+          # read-only substituter (never in the default-off path), so the
+          # double guard keeps the default-off message byte-identical to the
+          # pre-existing "Attic not configured" text.
+          if [ "${{ inputs.attic-public-read }}" = "true" ] && [ -n "${ATTIC_PUBLIC_KEY:-}" ] && [ -z "${ATTIC_TOKEN:-}" ]; then
+            echo "::warning::Attic token absent — anonymous public read only, pushes disabled"
+          else
+            echo "::warning::Attic not configured — greedy cache disabled"
+          fi
           echo "healthy=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
@@ -61,7 +82,14 @@ runs:
       if: steps.health-check.outputs.healthy == 'true'
       shell: bash
       run: |
-        # 3-tier substituter hierarchy:
+        # Ordered 3-tier substituter hierarchy — authenticated path only
+        # (this step requires healthy=true, i.e. a valid ATTIC_TOKEN and a
+        # successful login above). The unauthenticated, tokenless read-only
+        # case is nix-setup's job: its attic-public-read opt-in writes a
+        # single-entry substituter (+ trusted key) directly to the same
+        # nix.conf before this composite even reaches this step, and does so
+        # ONLY when no token is in scope — so the two writers never fire for
+        # the same server and never duplicate a substituter/key line.
         # 1. Project-specific cache (fastest, arch-specific binaries)
         # 2. Shared cache (architecture-independent sources, configs)
         # 3. cache.nixos.org (upstream fallback, always available)

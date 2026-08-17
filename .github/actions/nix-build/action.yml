@@ -1,5 +1,5 @@
 name: "Nix Build"
-description: "Run Nix build with Attic binary cache integration on self-hosted runners"
+description: "Run Nix build with Attic binary cache integration on self-hosted runners. Opt-in `attic-public-read: true` degrades a missing/absent ATTIC_TOKEN to a loud warning + anonymous public-read substituter instead of running cache-less; default (`attic-public-read: false`) execution is byte-identical to the pre-existing behavior."
 
 inputs:
   command:
@@ -14,6 +14,12 @@ inputs:
   attic-cache:
     description: "Attic cache name"
     default: "main"
+  attic-public-read:
+    description: "Opt-in, default \"false\" (byte-identical to pre-existing behavior when unset). When \"true\" and no ATTIC_TOKEN is available, degrade to a loud warning + anonymous, tokenless, read-only Attic substituter (see nix-setup) instead of building without any cache. Never enables a push path — pushes stay gated on a present ATTIC_TOKEN exactly as before."
+    default: "false"
+  attic-public-key:
+    description: "Attic cache trusted public key passed through to nix-setup for the opt-in attic-public-read read-only substituter. Empty by default; see nix-setup's attic-public-key precedence."
+    default: ""
   nix-channel:
     description: "Nix channel for nixpkgs"
     default: "nixpkgs=channel:nixos-24.11"
@@ -31,6 +37,8 @@ runs:
       with:
         attic-server: ${{ inputs.attic-server }}
         attic-cache: ${{ inputs.attic-cache }}
+        attic-public-read: ${{ inputs.attic-public-read }}
+        attic-public-key: ${{ inputs.attic-public-key }}
 
     - name: Configure Attic cache
       if: env.ATTIC_SERVER != '' && env.ATTIC_TOKEN != ''
@@ -41,6 +49,19 @@ runs:
         cache: ${{ env.ATTIC_CACHE }}
         token: ${{ env.ATTIC_TOKEN }}
         skip-push: ${{ inputs.push-cache == 'false' }}
+
+    - name: Anonymous public-read degrade
+      # Only fires when the opt-in fallback actually configured a read-only
+      # substituter (env.ATTIC_PUBLIC_KEY, set solely by nix-setup's gated
+      # attic-public-read block — never in the default-off path), there is
+      # still no push-capable token, and the caller didn't already ask for
+      # no push (push-cache: false) — in which case "pushes disabled" would
+      # be a misleading warning about a degrade the caller never wanted
+      # reversed.
+      if: inputs.attic-public-read == 'true' && env.ATTIC_PUBLIC_KEY != '' && env.ATTIC_TOKEN == '' && inputs.push-cache != 'false'
+      shell: bash
+      run: |
+        echo "::warning::Attic token absent — anonymous public read only, pushes disabled"
 
     - name: Run Nix command
       shell: bash

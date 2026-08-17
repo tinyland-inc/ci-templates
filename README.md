@@ -121,7 +121,7 @@ gitleaks working-tree scan.
 
 | Action | Purpose |
 |---|---|
-| `nix-setup` | Configure Nix + cache hints. Does not invent Bazel endpoints. |
+| `nix-setup` | Configure Nix + cache hints. Does not invent Bazel endpoints. Opt-in `attic-public-read: true` degrades to a tokenless, read-only public Attic substituter — see below. |
 | `nix-build` | Run `nix build` with Attic binary cache. |
 | `greedy-cache` | Start Attic `watch-store` daemon for concurrent push. |
 | `secrets-scan` | TruffleHog + Gitleaks. |
@@ -138,6 +138,50 @@ gitleaks working-tree scan.
 | **`pulse-ingest-validate`** | Validate a Pulse / static projection snapshot. |
 
 See per-action `action.yml` files for full input/output documentation.
+
+### Attic tokenless read degrade (opt-in)
+
+`nix-setup`, `nix-build`, and `greedy-cache` accept an `attic-public-read`
+input, **default `"false"`**. With it left at its default, behavior is
+byte-identical to before this feature existed: no fallback endpoint, no
+extra `nix.conf` writes, no new env exports — rule 2 of `AGENTS.md`.
+
+Set `attic-public-read: "true"` on any of the three to opt in. What flips:
+
+- If no `attic-server` input and no auto-detected `ATTIC_SERVER`
+  (self-hosted org overlay / fleet env) resolves anything, `nix-setup` falls
+  back to the tinyland-inc public-read `main` cache
+  (`https://nix-cache.tinyland.dev`,
+  `main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA=`) and configures it as
+  an **anonymous, tokenless, read-only** Nix substituter. This fallback
+  **never exports `ATTIC_SERVER`** into the job environment — `nix-build`'s
+  push step is gated on `env.ATTIC_SERVER != '' && env.ATTIC_TOKEN != ''`,
+  so a spoke that happens to have `ATTIC_TOKEN` set but never configured a
+  push destination cannot be silently flipped into pushing.
+- If an explicit/auto-detected `attic-server` DID resolve to a real
+  (tenant) cache, the same opt-in also wires up a read-only substituter for
+  *that* server, but only when the caller explicitly supplies
+  `attic-public-key` for it (or a token is already in scope, in which case
+  the authenticated path — `attic-action` login in `nix-build`, or
+  `greedy-cache`'s own tiered substituter step — already establishes trust
+  and this is skipped to avoid duplicate `nix.conf` lines). The
+  tinyland-inc key is **never** baked in for an arbitrary/tenant server —
+  only for the tinyland-inc public default itself. Precedence for the
+  trusted key is: `attic-public-key` input, then an `ATTIC_PUBLIC_KEY`
+  already exported in the runner environment, then — only for the
+  tinyland-inc default — the baked key.
+- `ATTIC_TOKEN` continues to gate the authenticated/push half exactly as
+  before, in `nix-build` and `greedy-cache`: **present and valid** is
+  unchanged (`nix-build` runs `ryanccn/attic-action` to log in and push;
+  `greedy-cache` logs in and starts the `watch-store` push daemon).
+  **Absent**, with `attic-public-read: "true"` and a read-only substituter
+  actually configured, both actions emit a loud
+  `::warning::Attic token absent — anonymous public read only, pushes
+  disabled` instead of a hard failure or a silent no-op (skipped if the
+  caller explicitly passed `push-cache: false`, since there's no degrade to
+  warn about). Absent, with `attic-public-read` left at its default
+  `"false"`, behavior is unchanged: no substituter, no warning beyond the
+  pre-existing "Attic not configured" notice.
 
 ## Reusable workflows
 

@@ -5,6 +5,38 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in tokenless Attic read degrade** — `nix-setup`, `nix-build`, and
+  `greedy-cache` previously gated the Attic substituter
+  (`extra-substituters` / `extra-trusted-public-keys`) on `ATTIC_TOKEN`
+  being present, so a tokenless consumer got zero substituter and silently
+  ate a 100% cache miss. New input `attic-public-read` on all three,
+  **default `"false"`** — with it unset, execution is byte-identical to the
+  pre-existing behavior (rule 2, `AGENTS.md`): no fallback endpoint, no new
+  `nix.conf` writes, no new env exports, no new warnings beyond the
+  pre-existing ones.
+
+  Set `attic-public-read: "true"` to opt in: when no `attic-server` input
+  and no auto-detected `ATTIC_SERVER` resolves, `nix-setup` falls back to
+  the tinyland-inc public-read `main` cache
+  (`https://nix-cache.tinyland.dev`,
+  `main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA=`) and configures it as
+  an anonymous, tokenless, **read-only** substituter — this fallback never
+  exports `ATTIC_SERVER`, so it cannot flip `nix-build`'s
+  token+server-gated push step from skipped to firing for a spoke that has
+  `ATTIC_TOKEN` set but no configured push destination. The new
+  `attic-public-key` input (also default `""` on all three) lets a caller
+  pin a key for their own tenant `attic-server` under the same opt-in; the
+  baked tinyland-inc key is only ever used for the tinyland-inc default
+  itself, never baked in for an arbitrary server. `ATTIC_TOKEN` continues
+  to gate the authenticated push/login half exactly as before in
+  `nix-build` and `greedy-cache`; absent, under the opt-in, with a
+  read-only substituter actually configured, both emit a loud
+  `::warning::Attic token absent — anonymous public read only, pushes
+  disabled` (skipped when the caller passed `push-cache: false`) instead of
+  a hard failure or a silent no-op.
+
 ### Removed
 
 - **TIN-489: zero-caller TTL half of the deprecated lane family evicted from
