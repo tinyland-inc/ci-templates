@@ -138,6 +138,7 @@ working-tree scan.
 | **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
 | **`pulse-ingest-validate`** | Validate a Pulse / static projection snapshot. |
 | **`rust-bazel-preflight`** | Validate the complete native matrix, owner-group route, and finite target arrays before any dynamic runner is scheduled or caller source is checked out. |
+| **`rust-bazel-binary-custody`** | Validate the operator-projected, root-owned raw Bazelisk Nix-store path before caller checkout; never use caller input or PATH to select Bazelisk. |
 | **`rust-bazel-contract`** | Fail-closed lane validation for native platform identity, tracked Bazel 9 pin/Bzlmod lock, finite exact targets, and protected-ref cache-write admission. No build, endpoint, credential, or publication authority. |
 
 See per-action `action.yml` files for full input/output documentation.
@@ -359,6 +360,8 @@ Bazel-authoritative Rust applications. It takes an exact caller-owned native
 Darwin/Linux matrix, owner-overlay runner group, and finite target arrays. A
 hosted, no-checkout/no-secret admission job rejects public, fork, and
 `pull_request_target` events before any private native runner is assigned.
+Each admitted runner must project one immutable raw Bazelisk Nix-store path;
+the workflow validates it before checkout and never executes PATH Bazelisk.
 Pull-request cache use receives only a distinct server-enforced read
 credential. A write credential is materialized only after a caller opts in and
 GitHub marks the pushed main branch or release tag protected; remote execution

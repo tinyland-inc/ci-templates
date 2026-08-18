@@ -53,6 +53,7 @@ js-bazel-runner-contract-check:
 rust-bazel-application-contract-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py rust-bazel-application-contract
     cd {{ root }} && python3 .github/actions/rust-bazel-contract/contract.py --self-test
+    cd {{ root }} && python3 .github/actions/rust-bazel-binary-custody/custody.py --self-test
 
 # Ensure flywheel-reapi-proof keeps child-run correlation request-id based.
 flywheel-reapi-proof-contract-check:

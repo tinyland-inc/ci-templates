@@ -138,6 +138,10 @@ jobs:
       labels: ${{ matrix.lane.runner_labels }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     steps:
+      - name: Validate trusted Bazelisk before caller checkout
+        id: bazelisk-custody
+        uses: tinyland-inc/ci-templates/.github/actions/rust-bazel-binary-custody@v2.14.0
+
       - name: Check out exact caller revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -190,13 +194,10 @@ jobs:
         env:
           BAZELISK_DRIVER: ${{ steps.contract.outputs.bazelisk_driver }}
           CI_BAZEL_HOME: ${{ steps.contract.outputs.bazel_home }}
+          CI_BAZELISK_BIN: ${{ steps.bazelisk-custody.outputs.path }}
           CI_BAZEL_VERSION: ${{ steps.contract.outputs.bazel_version }}
         run: |
           set -euo pipefail
-          command -v bazelisk >/dev/null 2>&1 || {
-            echo "::error::bazelisk is required on the selected native runner"
-            exit 127
-          }
           dependency_authorities=(MODULE.bazel.lock Cargo.lock cargo-bazel-lock.json)
           if [[ -n "$(git status --porcelain=v1 -- "${dependency_authorities[@]}")" ]]; then
             echo "::error::a tracked Bzlmod or crate-universe authority was dirty before the lock-drift check"
@@ -219,6 +220,7 @@ jobs:
           GF_BAZEL_REMOTE_CACHE_HEADER: ${{ inputs.cache_enabled && (steps.contract.outputs.cache_upload == 'true' && secrets.GF_BAZEL_REMOTE_CACHE_WRITE_HEADER || secrets.GF_BAZEL_REMOTE_CACHE_READ_HEADER) || '' }}
           BAZELISK_DRIVER: ${{ steps.contract.outputs.bazelisk_driver }}
           CI_BAZEL_HOME: ${{ steps.contract.outputs.bazel_home }}
+          CI_BAZELISK_BIN: ${{ steps.bazelisk-custody.outputs.path }}
           CI_BAZEL_VERSION: ${{ steps.contract.outputs.bazel_version }}
           RUSTFMT_TARGETS: ${{ steps.contract.outputs.rustfmt_targets }}
           CLIPPY_TARGETS: ${{ steps.contract.outputs.clippy_targets }}

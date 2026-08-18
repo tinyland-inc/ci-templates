@@ -152,6 +152,7 @@ def check_js_bazel_package_runner_contract() -> int:
                 file=sys.stderr,
             )
             ok = False
+
     for snippet in required_docs_snippets:
         if snippet not in docs:
             print(
@@ -417,12 +418,20 @@ def check_rust_bazel_application_contract() -> int:
     workflow_path = ROOT / ".github/workflows/rust-bazel-application.yml"
     action_path = ROOT / ".github/actions/rust-bazel-contract/action.yml"
     preflight_action_path = ROOT / ".github/actions/rust-bazel-preflight/action.yml"
+    custody_action_path = (
+        ROOT / ".github/actions/rust-bazel-binary-custody/action.yml"
+    )
+    custody_contract_path = (
+        ROOT / ".github/actions/rust-bazel-binary-custody/custody.py"
+    )
     contract_path = ROOT / ".github/actions/rust-bazel-contract/contract.py"
     docs_path = ROOT / "docs/rust-bazel-application.md"
     paths = (
         workflow_path,
         action_path,
         preflight_action_path,
+        custody_action_path,
+        custody_contract_path,
         contract_path,
         docs_path,
     )
@@ -437,6 +446,8 @@ def check_rust_bazel_application_contract() -> int:
     workflow = workflow_path.read_text(encoding="utf-8")
     action = action_path.read_text(encoding="utf-8")
     preflight_action = preflight_action_path.read_text(encoding="utf-8")
+    custody_action = custody_action_path.read_text(encoding="utf-8")
+    custody_contract = custody_contract_path.read_text(encoding="utf-8")
     contract = contract_path.read_text(encoding="utf-8")
     docs = docs_path.read_text(encoding="utf-8")
 
@@ -527,6 +538,7 @@ def check_rust_bazel_application_contract() -> int:
 
     expected_internal_actions = {
         "cache-attachment-validate",
+        "rust-bazel-binary-custody",
         "rust-bazel-contract",
         "rust-bazel-preflight",
     }
@@ -565,6 +577,8 @@ def check_rust_bazel_application_contract() -> int:
         "timeout_minutes: ${{ inputs.timeout_minutes }}",
         "max_parallel: ${{ inputs.max_parallel }}",
         "rust-bazel-preflight@v2.14.0",
+        "rust-bazel-binary-custody@v2.14.0",
+        "steps.bazelisk-custody.outputs.path",
         "needs: trust-gate",
         'default: "[]"',
         "lane: ${{ fromJSON(needs.trust-gate.outputs.platform_matrix_json) }}",
@@ -594,6 +608,7 @@ def check_rust_bazel_application_contract() -> int:
         "--lockfile_mode=error",
         "BAZELISK_DRIVER: ${{ steps.contract.outputs.bazelisk_driver }}",
         "CI_BAZEL_HOME: ${{ steps.contract.outputs.bazel_home }}",
+        "CI_BAZELISK_BIN: ${{ steps.bazelisk-custody.outputs.path }}",
         "CI_BAZEL_VERSION: ${{ steps.contract.outputs.bazel_version }}",
         "dependency_authorities=(MODULE.bazel.lock Cargo.lock cargo-bazel-lock.json)",
         'run_group "rustfmt" test',
@@ -611,6 +626,17 @@ def check_rust_bazel_application_contract() -> int:
                 file=sys.stderr,
             )
             ok = False
+
+    custody_step = workflow.find(
+        "      - name: Validate trusted Bazelisk before caller checkout\n"
+    )
+    checkout_step = workflow.find("      - name: Check out exact caller revision\n")
+    if custody_step < 0 or checkout_step < 0 or custody_step >= checkout_step:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: binary custody must run before caller checkout",
+            file=sys.stderr,
+        )
+        ok = False
 
     required_contract_snippets = [
         'OS_MAP = {"darwin": "macOS", "linux": "Linux"}',
@@ -643,6 +669,43 @@ def check_rust_bazel_application_contract() -> int:
             )
             ok = False
 
+    for snippet in (
+        "TINYLAND_CI_BAZELISK_BIN",
+        "STORE_BASENAME_RE",
+        "path.resolve(strict=True) != path",
+        "stat.S_IMODE(metadata.st_mode) & 0o022",
+        "required_uid: int = 0",
+        "rust-bazel binary custody self-test passed",
+    ):
+        if snippet not in custody_contract:
+            print(
+                f"{custody_contract_path.relative_to(ROOT)}: missing custody snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    if "custody.py" not in custody_action:
+        print(
+            f"{custody_action_path.relative_to(ROOT)}: custody action does not execute its contract",
+            file=sys.stderr,
+        )
+        ok = False
+    for snippet in (
+        "value: ${{ steps.custody.outputs.path }}",
+        '--github-output "$GITHUB_OUTPUT"',
+    ):
+        if snippet not in custody_action:
+            print(
+                f"{custody_action_path.relative_to(ROOT)}: missing custody output wiring: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    if 'handle.write(f"path={path}\\n")' not in custody_contract:
+        print(
+            f"{custody_contract_path.relative_to(ROOT)}: canonical path is not written to the action output",
+            file=sys.stderr,
+        )
+        ok = False
+
     required_docs_snippets = [
         "opt-in, default-off",
         "does not claim a four-platform",
@@ -652,6 +715,9 @@ def check_rust_bazel_application_contract() -> int:
         "github.ref_protected == true",
         "cache-first",
         "release publication remains a",
+        "TINYLAND_CI_BAZELISK_BIN",
+        "before caller checkout",
+        "not consult PATH for Bazelisk",
     ]
     for snippet in required_docs_snippets:
         if snippet not in docs:

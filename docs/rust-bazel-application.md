@@ -24,9 +24,15 @@ The workflow does nothing unless `enabled: true`. An enabled caller supplies:
 - tracked regular `.bazelversion`, `MODULE.bazel`, `MODULE.bazel.lock`,
   `Cargo.lock`, and `cargo-bazel-lock.json` files.
 
-Each selected native runner must already provide Bash, Git, Python 3, and
-`bazelisk`. Tool installation and runner enrollment belong to the caller's
-reproducible developer environment and operator overlay, not this workflow.
+Each selected native runner must already provide Bash, Git, and Python 3. Its
+trusted operator overlay must also project `TINYLAND_CI_BAZELISK_BIN` as the
+canonical, unwrapped `${pkgs.bazelisk}/bin/bazelisk` path. The workflow
+validates this fact before caller checkout: it must resolve identically to a
+root-owned, non-group/world-writable, regular executable at
+`/nix/store/<32-character-hash>-bazelisk-<version>/bin/bazelisk`. A missing,
+mutable, symlinked, PATH-derived, or caller-selected binary fails closed. Tool
+installation and runner enrollment belong to the reproducible operator
+overlay, not this workflow.
 
 The pre-scheduling contract admits only the owner group's shared `nix` or
 `nix-heavy` capability and rejects hosted, bare `self-hosted`, cross-owner, and
@@ -85,7 +91,7 @@ jobs:
 ```
 
 `v2.14.0` is the first planned immutable release containing this workflow and
-both of its internal actions. Do not replace that pin with `@v2` or `@main`.
+its internal actions. Do not replace that pin with `@v2` or `@main`.
 
 Those two entries are an interface example, not a claim that the labels are
 currently served. The workflow proves only platforms that a caller explicitly
@@ -131,15 +137,19 @@ system, or home rc files. The workflow then supplies its complete cache policy
 on the command line and always forces `--remote_executor=`. This is cache-first
 only: no input, secret, flag, or source path enables a remote executor.
 
-The tracked `.bazelversion` is validated before use. Every invocation then goes
-through a release-vendored driver that scrubs all Bazelisk configuration and
-crate-universe repin/generator variables, resets the exact version and wrapper
+The tracked `.bazelversion` is validated before use. Before checkout, binary
+custody resolves the operator-projected raw Bazelisk path. Binary custody does
+not consult PATH for Bazelisk selection or execution. Every invocation then
+goes through a release-vendored driver that invokes that exact path, scrubs all
+Bazelisk configuration and crate-universe repin/generator variables, resets
+the exact version and wrapper
 prohibition, forces `--ignore_all_rc_files`, and uses run-scoped
-`HOME`/`BAZELISK_HOME` roots under `RUNNER_TEMP`; a workspace `.bazeliskrc` is
-rejected. Caller wrappers, download redirects, runner-service overrides, user
-config, and cross-run Bazelisk cache poisoning therefore cannot replace the
-validated Bazel binary, trigger an implicit repin, substitute the cargo-bazel
-generator, or bypass the command-line contract.
+`HOME`/`BAZELISK_HOME`
+roots under `RUNNER_TEMP`; a workspace `.bazeliskrc` is rejected. Caller
+wrappers, download redirects, runner-service overrides, user config, and
+cross-run Bazelisk cache poisoning therefore cannot replace the validated
+Bazel binary, trigger an implicit repin, substitute the cargo-bazel generator,
+or bypass the command-line contract.
 
 Example runtime attachment:
 

@@ -799,8 +799,11 @@ def self_test() -> int:
         driver_test = Path(directory)
         bin_dir = driver_test / "bin"
         bin_dir.mkdir()
+        trusted_dir = driver_test / "trusted" / "bin"
+        trusted_dir.mkdir(parents=True)
         record = driver_test / "record"
-        fake_bazelisk = bin_dir / "bazelisk"
+        poison_record = driver_test / "poison-record"
+        fake_bazelisk = trusted_dir / "bazelisk"
         fake_bazelisk.write_text(
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
@@ -823,6 +826,15 @@ def self_test() -> int:
             encoding="utf-8",
         )
         fake_bazelisk.chmod(0o700)
+        path_bazelisk = bin_dir / "bazelisk"
+        path_bazelisk.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            'printf poisoned > "$POISON_RECORD"\n'
+            "exit 99\n",
+            encoding="utf-8",
+        )
+        path_bazelisk.chmod(0o700)
         ci_home = driver_test / "ci-home"
         driver_env = {
             **os.environ,
@@ -830,6 +842,7 @@ def self_test() -> int:
             "RECORD": str(record),
             "CI_BAZEL_VERSION": "9.2.0",
             "CI_BAZEL_HOME": str(ci_home),
+            "CI_BAZELISK_BIN": str(fake_bazelisk),
             "BAZELISK_BASE_URL": "https://evil.invalid",
             "BAZELISK_FORMAT_URL": "https://evil.invalid/%v",
             "BAZELISK_HOME_DARWIN": str(driver_test / "poison"),
@@ -841,6 +854,7 @@ def self_test() -> int:
             "CARGO_BAZEL_ISOLATED": "false",
             "CARGO_BAZEL_DEBUG": "1",
             "CARGO_BAZEL_TIMEOUT": "999999",
+            "POISON_RECORD": str(poison_record),
             "USE_BAZEL_VERSION": "latest",
         }
         subprocess.run(
@@ -848,6 +862,7 @@ def self_test() -> int:
             env=driver_env,
             check=True,
         )
+        assert not poison_record.exists(), "driver consulted PATH Bazelisk"
         assert record.read_text(encoding="utf-8") == (
             "base=unset\n"
             "format=unset\n"

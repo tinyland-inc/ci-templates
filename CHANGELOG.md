@@ -22,11 +22,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
   write materialization additionally requires explicit caller approval, a push
   event, and GitHub's protected-ref signal on the configured main branch or
   release tag. All Bazel invocations ignore caller rc files, then apply the
-  complete cache-only policy explicitly. Run-scoped Bazelisk state, an exact
-  validated version, wrapper suppression, `.bazeliskrc` refusal, and scrubbing
-  of every rules_rust 0.73 repin/generator override prevent caller or cross-run
-  binary/dependency substitution. No endpoint, package publish, or four-platform
-  claim is baked into the template.
+  complete cache-only policy explicitly. Before caller checkout, a dedicated
+  custody action validates an operator-projected, root-owned raw Bazelisk
+  Nix-store path and refuses PATH, symlink, or mutable substitutes. Run-scoped
+  Bazelisk state, an exact validated version, wrapper suppression,
+  `.bazeliskrc` refusal, and scrubbing of every rules_rust 0.73
+  repin/generator override prevent caller or cross-run binary/dependency
+  substitution. No endpoint, package publish, or four-platform claim is baked
+  into the template.
 
 - **Opt-in tokenless Attic read degrade** — `nix-setup`, `nix-build`, and
   `greedy-cache` previously gated the Attic substituter

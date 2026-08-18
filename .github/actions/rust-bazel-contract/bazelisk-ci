@@ -3,6 +3,7 @@ set -euo pipefail
 
 : "${CI_BAZEL_VERSION:?CI_BAZEL_VERSION is required}"
 : "${CI_BAZEL_HOME:?CI_BAZEL_HOME is required}"
+: "${CI_BAZELISK_BIN:?CI_BAZELISK_BIN is required}"
 
 [[ "$CI_BAZEL_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
   echo "invalid exact CI_BAZEL_VERSION" >&2
@@ -10,6 +11,10 @@ set -euo pipefail
 }
 [[ "$CI_BAZEL_HOME" == /* ]] || {
   echo "CI_BAZEL_HOME must be absolute" >&2
+  exit 2
+}
+[[ "$CI_BAZELISK_BIN" == /*/bin/bazelisk ]] || {
+  echo "CI_BAZELISK_BIN must be the absolute custody-validated binary" >&2
   exit 2
 }
 
@@ -48,4 +53,4 @@ exec env \
   BAZELISK_HOME="$CI_BAZEL_HOME/bazelisk" \
   BAZELISK_SKIP_WRAPPER=1 \
   USE_BAZEL_VERSION="$CI_BAZEL_VERSION" \
-  bazelisk --ignore_all_rc_files "$@"
+  "$CI_BAZELISK_BIN" --ignore_all_rc_files "$@"
