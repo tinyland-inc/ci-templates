@@ -9,6 +9,12 @@ on:
           every non-caller and non-opted caller byte-for-byte.
         type: boolean
         default: false
+      runner_group:
+        description: >-
+          Exact reviewed private self-hosted runner group. v2.14.0 admits only
+          tinyland-infra; no hosted native fallback exists.
+        type: string
+        default: ""
       platform_matrix_json:
         description: >-
           Exact native platform matrix. Each entry requires name, os (darwin or
@@ -81,45 +87,67 @@ on:
       GF_BAZEL_REMOTE_CACHE:
         description: Runtime remote-cache endpoint; required only when cache_enabled=true.
         required: false
-      GF_BAZEL_REMOTE_HEADER:
-        description: Optional runtime remote auth header.
+      GF_BAZEL_REMOTE_CACHE_READ_HEADER:
+        description: Server-enforced read-only cache header used on untrusted/read lanes.
         required: false
-      GF_BAZEL_REMOTE_CACHE_HEADER:
-        description: Optional runtime cache-specific auth header.
-        required: false
-      GF_BAZEL_CREDENTIAL_HELPER:
-        description: Optional runtime Bazel credential-helper command.
+      GF_BAZEL_REMOTE_CACHE_WRITE_HEADER:
+        description: Write-capable cache header exposed only to an admitted protected push.
         required: false
 
 permissions:
   contents: read
 
 jobs:
-  native:
+  trust-gate:
     if: inputs.enabled
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      platform_matrix_json: ${{ steps.preflight.outputs.platform_matrix_json }}
+    steps:
+      - name: Validate route, matrix, and finite targets before scheduling
+        id: preflight
+        uses: tinyland-inc/ci-templates/.github/actions/rust-bazel-preflight@v2.14.0
+        with:
+          repository_private: ${{ github.event.repository.private }}
+          event_name: ${{ github.event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          timeout_minutes: ${{ inputs.timeout_minutes }}
+          max_parallel: ${{ inputs.max_parallel }}
+          runner_group: ${{ inputs.runner_group }}
+          platform_matrix_json: ${{ inputs.platform_matrix_json }}
+          rustfmt_targets_json: ${{ inputs.rustfmt_targets_json }}
+          clippy_targets_json: ${{ inputs.clippy_targets_json }}
+          build_targets_json: ${{ inputs.build_targets_json }}
+          unit_test_targets_json: ${{ inputs.unit_test_targets_json }}
+          integration_test_targets_json: ${{ inputs.integration_test_targets_json }}
+          package_targets_json: ${{ inputs.package_targets_json }}
+
+  native:
+    needs: trust-gate
+    if: needs.trust-gate.result == 'success'
     name: ${{ matrix.lane.name }}
     strategy:
       fail-fast: false
       max-parallel: ${{ inputs.max_parallel }}
       matrix:
-        lane: ${{ fromJSON(inputs.platform_matrix_json) }}
-    runs-on: ${{ matrix.lane.runner_labels }}
+        lane: ${{ fromJSON(needs.trust-gate.outputs.platform_matrix_json) }}
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ matrix.lane.runner_labels }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
-    env:
-      BAZEL_REMOTE_CACHE: ${{ secrets.GF_BAZEL_REMOTE_CACHE }}
-      GF_BAZEL_REMOTE_HEADER: ${{ secrets.GF_BAZEL_REMOTE_HEADER }}
-      GF_BAZEL_REMOTE_CACHE_HEADER: ${{ secrets.GF_BAZEL_REMOTE_CACHE_HEADER }}
-      GF_BAZEL_CREDENTIAL_HELPER: ${{ secrets.GF_BAZEL_CREDENTIAL_HELPER }}
     steps:
       - name: Check out exact caller revision
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
 
       - name: Validate finite targets and native platform
         id: contract
-        uses: tinyland-inc/ci-templates/.github/actions/rust-bazel-contract@v2
+        uses: tinyland-inc/ci-templates/.github/actions/rust-bazel-contract@v2.14.0
         with:
+          runner_group: ${{ inputs.runner_group }}
           lane_name: ${{ matrix.lane.name }}
           expected_os: ${{ matrix.lane.os }}
           expected_arch: ${{ matrix.lane.arch }}
@@ -134,52 +162,35 @@ jobs:
           unit_test_targets_json: ${{ inputs.unit_test_targets_json }}
           integration_test_targets_json: ${{ inputs.integration_test_targets_json }}
           package_targets_json: ${{ inputs.package_targets_json }}
-
-      - name: Resolve fail-closed cache policy
-        shell: bash
-        env:
-          CACHE_ENABLED: ${{ inputs.cache_enabled }}
-          TRUSTED_CACHE_UPLOAD: ${{ inputs.trusted_cache_upload }}
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref }}
-          REF_PROTECTED: ${{ github.ref_protected }}
-          PROTECTED_BRANCH: ${{ inputs.protected_branch }}
-          RELEASE_TAG_PREFIX: ${{ inputs.release_tag_prefix }}
-        run: |
-          set -euo pipefail
-          upload=false
-          trusted_ref=false
-          if [[ "$REF_NAME" == "refs/heads/$PROTECTED_BRANCH" ]]; then
-            trusted_ref=true
-          elif [[ -n "$RELEASE_TAG_PREFIX" && "$REF_NAME" == "refs/tags/$RELEASE_TAG_PREFIX"* ]]; then
-            trusted_ref=true
-          fi
-
-          if [[ "$CACHE_ENABLED" == true &&
-                "$TRUSTED_CACHE_UPLOAD" == true &&
-                "$EVENT_NAME" == push &&
-                "$REF_PROTECTED" == true &&
-                "$trusted_ref" == true ]]; then
-            upload=true
-          fi
-          echo "GF_BAZEL_REMOTE_UPLOAD=$upload" >> "$GITHUB_ENV"
-          if [[ "$CACHE_ENABLED" != true ]]; then
-            echo "::notice::Bazel remote cache disabled; this lane is local-only."
-          elif [[ "$upload" == true ]]; then
-            echo "::notice::Protected push ref admitted for trusted cache upload."
-          else
-            echo "::notice::Remote cache attached read-only (pull requests are always read-only)."
-          fi
+          cache_enabled: ${{ inputs.cache_enabled }}
+          cache_substrate_mode: ${{ inputs.cache_substrate_mode }}
+          cache_endpoint: ${{ inputs.cache_enabled && secrets.GF_BAZEL_REMOTE_CACHE || '' }}
+          cache_read_header_present: ${{ secrets.GF_BAZEL_REMOTE_CACHE_READ_HEADER != '' }}
+          cache_write_header_present: ${{ secrets.GF_BAZEL_REMOTE_CACHE_WRITE_HEADER != '' }}
+          cache_headers_distinct: ${{ secrets.GF_BAZEL_REMOTE_CACHE_READ_HEADER != secrets.GF_BAZEL_REMOTE_CACHE_WRITE_HEADER }}
+          trusted_cache_upload: ${{ inputs.trusted_cache_upload }}
+          event_name: ${{ github.event_name }}
+          ref_name: ${{ github.ref }}
+          ref_protected: ${{ github.ref_protected }}
+          protected_branch: ${{ inputs.protected_branch }}
+          release_tag_prefix: ${{ inputs.release_tag_prefix }}
 
       - name: Assert runtime cache attachment
         if: inputs.cache_enabled
-        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v2
+        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v2.14.0
+        env:
+          BAZEL_REMOTE_CACHE: ${{ inputs.cache_enabled && secrets.GF_BAZEL_REMOTE_CACHE || '' }}
+          BAZEL_REMOTE_EXECUTOR: ""
         with:
           substrate_mode: ${{ inputs.cache_substrate_mode }}
           runner_labels: ${{ join(matrix.lane.runner_labels, ',') }}
 
       - name: Prove Bzlmod lock is current
         shell: bash
+        env:
+          BAZELISK_DRIVER: ${{ steps.contract.outputs.bazelisk_driver }}
+          CI_BAZEL_HOME: ${{ steps.contract.outputs.bazel_home }}
+          CI_BAZEL_VERSION: ${{ steps.contract.outputs.bazel_version }}
         run: |
           set -euo pipefail
           command -v bazelisk >/dev/null 2>&1 || {
@@ -190,7 +201,7 @@ jobs:
             echo "::error::MODULE.bazel.lock was dirty before the lock-drift check"
             exit 1
           fi
-          bazelisk mod deps --lockfile_mode=update
+          "$BAZELISK_DRIVER" mod deps --lockfile_mode=update
           if [[ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]]; then
             git --no-pager diff -- MODULE.bazel.lock
             echo "::error::Bzlmod lock drift detected; regenerate and commit MODULE.bazel.lock"
@@ -202,6 +213,12 @@ jobs:
         env:
           BAZEL_PLATFORM: ${{ matrix.lane.bazel_platform }}
           CACHE_ENABLED: ${{ inputs.cache_enabled }}
+          GF_BAZEL_REMOTE_UPLOAD: ${{ steps.contract.outputs.cache_upload }}
+          BAZEL_REMOTE_CACHE: ${{ inputs.cache_enabled && secrets.GF_BAZEL_REMOTE_CACHE || '' }}
+          GF_BAZEL_REMOTE_CACHE_HEADER: ${{ inputs.cache_enabled && (steps.contract.outputs.cache_upload == 'true' && secrets.GF_BAZEL_REMOTE_CACHE_WRITE_HEADER || secrets.GF_BAZEL_REMOTE_CACHE_READ_HEADER) || '' }}
+          BAZELISK_DRIVER: ${{ steps.contract.outputs.bazelisk_driver }}
+          CI_BAZEL_HOME: ${{ steps.contract.outputs.bazel_home }}
+          CI_BAZEL_VERSION: ${{ steps.contract.outputs.bazel_version }}
           RUSTFMT_TARGETS: ${{ steps.contract.outputs.rustfmt_targets }}
           CLIPPY_TARGETS: ${{ steps.contract.outputs.clippy_targets }}
           BUILD_TARGETS: ${{ steps.contract.outputs.build_targets }}
@@ -210,20 +227,24 @@ jobs:
           PACKAGE_TARGETS: ${{ steps.contract.outputs.package_targets }}
         run: |
           set -euo pipefail
-          cache_args=()
+          remote_args=(--remote_executor=)
           if [[ "$CACHE_ENABLED" == true ]]; then
-            cache_args+=(--remote_cache="$BAZEL_REMOTE_CACHE")
-            cache_args+=(--remote_upload_local_results="$GF_BAZEL_REMOTE_UPLOAD")
-            cache_args+=(--remote_download_minimal --remote_timeout=60)
-            if [[ -n "${GF_BAZEL_REMOTE_HEADER:-}" ]]; then
-              cache_args+=(--remote_header="$GF_BAZEL_REMOTE_HEADER")
-            fi
+            remote_args+=(--remote_cache="$BAZEL_REMOTE_CACHE")
+            remote_args+=(--remote_upload_local_results="$GF_BAZEL_REMOTE_UPLOAD")
+            remote_args+=(--remote_download_minimal --remote_timeout=60)
             if [[ -n "${GF_BAZEL_REMOTE_CACHE_HEADER:-}" ]]; then
-              cache_args+=(--remote_cache_header="$GF_BAZEL_REMOTE_CACHE_HEADER")
+              remote_args+=(--remote_cache_header="$GF_BAZEL_REMOTE_CACHE_HEADER")
             fi
-            if [[ -n "${GF_BAZEL_CREDENTIAL_HELPER:-}" ]]; then
-              cache_args+=(--credential_helper="$GF_BAZEL_CREDENTIAL_HELPER")
-            fi
+          else
+            remote_args+=(--remote_cache= --remote_upload_local_results=false)
+          fi
+
+          if [[ "$CACHE_ENABLED" != true ]]; then
+            echo "::notice::Bazel remote cache and executor disabled; this lane is local-only."
+          elif [[ "$GF_BAZEL_REMOTE_UPLOAD" == true ]]; then
+            echo "::notice::Protected push ref admitted for trusted cache upload."
+          else
+            echo "::notice::Remote cache attached read-only (pull requests are always read-only)."
           fi
 
           run_group() {
@@ -237,11 +258,12 @@ jobs:
               test_args+=(--test_output=errors)
             fi
             echo "::group::$display_name (${#targets[@]} exact target(s), platform=$BAZEL_PLATFORM)"
-            bazelisk "$command" \
+            "$BAZELISK_DRIVER" "$command" \
+              --lockfile_mode=error \
               --platforms="$BAZEL_PLATFORM" \
               --verbose_failures \
               "${test_args[@]}" \
-              "${cache_args[@]}" \
+              "${remote_args[@]}" \
               "${targets[@]}"
             echo "::endgroup::"
           }
@@ -252,3 +274,8 @@ jobs:
           run_group "unit tests" test "$UNIT_TEST_TARGETS"
           run_group "integration tests" test "$INTEGRATION_TEST_TARGETS"
           run_group "packages" build "$PACKAGE_TARGETS"
+          if [[ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]]; then
+            git --no-pager diff -- MODULE.bazel.lock
+            echo "::error::Bzlmod lock changed during the authoritative target suite"
+            exit 1
+          fi

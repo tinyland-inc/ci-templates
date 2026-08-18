@@ -137,7 +137,8 @@ working-tree scan.
 | **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run, correlated by a unique request id. |
 | **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
 | **`pulse-ingest-validate`** | Validate a Pulse / static projection snapshot. |
-| **`rust-bazel-contract`** | Fail-closed validation for a caller-supplied native platform, tracked Bazel 9 pin/Bzlmod lock, and finite exact Rust application targets. No build, endpoint, cache, or publication authority. |
+| **`rust-bazel-preflight`** | Validate the complete native matrix, owner-group route, and finite target arrays before any dynamic runner is scheduled or caller source is checked out. |
+| **`rust-bazel-contract`** | Fail-closed lane validation for native platform identity, tracked Bazel 9 pin/Bzlmod lock, finite exact targets, and protected-ref cache-write admission. No build, endpoint, credential, or publication authority. |
 
 See per-action `action.yml` files for full input/output documentation.
 
@@ -355,10 +356,13 @@ set `flywheel_config: flywheel` so `flywheel-bazel` forwards the remote cache.
 
 `rust-bazel-application.yml` is a separate opt-in/default-off workflow for
 Bazel-authoritative Rust applications. It takes an exact caller-owned native
-Darwin/Linux matrix and finite target arrays; it neither selects a runner nor
-claims remote execution or unproved platform coverage. Pull-request cache use
-is read-only. An upload is possible only after a caller opts in and GitHub marks
-the pushed main branch or release tag protected. See
+Darwin/Linux matrix, owner-overlay runner group, and finite target arrays. A
+hosted, no-checkout/no-secret admission job rejects public, fork, and
+`pull_request_target` events before any private native runner is assigned.
+Pull-request cache use receives only a distinct server-enforced read
+credential. A write credential is materialized only after a caller opts in and
+GitHub marks the pushed main branch or release tag protected; remote execution
+is always disabled. See
 [`docs/rust-bazel-application.md`](docs/rust-bazel-application.md).
 
 ## Contributing

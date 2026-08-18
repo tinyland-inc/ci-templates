@@ -5,6 +5,9 @@ description: >-
   publication authority.
 
 inputs:
+  runner_group:
+    description: Exact reviewed private runner group (tinyland-infra in v2.14.0).
+    required: true
   lane_name:
     description: Stable human-readable name for this native lane.
     required: true
@@ -48,6 +51,42 @@ inputs:
   package_targets_json:
     description: Non-empty finite JSON array of exact package build labels.
     required: true
+  cache_enabled:
+    description: Whether the runtime remote cache was explicitly enabled.
+    required: true
+  cache_substrate_mode:
+    description: Must be shared-cache-backed; this workflow never admits an executor.
+    required: true
+  cache_endpoint:
+    description: Credential-free runtime cache endpoint, or empty when disabled.
+    required: true
+  cache_read_header_present:
+    description: Whether the server-enforced read-only header secret is configured.
+    required: true
+  cache_write_header_present:
+    description: Whether the separately scoped write header secret is configured.
+    required: true
+  cache_headers_distinct:
+    description: Whether read and write header secrets are different values.
+    required: true
+  trusted_cache_upload:
+    description: Whether the caller explicitly requested trusted cache writes.
+    required: true
+  event_name:
+    description: Caller event name used by the cache-write admission gate.
+    required: true
+  ref_name:
+    description: Exact caller ref used by the cache-write admission gate.
+    required: true
+  ref_protected:
+    description: GitHub protected-ref signal for the caller ref.
+    required: true
+  protected_branch:
+    description: Exact protected branch admitted for cache writes.
+    required: true
+  release_tag_prefix:
+    description: Protected release-tag prefix admitted for cache writes.
+    required: true
 
 outputs:
   rustfmt_targets:
@@ -68,6 +107,18 @@ outputs:
   package_targets:
     description: Validated space-separated package build labels.
     value: ${{ steps.validate.outputs.package_targets }}
+  cache_upload:
+    description: "true only for an explicitly trusted protected push ref."
+    value: ${{ steps.validate.outputs.cache_upload }}
+  bazel_version:
+    description: Exact validated stable Bazel version from tracked .bazelversion.
+    value: ${{ steps.validate.outputs.bazel_version }}
+  bazelisk_driver:
+    description: Exact release-vendored Bazelisk environment scrubber path.
+    value: ${{ steps.driver.outputs.path }}
+  bazel_home:
+    description: Fresh job-scoped private Bazelisk/HOME root.
+    value: ${{ steps.driver.outputs.home }}
 
 runs:
   using: composite
@@ -76,6 +127,7 @@ runs:
       id: validate
       shell: bash
       env:
+        RUNNER_GROUP: ${{ inputs.runner_group }}
         LANE_NAME: ${{ inputs.lane_name }}
         EXPECTED_OS: ${{ inputs.expected_os }}
         EXPECTED_ARCH: ${{ inputs.expected_arch }}
@@ -90,4 +142,30 @@ runs:
         UNIT_TEST_TARGETS_JSON: ${{ inputs.unit_test_targets_json }}
         INTEGRATION_TEST_TARGETS_JSON: ${{ inputs.integration_test_targets_json }}
         PACKAGE_TARGETS_JSON: ${{ inputs.package_targets_json }}
+        CACHE_ENABLED: ${{ inputs.cache_enabled }}
+        CACHE_SUBSTRATE_MODE: ${{ inputs.cache_substrate_mode }}
+        CACHE_ENDPOINT: ${{ inputs.cache_endpoint }}
+        CACHE_READ_HEADER_PRESENT: ${{ inputs.cache_read_header_present }}
+        CACHE_WRITE_HEADER_PRESENT: ${{ inputs.cache_write_header_present }}
+        CACHE_HEADERS_DISTINCT: ${{ inputs.cache_headers_distinct }}
+        TRUSTED_CACHE_UPLOAD: ${{ inputs.trusted_cache_upload }}
+        EVENT_NAME: ${{ inputs.event_name }}
+        REF_NAME: ${{ inputs.ref_name }}
+        REF_PROTECTED: ${{ inputs.ref_protected }}
+        PROTECTED_BRANCH: ${{ inputs.protected_branch }}
+        RELEASE_TAG_PREFIX: ${{ inputs.release_tag_prefix }}
       run: python3 "${{ github.action_path }}/contract.py" --workspace "$GITHUB_WORKSPACE" --github-output "$GITHUB_OUTPUT"
+    - name: Export release-vendored Bazelisk driver
+      id: driver
+      shell: bash
+      run: |
+        set -euo pipefail
+        driver="${{ github.action_path }}/bazelisk-ci"
+        [[ -x "$driver" ]] || {
+          echo "::error::release-vendored Bazelisk driver is missing or not executable"
+          exit 1
+        }
+        umask 077
+        state_root="$(mktemp -d "$RUNNER_TEMP/rust-bazel-ci.XXXXXX")"
+        printf 'path=%s\n' "$driver" >> "$GITHUB_OUTPUT"
+        printf 'home=%s\n' "$state_root" >> "$GITHUB_OUTPUT"

@@ -10,15 +10,22 @@ Versioning: [SemVer 2.0](https://semver.org/).
 - **Opt-in native Rust+Bazel application workflow** — add
   `rust-bazel-application.yml` and its dependency-free finite-target contract
   for the Prompt Pulse Bazel 9 canary. The workflow defaults disabled and takes
-  only caller-supplied native Darwin/Linux runner and Bazel platform facts. It
-  verifies tracked `.bazelversion`/Bzlmod authority, rejects recursive or
-  shorthand target sets, and runs exact Bazel rustfmt, clippy, build, unit,
-  integration, and package targets. GloriousFlywheel cache attachment is a
-  second default-off input: pull requests and unprotected refs are read-only,
-  while writes additionally require explicit caller approval, a push event,
-  and GitHub's protected-ref signal on the configured main branch or release
-  tag. No endpoint, credential, remote executor, runner label, package publish,
-  or four-platform claim is baked into the template.
+  a caller-supplied native Darwin/Linux matrix and Bazel platform facts. A
+  hosted no-checkout/no-secret preflight rejects public and fork events, while its owner-group
+  contract rejects hosted/repo-shaped native labels, wildcard targets, and
+  invalid matrices before private-runner scheduling. Lane validation verifies
+  tracked `.bazelversion`/Bzlmod authority
+  and runs exact Bazel rustfmt, clippy, build, unit, integration, and package
+  targets through immutable action references. GloriousFlywheel cache
+  attachment is a second default-off input: read and write credentials are
+  separate, pull requests can receive only server-enforced read authority, and
+  write materialization additionally requires explicit caller approval, a push
+  event, and GitHub's protected-ref signal on the configured main branch or
+  release tag. All Bazel invocations ignore caller rc files, then apply the
+  complete cache-only policy explicitly. Run-scoped Bazelisk state, an exact
+  validated version, wrapper suppression, and `.bazeliskrc` refusal prevent
+  caller or cross-run binary substitution. No endpoint, package publish, or
+  four-platform claim is baked into the template.
 
 - **Opt-in tokenless Attic read degrade** — `nix-setup`, `nix-build`, and
   `greedy-cache` previously gated the Attic substituter
