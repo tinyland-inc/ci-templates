@@ -185,7 +185,7 @@ jobs:
           substrate_mode: ${{ inputs.cache_substrate_mode }}
           runner_labels: ${{ join(matrix.lane.runner_labels, ',') }}
 
-      - name: Prove Bzlmod lock is current
+      - name: Prove Bzlmod and crate-universe locks are current
         shell: bash
         env:
           BAZELISK_DRIVER: ${{ steps.contract.outputs.bazelisk_driver }}
@@ -197,14 +197,15 @@ jobs:
             echo "::error::bazelisk is required on the selected native runner"
             exit 127
           }
-          if [[ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]]; then
-            echo "::error::MODULE.bazel.lock was dirty before the lock-drift check"
+          dependency_authorities=(MODULE.bazel.lock Cargo.lock cargo-bazel-lock.json)
+          if [[ -n "$(git status --porcelain=v1 -- "${dependency_authorities[@]}")" ]]; then
+            echo "::error::a tracked Bzlmod or crate-universe authority was dirty before the lock-drift check"
             exit 1
           fi
           "$BAZELISK_DRIVER" mod deps --lockfile_mode=update
-          if [[ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]]; then
-            git --no-pager diff -- MODULE.bazel.lock
-            echo "::error::Bzlmod lock drift detected; regenerate and commit MODULE.bazel.lock"
+          if [[ -n "$(git status --porcelain=v1 -- "${dependency_authorities[@]}")" ]]; then
+            git --no-pager diff -- "${dependency_authorities[@]}"
+            echo "::error::Bzlmod or crate-universe lock drift detected; regenerate and commit every dependency authority"
             exit 1
           fi
 
@@ -274,8 +275,9 @@ jobs:
           run_group "unit tests" test "$UNIT_TEST_TARGETS"
           run_group "integration tests" test "$INTEGRATION_TEST_TARGETS"
           run_group "packages" build "$PACKAGE_TARGETS"
-          if [[ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]]; then
-            git --no-pager diff -- MODULE.bazel.lock
-            echo "::error::Bzlmod lock changed during the authoritative target suite"
+          dependency_authorities=(MODULE.bazel.lock Cargo.lock cargo-bazel-lock.json)
+          if [[ -n "$(git status --porcelain=v1 -- "${dependency_authorities[@]}")" ]]; then
+            git --no-pager diff -- "${dependency_authorities[@]}"
+            echo "::error::Bzlmod or crate-universe authority changed during the authoritative target suite"
             exit 1
           fi

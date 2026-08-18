@@ -595,14 +595,14 @@ def check_rust_bazel_application_contract() -> int:
         "BAZELISK_DRIVER: ${{ steps.contract.outputs.bazelisk_driver }}",
         "CI_BAZEL_HOME: ${{ steps.contract.outputs.bazel_home }}",
         "CI_BAZEL_VERSION: ${{ steps.contract.outputs.bazel_version }}",
-        "git status --porcelain=v1 -- MODULE.bazel.lock",
+        "dependency_authorities=(MODULE.bazel.lock Cargo.lock cargo-bazel-lock.json)",
         'run_group "rustfmt" test',
         'run_group "clippy" test',
         'run_group "application build" build',
         'run_group "unit tests" test',
         'run_group "integration tests" test',
         'run_group "packages" build',
-        "Bzlmod lock changed during the authoritative target suite",
+        "Bzlmod or crate-universe authority changed during the authoritative target suite",
     ]
     for snippet in required_workflow_snippets:
         if snippet not in workflow:
@@ -627,11 +627,13 @@ def check_rust_bazel_application_contract() -> int:
         "bounded_integer",
         "validate_matrix_contract",
         'target_name in {"all", "all-targets"}',
-        'for path in (".bazelversion", "MODULE.bazel", "MODULE.bazel.lock")',
+        '"cargo-bazel-lock.json",',
         "maximum=64",
         "required workspace file is not tracked",
         "workspace .bazeliskrc is not admitted",
         "BAZELISK_HOME_DARWIN",
+        "CARGO_BAZEL_GENERATOR_URL",
+        "CARGO_BAZEL_REPIN_ONLY",
     ]
     for snippet in required_contract_snippets:
         if snippet not in contract:

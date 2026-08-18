@@ -35,10 +35,12 @@ matrices larger than four lanes. It also refuses public repositories, fork pull
 requests, and `pull_request_target`. The lane contract then rejects an
 OS/architecture mismatch between the requested lane and assigned runner and a
 `.bazelversion` outside the requested major.
-The default required major is Bazel 9. `bazelisk mod deps
---lockfile_mode=update` must leave the tracked lock file unchanged. Every later
-build and test runs with `--lockfile_mode=error`, followed by a final tracked
-lock cleanliness check.
+The default required major is Bazel 9. The root `.bazelversion`,
+`MODULE.bazel`, `MODULE.bazel.lock`, `Cargo.lock`, and
+`cargo-bazel-lock.json` must all be regular tracked files. `bazelisk mod deps
+--lockfile_mode=update` must leave the Bzlmod and crate-universe lock files
+unchanged. Every later build and test runs with `--lockfile_mode=error`,
+followed by a final cleanliness check across all three dependency locks.
 
 Rustfmt and clippy are Bazel test targets. This workflow does not add a second
 Cargo CI authority, invoke repository-specific shell commands, select a remote
@@ -129,13 +131,14 @@ on the command line and always forces `--remote_executor=`. This is cache-first
 only: no input, secret, flag, or source path enables a remote executor.
 
 The tracked `.bazelversion` is validated before use. Every invocation then goes
-through a release-vendored driver that scrubs all Bazelisk configuration
-variables, resets the exact version and wrapper prohibition, forces
-`--ignore_all_rc_files`, and uses run-scoped `HOME`/`BAZELISK_HOME` roots under
-`RUNNER_TEMP`; a workspace `.bazeliskrc` is rejected. Caller wrappers, download
-redirects, runner-service overrides, user config, and cross-run Bazelisk cache
-poisoning therefore cannot replace the validated Bazel binary or bypass the
-command-line contract.
+through a release-vendored driver that scrubs all Bazelisk configuration and
+crate-universe repin/generator variables, resets the exact version and wrapper
+prohibition, forces `--ignore_all_rc_files`, and uses run-scoped
+`HOME`/`BAZELISK_HOME` roots under `RUNNER_TEMP`; a workspace `.bazeliskrc` is
+rejected. Caller wrappers, download redirects, runner-service overrides, user
+config, and cross-run Bazelisk cache poisoning therefore cannot replace the
+validated Bazel binary, trigger an implicit repin, substitute the cargo-bazel
+generator, or bypass the command-line contract.
 
 Example runtime attachment:
 
