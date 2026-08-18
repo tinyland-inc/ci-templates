@@ -5,6 +5,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Rust+Bazel native jobs now own all local Bazel state** — the release-vendored
+  driver binds `XDG_CACHE_HOME` and Bazel's `--output_user_root` to the fresh
+  per-job root under `RUNNER_TEMP`. Persistent native runners can no longer
+  inherit a user-level XDG cache or write action/output state into another
+  job's Bazel tree.
+
 ### Added
 
 - **Opt-in native Rust+Bazel application workflow** — add
@@ -28,8 +36,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
   Bazelisk state, an exact validated version, wrapper suppression,
   `.bazeliskrc` refusal, and scrubbing of every rules_rust 0.73
   repin/generator override prevent caller or cross-run binary/dependency
-  substitution. No endpoint, package publish, or four-platform claim is baked
-  into the template.
+  substitution. Job-scoped XDG and Bazel output roots also prevent local
+  action/output state from escaping into a persistent runner-user cache. No
+  endpoint, package publish, or four-platform claim is baked into the template.
 
 - **Opt-in tokenless Attic read degrade** — `nix-setup`, `nix-build`, and
   `greedy-cache` previously gated the Attic substituter

@@ -117,7 +117,7 @@ outputs:
     description: Exact release-vendored Bazelisk environment scrubber path.
     value: ${{ steps.driver.outputs.path }}
   bazel_home:
-    description: Fresh job-scoped private Bazelisk/HOME root.
+    description: Fresh job-scoped private Bazelisk/HOME/XDG/Bazel-output root.
     value: ${{ steps.driver.outputs.home }}
 
 runs:

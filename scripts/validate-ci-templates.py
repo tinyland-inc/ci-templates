@@ -425,6 +425,7 @@ def check_rust_bazel_application_contract() -> int:
         ROOT / ".github/actions/rust-bazel-binary-custody/custody.py"
     )
     contract_path = ROOT / ".github/actions/rust-bazel-contract/contract.py"
+    driver_path = ROOT / ".github/actions/rust-bazel-contract/bazelisk-ci"
     docs_path = ROOT / "docs/rust-bazel-application.md"
     paths = (
         workflow_path,
@@ -433,6 +434,7 @@ def check_rust_bazel_application_contract() -> int:
         custody_action_path,
         custody_contract_path,
         contract_path,
+        driver_path,
         docs_path,
     )
     ok = True
@@ -449,6 +451,7 @@ def check_rust_bazel_application_contract() -> int:
     custody_action = custody_action_path.read_text(encoding="utf-8")
     custody_contract = custody_contract_path.read_text(encoding="utf-8")
     contract = contract_path.read_text(encoding="utf-8")
+    driver = driver_path.read_text(encoding="utf-8")
     docs = docs_path.read_text(encoding="utf-8")
 
     uses_oracles = {
@@ -670,6 +673,18 @@ def check_rust_bazel_application_contract() -> int:
             ok = False
 
     for snippet in (
+        "-u XDG_CACHE_HOME",
+        'XDG_CACHE_HOME="$CI_BAZEL_HOME/xdg-cache"',
+        '--output_user_root="$CI_BAZEL_HOME/bazel-output"',
+    ):
+        if snippet not in driver:
+            print(
+                f"{driver_path.relative_to(ROOT)}: missing job-scoped Bazel state snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    for snippet in (
         "TINYLAND_CI_BAZELISK_BIN",
         "STORE_BASENAME_RE",
         "path.resolve(strict=True) != path",
@@ -718,6 +733,8 @@ def check_rust_bazel_application_contract() -> int:
         "TINYLAND_CI_BAZELISK_BIN",
         "before caller checkout",
         "not consult PATH for Bazelisk",
+        "XDG_CACHE_HOME",
+        "--output_user_root",
     ]
     for snippet in required_docs_snippets:
         if snippet not in docs:

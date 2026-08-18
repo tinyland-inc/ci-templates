@@ -19,7 +19,11 @@ set -euo pipefail
 }
 
 umask 077
-mkdir -p "$CI_BAZEL_HOME/home" "$CI_BAZEL_HOME/bazelisk"
+mkdir -p \
+  "$CI_BAZEL_HOME/home" \
+  "$CI_BAZEL_HOME/bazelisk" \
+  "$CI_BAZEL_HOME/xdg-cache" \
+  "$CI_BAZEL_HOME/bazel-output"
 
 exec env \
   -u BAZELISK \
@@ -49,8 +53,13 @@ exec env \
   -u REPIN \
   -u USE_BAZEL_FALLBACK_VERSION \
   -u USE_BAZEL_VERSION \
+  -u XDG_CACHE_HOME \
   HOME="$CI_BAZEL_HOME/home" \
   BAZELISK_HOME="$CI_BAZEL_HOME/bazelisk" \
   BAZELISK_SKIP_WRAPPER=1 \
   USE_BAZEL_VERSION="$CI_BAZEL_VERSION" \
-  "$CI_BAZELISK_BIN" --ignore_all_rc_files "$@"
+  XDG_CACHE_HOME="$CI_BAZEL_HOME/xdg-cache" \
+  "$CI_BAZELISK_BIN" \
+    --output_user_root="$CI_BAZEL_HOME/bazel-output" \
+    --ignore_all_rc_files \
+    "$@"

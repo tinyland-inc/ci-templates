@@ -144,8 +144,10 @@ goes through a release-vendored driver that invokes that exact path, scrubs all
 Bazelisk configuration and crate-universe repin/generator variables, resets
 the exact version and wrapper
 prohibition, forces `--ignore_all_rc_files`, and uses run-scoped
-`HOME`/`BAZELISK_HOME`
-roots under `RUNNER_TEMP`; a workspace `.bazeliskrc` is rejected. Caller
+`HOME`/`BAZELISK_HOME`/`XDG_CACHE_HOME` roots under `RUNNER_TEMP`, and passes an
+exact job-scoped `--output_user_root`; a workspace `.bazeliskrc` is rejected.
+The explicit output root prevents Bazel from falling back to a runner user's
+ambient XDG cache and carrying action/output state across jobs. Caller
 wrappers, download redirects, runner-service overrides, user config, and
 cross-run Bazelisk cache poisoning therefore cannot replace the validated
 Bazel binary, trigger an implicit repin, substitute the cargo-bazel generator,

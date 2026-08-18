@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -820,6 +821,7 @@ def self_test() -> int:
             'printf \'cargo_timeout=%s\\n\' "${CARGO_BAZEL_TIMEOUT-unset}" >> "$RECORD"\n'
             'printf \'home=%s\\n\' "$HOME" >> "$RECORD"\n'
             'printf \'bazelisk_home=%s\\n\' "$BAZELISK_HOME" >> "$RECORD"\n'
+            'printf \'xdg_cache_home=%s\\n\' "$XDG_CACHE_HOME" >> "$RECORD"\n'
             'printf \'skip=%s\\n\' "$BAZELISK_SKIP_WRAPPER" >> "$RECORD"\n'
             'printf \'version=%s\\n\' "$USE_BAZEL_VERSION" >> "$RECORD"\n'
             'printf \'args=%s\\n\' "$*" >> "$RECORD"\n',
@@ -856,6 +858,7 @@ def self_test() -> int:
             "CARGO_BAZEL_TIMEOUT": "999999",
             "POISON_RECORD": str(poison_record),
             "USE_BAZEL_VERSION": "latest",
+            "XDG_CACHE_HOME": str(driver_test / "ambient-xdg-cache"),
         }
         subprocess.run(
             [str(driver), "build", "//contract:target"],
@@ -877,10 +880,18 @@ def self_test() -> int:
             "cargo_timeout=unset\n"
             f"home={ci_home}/home\n"
             f"bazelisk_home={ci_home}/bazelisk\n"
+            f"xdg_cache_home={ci_home}/xdg-cache\n"
             "skip=1\n"
             "version=9.2.0\n"
-            "args=--ignore_all_rc_files build //contract:target\n"
+            f"args=--output_user_root={ci_home}/bazel-output "
+            "--ignore_all_rc_files build //contract:target\n"
         )
+        for relative in ("home", "bazelisk", "xdg-cache", "bazel-output"):
+            path = ci_home / relative
+            assert path.is_dir(), f"driver did not create {relative} custody root"
+            assert (
+                stat.S_IMODE(path.stat().st_mode) & 0o077 == 0
+            ), f"driver created non-private {relative} custody root"
     print("rust-bazel application contract self-test passed")
     return 0
 
