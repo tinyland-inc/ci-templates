@@ -21,7 +21,8 @@ The workflow does nothing unless `enabled: true`. An enabled caller supplies:
 - finite, non-empty JSON arrays of exact Bazel labels for rustfmt, clippy,
   application builds, unit tests, integration tests, and packages;
 - bounded lane controls: 5-180 timeout minutes and 1-4 concurrent lanes;
-- tracked `.bazelversion`, `MODULE.bazel`, and `MODULE.bazel.lock` files.
+- tracked regular `.bazelversion`, `MODULE.bazel`, `MODULE.bazel.lock`,
+  `Cargo.lock`, and `cargo-bazel-lock.json` files.
 
 Each selected native runner must already provide Bash, Git, Python 3, and
 `bazelisk`. Tool installation and runner enrollment belong to the caller's
