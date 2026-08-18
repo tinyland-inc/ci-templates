@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -47,6 +47,12 @@ internal-refs-check:
 # Ensure js-bazel-package keeps runner-mode semantics aligned with GloriousFlywheel.
 js-bazel-runner-contract-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py js-bazel-runner-contract
+
+# Guard the opt-in native Rust+Bazel workflow and exercise its dependency-free
+# finite-target parser. No consumer checkout or cache endpoint is required.
+rust-bazel-application-contract-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py rust-bazel-application-contract
+    cd {{ root }} && python3 .github/actions/rust-bazel-contract/contract.py --self-test
 
 # Ensure flywheel-reapi-proof keeps child-run correlation request-id based.
 flywheel-reapi-proof-contract-check:

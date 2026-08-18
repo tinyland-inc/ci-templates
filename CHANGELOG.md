@@ -7,6 +7,19 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Added
 
+- **Opt-in native Rust+Bazel application workflow** — add
+  `rust-bazel-application.yml` and its dependency-free finite-target contract
+  for the Prompt Pulse Bazel 9 canary. The workflow defaults disabled and takes
+  only caller-supplied native Darwin/Linux runner and Bazel platform facts. It
+  verifies tracked `.bazelversion`/Bzlmod authority, rejects recursive or
+  shorthand target sets, and runs exact Bazel rustfmt, clippy, build, unit,
+  integration, and package targets. GloriousFlywheel cache attachment is a
+  second default-off input: pull requests and unprotected refs are read-only,
+  while writes additionally require explicit caller approval, a push event,
+  and GitHub's protected-ref signal on the configured main branch or release
+  tag. No endpoint, credential, remote executor, runner label, package publish,
+  or four-platform claim is baked into the template.
+
 - **Opt-in tokenless Attic read degrade** — `nix-setup`, `nix-build`, and
   `greedy-cache` previously gated the Attic substituter
   (`extra-substituters` / `extra-trusted-public-keys`) on `ATTIC_TOKEN`

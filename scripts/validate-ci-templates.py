@@ -357,6 +357,136 @@ def check_cache_backed_optin_contract() -> int:
     return 0
 
 
+def check_rust_bazel_application_contract() -> int:
+    """Guard the opt-in native Rust+Bazel application workflow."""
+    workflow_path = ROOT / ".github/workflows/rust-bazel-application.yml"
+    action_path = ROOT / ".github/actions/rust-bazel-contract/action.yml"
+    contract_path = ROOT / ".github/actions/rust-bazel-contract/contract.py"
+    docs_path = ROOT / "docs/rust-bazel-application.md"
+    paths = (workflow_path, action_path, contract_path, docs_path)
+    ok = True
+    for path in paths:
+        if not path.is_file():
+            print(f"missing {path.relative_to(ROOT)}", file=sys.stderr)
+            ok = False
+    if not ok:
+        return 1
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+    action = action_path.read_text(encoding="utf-8")
+    contract = contract_path.read_text(encoding="utf-8")
+    docs = docs_path.read_text(encoding="utf-8")
+
+    default_false_inputs = ("enabled", "cache_enabled", "trusted_cache_upload")
+    for input_name in default_false_inputs:
+        block = re.search(
+            rf"\n      {re.escape(input_name)}:\n(?:.*\n)*?        default: (\w+)\n",
+            workflow,
+        )
+        if not block or block.group(1) != "false":
+            print(
+                f"{workflow_path.relative_to(ROOT)}: {input_name} must default false",
+                file=sys.stderr,
+            )
+            ok = False
+
+    required_workflow_snippets = [
+        "if: inputs.enabled",
+        'default: "[]"',
+        "lane: ${{ fromJSON(inputs.platform_matrix_json) }}",
+        "runs-on: ${{ matrix.lane.runner_labels }}",
+        "lane_name: ${{ matrix.lane.name }}",
+        "rust-bazel-contract@v2",
+        "cache-attachment-validate@v2",
+        "github.ref_protected",
+        '"$EVENT_NAME" == push',
+        'GF_BAZEL_REMOTE_UPLOAD=$upload',
+        '--remote_upload_local_results="$GF_BAZEL_REMOTE_UPLOAD"',
+        "bazelisk mod deps --lockfile_mode=update",
+        'git status --porcelain=v1 -- MODULE.bazel.lock',
+        'run_group "rustfmt" test',
+        'run_group "clippy" test',
+        'run_group "application build" build',
+        'run_group "unit tests" test',
+        'run_group "integration tests" test',
+        'run_group "packages" build',
+    ]
+    for snippet in required_workflow_snippets:
+        if snippet not in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: missing Rust+Bazel contract snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    required_contract_snippets = [
+        'OS_MAP = {"darwin": "macOS", "linux": "Linux"}',
+        'ARCH_MAP = {"aarch64": "ARM64", "x86_64": "X64"}',
+        "LANE_NAME_RE = re.compile",
+        'for path in (".bazelversion", "MODULE.bazel", "MODULE.bazel.lock")',
+        'if "..." in label or "*" in label',
+        "maximum=64",
+        "required workspace file is not tracked",
+    ]
+    for snippet in required_contract_snippets:
+        if snippet not in contract:
+            print(
+                f"{contract_path.relative_to(ROOT)}: missing fail-closed snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    required_docs_snippets = [
+        "opt-in, default-off",
+        "does not claim a four-platform",
+        "github.ref_protected == true",
+        "cache-first only",
+        "release publication remains a",
+    ]
+    for snippet in required_docs_snippets:
+        if snippet not in docs:
+            print(
+                f"{docs_path.relative_to(ROOT)}: missing public contract snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    forbidden_workflow_snippets = [
+        "--remote_executor",
+        "BAZEL_REMOTE_EXECUTOR",
+        "ubuntu-latest",
+        "macos-latest",
+        "windows-latest",
+        "cargo build",
+        "cargo test",
+        "//...",
+    ]
+    for snippet in forbidden_workflow_snippets:
+        if snippet in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: forbidden Rust+Bazel workflow snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    if re.search(r"(?:grpc|grpcs|http|https)://", workflow):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: workflow source must remain endpoint-free",
+            file=sys.stderr,
+        )
+        ok = False
+    if "contract.py" not in action or "required_bazel_major" not in action:
+        print(
+            f"{action_path.relative_to(ROOT)}: action must invoke the pinned Bazel contract",
+            file=sys.stderr,
+        )
+        ok = False
+
+    if not ok:
+        return 1
+    print("Rust+Bazel application workflow contract documented and guarded")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -367,6 +497,7 @@ def main() -> int:
             "js-bazel-runner-contract",
             "flywheel-reapi-proof-contract",
             "cache-backed-optin-contract",
+            "rust-bazel-application-contract",
         ],
     )
     args = parser.parse_args()
@@ -379,6 +510,8 @@ def main() -> int:
         return check_flywheel_reapi_proof_contract()
     if args.check == "cache-backed-optin-contract":
         return check_cache_backed_optin_contract()
+    if args.check == "rust-bazel-application-contract":
+        return check_rust_bazel_application_contract()
     return check_internal_refs()
 
 

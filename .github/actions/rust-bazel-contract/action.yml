@@ -1,0 +1,93 @@
+name: rust-bazel-contract
+description: >-
+  Validate the finite target, native platform, and pinned Bazel contract used by
+  rust-bazel-application.yml. This action performs no build and has no cache or
+  publication authority.
+
+inputs:
+  lane_name:
+    description: Stable human-readable name for this native lane.
+    required: true
+  expected_os:
+    description: "Native operating system: darwin or linux."
+    required: true
+  expected_arch:
+    description: "Native architecture: aarch64 or x86_64."
+    required: true
+  actual_os:
+    description: GitHub runner.os value for native-runner verification.
+    required: true
+  actual_arch:
+    description: GitHub runner.arch value for native-runner verification.
+    required: true
+  expected_runner_labels_json:
+    description: Exact non-empty JSON array requested by the workflow matrix.
+    required: true
+  bazel_platform:
+    description: Exact Bazel platform label for this native lane.
+    required: true
+  required_bazel_major:
+    description: Required major from the tracked .bazelversion pin.
+    required: false
+    default: "9"
+  rustfmt_targets_json:
+    description: Non-empty finite JSON array of exact rustfmt test labels.
+    required: true
+  clippy_targets_json:
+    description: Non-empty finite JSON array of exact clippy test labels.
+    required: true
+  build_targets_json:
+    description: Non-empty finite JSON array of exact application build labels.
+    required: true
+  unit_test_targets_json:
+    description: Non-empty finite JSON array of exact unit-test labels.
+    required: true
+  integration_test_targets_json:
+    description: Non-empty finite JSON array of exact integration-test labels.
+    required: true
+  package_targets_json:
+    description: Non-empty finite JSON array of exact package build labels.
+    required: true
+
+outputs:
+  rustfmt_targets:
+    description: Validated space-separated rustfmt labels.
+    value: ${{ steps.validate.outputs.rustfmt_targets }}
+  clippy_targets:
+    description: Validated space-separated clippy labels.
+    value: ${{ steps.validate.outputs.clippy_targets }}
+  build_targets:
+    description: Validated space-separated application build labels.
+    value: ${{ steps.validate.outputs.build_targets }}
+  unit_test_targets:
+    description: Validated space-separated unit-test labels.
+    value: ${{ steps.validate.outputs.unit_test_targets }}
+  integration_test_targets:
+    description: Validated space-separated integration-test labels.
+    value: ${{ steps.validate.outputs.integration_test_targets }}
+  package_targets:
+    description: Validated space-separated package build labels.
+    value: ${{ steps.validate.outputs.package_targets }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate native Rust+Bazel contract
+      id: validate
+      shell: bash
+      env:
+        LANE_NAME: ${{ inputs.lane_name }}
+        EXPECTED_OS: ${{ inputs.expected_os }}
+        EXPECTED_ARCH: ${{ inputs.expected_arch }}
+        ACTUAL_OS: ${{ inputs.actual_os }}
+        ACTUAL_ARCH: ${{ inputs.actual_arch }}
+        EXPECTED_RUNNER_LABELS_JSON: ${{ inputs.expected_runner_labels_json }}
+        BAZEL_PLATFORM: ${{ inputs.bazel_platform }}
+        REQUIRED_BAZEL_MAJOR: ${{ inputs.required_bazel_major }}
+        RUSTFMT_TARGETS_JSON: ${{ inputs.rustfmt_targets_json }}
+        CLIPPY_TARGETS_JSON: ${{ inputs.clippy_targets_json }}
+        BUILD_TARGETS_JSON: ${{ inputs.build_targets_json }}
+        UNIT_TEST_TARGETS_JSON: ${{ inputs.unit_test_targets_json }}
+        INTEGRATION_TEST_TARGETS_JSON: ${{ inputs.integration_test_targets_json }}
+        PACKAGE_TARGETS_JSON: ${{ inputs.package_targets_json }}
+      run: python3 "${{ github.action_path }}/contract.py" --workspace "$GITHUB_WORKSPACE" --github-output "$GITHUB_OUTPUT"
