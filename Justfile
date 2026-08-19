@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -63,6 +63,18 @@ flywheel-reapi-proof-contract-check:
 # its full dependency closure immutable, and preserve fleet-wide legacy bytes.
 restricted-workflow-contract-check:
     cd {{ root }} && ruby scripts/restricted-workflow-contract.rb
+
+# Prove spoke-ci's optional runner_group input (TIN-3902) is default-off: with
+# it unset every rendered runs-on is byte-for-byte the pre-TIN-3902 value; with
+# it set the four self-hosted jobs render GitHub's {group, labels} mapping with
+# the same labels, and the ubuntu-latest jobs never do.
+runner-group-contract-check:
+    cd {{ root }} && ruby scripts/runner-group-contract.rb
+
+# Prove that default-off checker rejects its negative oracles (unconditional
+# group mapping, group leaking into a hosted job, dropped/rerouted labels).
+runner-group-contract-selftest:
+    cd {{ root }} && ruby scripts/runner-group-contract.rb --self-test
 
 # Ensure the v2 Flywheel bazelrc fragment has no baked endpoints or upload authority.
 endpoint-free-check:

@@ -5,6 +5,51 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **TIN-3902: optional `runner_group` input on `spoke-ci.yml`** — lets a spoke
+  express GitHub's structured `runs-on: { group: <g>, labels: <class> }` for
+  every job that today resolves through `default_runner_class` /
+  `heavy_runner_class` / `kvm_runner_class` / `runner_labels_json`, so an owner
+  can bind spoke CI to an org-level runner group without leaving the shared
+  template. **Default `""` = today's label-only behavior** (rule 2,
+  `AGENTS.md`): the new expression is `inputs.runner_group != '' && <group
+  mapping> || <the byte-identical pre-TIN-3902 arm>`, so an unset group
+  short-circuits straight into the old value for all ~190 consumers.
+
+  When set, `flywheel-build`, `flywheel-test`, `bazel-graph`, and `playwright`
+  emit the mapping with **the same labels they resolve today** — the labels are
+  carried through `toJSON`, preserving `runner_labels_json`'s array shape and
+  the `runner_labels_json` → `matrix.lane.runner_class` → `default_runner_class`
+  precedence. The jobs whose `runs-on` is a plain literal today (`secrets-scan`,
+  `lanes-load`, `repo-manifest`, currently `ubuntu-latest`) are never
+  group-routed. That hosted-job class is itself slated for removal under the
+  no-GitHub-hosted-runners ruling (TIN-3914) in a separate PR; nothing added
+  here assumes `ubuntu-latest` survives — the gate below derives the
+  never-group-routed set from "literal `runs-on` today", so the migration only
+  needs a deliberate re-record.
+
+  A group mapping *narrows*: GitHub schedules only onto a runner that is in the
+  group **and** carries the labels, so the group must already exist, select the
+  calling repository, and serve the capability label — which is why this is
+  opt-in per spoke. It adds routing only, not trust: a private repo that needs
+  the fail-closed group+capability trust gate still uses
+  `spoke-ci-restricted.yml`, where `runner_group` is required.
+
+  New `just runner-group-contract-check` (+ `-selftest`, five negative oracles)
+  renders both paths over a scenario grid — scaffold defaults, the GFTB
+  org-scope overlay, a per-lane `runner_class`, and a `runner_labels_json`
+  array — and fails if the default path ever stops rendering byte-identically
+  or a literal-`runs-on` job starts group-routing. `scripts/lint-runs-on.rb`
+  now evaluates the runtime-composed
+  `fromJSON(format('{{"group":{0},"labels":{1}}}', …))` form with the same
+  structural semantics as a static `{group, labels}` node (runtime group WARNs;
+  a `Default`/`shared`/hosted group or a hosted/repo-shaped label in the mapping
+  still FAILs) instead of mistaking the JSON template for a runner label. The
+  format template is pinned to that one canonical string: any other template —
+  including one with a group or label hardcoded into it — is not this pattern
+  and falls back to the ordinary literal scan, which FAILs it.
+
 ### Changed
 
 - **TIN-3900: `secrets-scan` gitleaks pin 8.21.2 → 8.30.1, so repo
@@ -41,6 +86,17 @@ Versioning: [SemVer 2.0](https://semver.org/).
   Scanned clean under 8.30.1 with the action's exact invocation: this repo,
   `greatfallstoolbus.org`, `site.scaffold`, and the GFTB acceptance tree
   carrying the runtime-assembled `ghp_` fixture plus its `.gitleaksignore`.
+
+### Fixed
+
+- **`SPECS["spoke-ci"][:legacy_sha256]` re-recorded** (`7595e406…` →
+  `656e8c69…`) for the `runner_group` addition above, and the restricted
+  contract's input normalization now restores the legacy declaration for a
+  routing input the legacy workflow also declares (instead of dropping it), so
+  `spoke-ci-restricted.yml`'s required-and-defaultless `runner_group` is still
+  compared against the rest of the inputs surface structurally. The default-off
+  proof the digest pins is unchanged and is now additionally machine-checked by
+  `runner-group-contract-check`.
 
 ## [2.14.0] — 2026-08-18
 

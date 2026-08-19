@@ -68,7 +68,10 @@ SPECS = {
   "spoke-ci" => {
     legacy: ".github/workflows/spoke-ci.yml",
     restricted: ".github/workflows/spoke-ci-restricted.yml",
-    legacy_sha256: "7595e40678a4a5209308b28bbbebd76c8fd6dc8eff0b75b6d34dc595b552cfe5",
+    # Re-recorded for TIN-3902 (optional `runner_group` input). The default-off
+    # proof this digest pins is unchanged: with runner_group unset every job's
+    # runs-on short-circuits into the byte-identical pre-TIN-3902 arm.
+    legacy_sha256: "656e8c69bf9532f1ea088307b15d22182ae6b5353ca47e852b486380fa9c3235",
     inputs: {
       "runner_group" => "tinyland-infra",
       "nix_runner_label" => "tinyland-nix",
@@ -598,7 +601,20 @@ def validate_restricted(name, document, legacy, spec)
   if name == "spoke-ci"
     normalized_inputs["cache_backed"]["description"] = legacy_call.dig("inputs", "cache_backed", "description")
   end
-  spec[:inputs].each_key { |input| normalized_inputs.delete(input) }
+  # Strip the reviewed routing inputs from the structural comparison. Since
+  # TIN-3902 the legacy workflow also declares `runner_group` (optional,
+  # default ""); the restricted variant's reviewed delta for such a name is
+  # exactly that it is REQUIRED with no default, already asserted above. So
+  # restore the legacy declaration rather than deleting it — the rest of the
+  # inputs surface must still be structurally equal.
+  legacy_inputs = legacy_call.is_a?(Hash) && legacy_call["inputs"].is_a?(Hash) ? legacy_call["inputs"] : {}
+  spec[:inputs].each_key do |input|
+    if legacy_inputs.key?(input)
+      normalized_inputs[input] = deep_copy(legacy_inputs[input])
+    else
+      normalized_inputs.delete(input)
+    end
+  end
   spec[:removed_legacy_inputs].each do |input|
     normalized_inputs[input] = deep_copy(legacy_call["inputs"][input])
   end

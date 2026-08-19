@@ -104,6 +104,14 @@ def evaluate_expression(raw, job, opts)
   results = []
   work = raw.dup
 
+  # (0) A structured `{group, labels}` runs-on composed at runtime. Consume the
+  # whole fromJSON(format(...)) region: its arms are mapping arms, not bare
+  # label literals, and the JSON template itself is not a label at all.
+  if (composed = evaluate_composed_group(raw, job, opts))
+    work = work.sub(composed[:source], " ")
+    results.concat(composed[:results])
+  end
+
   # (1) JSON-array literals -> evaluate as arrays (canonical-reduction logic).
   raw.scan(/'(\[[^']*\])'/).each do |m|
     json = m[0]
@@ -227,6 +235,89 @@ def evaluate_group_labels(value, job, opts)
   { verdict: :fail, detail: "GitHub-hosted labels cannot satisfy a runner-group mapping", resolved: result[:resolved] }
 end
 
+# YAML cannot express a CONDITIONAL runs-on mapping, so a workflow that must
+# keep a label-only default composes GitHub's structured `{group, labels}` form
+# at runtime:
+#
+#   ${{ inputs.runner_group != '' &&
+#       fromJSON(format('{{"group":{0},"labels":{1}}}',
+#                       toJSON(inputs.runner_group), toJSON(<labels expr>)))
+#       || <labels expr> }}
+#
+# That is the same mapping as a static `runs-on: {group:, labels:}` node, so it
+# gets the same structural verdict instead of being mistaken for a bare label
+# literal. An arm that is a single quoted literal is verdicted statically;
+# anything else is runtime-resolved (WARN, plus the forbidden-fallback scan).
+COMPOSED_GROUP_TEMPLATE = /format\(\s*'\{\{\s*"group"\s*:[^']*'/
+STATIC_CALL_ARG = /\A(?:toJSON\()?\s*'([^']*)'\s*\)?\z/
+
+# Split the argument list of the call whose `(` is at open_paren, honouring
+# nested parens and single-quoted literals. Returns [args, index_of_close].
+def split_call_args(source, open_paren)
+  args = []
+  current = +""
+  depth = 0
+  in_quote = false
+  index = open_paren
+
+  while index < source.length
+    char = source[index]
+    if in_quote
+      current << char
+      in_quote = false if char == "'"
+    elsif char == "'"
+      in_quote = true
+      current << char
+    elsif char == "("
+      depth += 1
+      current << char if depth > 1
+    elsif char == ")"
+      depth -= 1
+      if depth.zero?
+        args << current
+        return [args, index]
+      end
+      current << char
+    elsif char == "," && depth == 1
+      args << current
+      current = +""
+    else
+      current << char
+    end
+    index += 1
+  end
+
+  [args << current, source.length - 1]
+end
+
+# `toJSON('tinyland-infra')` is a static arm and is verdicted as the literal;
+# anything else stays an expression so the runtime/forbidden-fallback rules run.
+def composed_arm(arg)
+  text = arg.to_s.strip
+  literal = STATIC_CALL_ARG.match(text)
+  literal ? literal[1] : "${{ #{text} }}"
+end
+
+# Returns { source:, results: } for the composed mapping, or nil when the
+# expression does not build one. Never raises.
+def evaluate_composed_group(raw, job, opts)
+  match = COMPOSED_GROUP_TEMPLATE.match(raw)
+  return nil unless match
+
+  open_paren = raw.index("(", match.begin(0))
+  return nil unless open_paren
+
+  args, close_paren = split_call_args(raw, open_paren)
+  return nil if args.length < 3
+
+  group = evaluate_runner_group(composed_arm(args[1]))
+  labels = evaluate_group_labels(composed_arm(args[2]), job, opts)
+
+  { source: raw[match.begin(0)..close_paren], results: [group, labels] }
+rescue StandardError
+  nil
+end
+
 def evaluate_mapping(value, job, opts)
   normalized = value.transform_keys(&:to_s)
   unknown = normalized.keys - %w[group labels]
@@ -312,6 +403,17 @@ end
 
 # ── self-test oracle (pins parity with the taxonomy authority) ──────────────
 
+# The exact composed shape spoke-ci.yml emits for its optional `runner_group`
+# input, so the workflow and this guard cannot drift apart silently.
+def composed_expr(group_arg, labels_arg, fallback = "inputs.default_runner_class")
+  "${{ inputs.runner_group != '' && " \
+    "fromJSON(format('{{\"group\":{0},\"labels\":{1}}}', #{group_arg}, #{labels_arg})) " \
+    "|| #{fallback} }}"
+end
+
+COMPOSED_RUNTIME = composed_expr("toJSON(inputs.runner_group)", "toJSON(inputs.default_runner_class)")
+COMPOSED_STATIC = composed_expr("toJSON('tinyland-infra')", "toJSON('tinyland-nix')", "'tinyland-nix'")
+
 def self_test
   opts = { self_hosted_array_mixed: :fail, scale_set_names: [] }
   oracle = [
@@ -356,6 +458,20 @@ def self_test
     [{ "group" => "Default", "labels" => "tinyland-nix" }, :fail, "group mapping rejects Default"],
     [{ "group" => ["tinyland-infra"], "labels" => "tinyland-nix" }, :fail, "group mapping rejects non-string group"],
     [{ "group" => "tinyland-infra", "labels" => { "nested" => "tinyland-nix" } }, :fail, "group mapping rejects nested labels"],
+    # Composed structured runs-on (spoke-ci's optional runner_group, TIN-3902):
+    # the same mapping semantics as the static node above, never a bare label.
+    [COMPOSED_RUNTIME, :warn, "composed group mapping: runtime group + runtime labels"],
+    [COMPOSED_STATIC, :pass, "composed group mapping: static group + static capability label"],
+    [composed_expr("toJSON(inputs.runner_group || 'Default')", "toJSON(inputs.default_runner_class)"), :fail,
+     "composed group rejects a Default fallback smuggled into the group arm"],
+    [composed_expr("toJSON(inputs.runner_group || 'shared-runners')", "toJSON(inputs.default_runner_class)"), :fail,
+     "composed group rejects a generic shared fallback in the group arm"],
+    [composed_expr("toJSON(inputs.runner_group)", "toJSON('ubuntu-latest')"), :fail,
+     "composed group rejects hosted labels (a hosted label cannot satisfy a group)"],
+    [composed_expr("toJSON(inputs.runner_group)", "toJSON(inputs.x || 'ubuntu-latest')"), :fail,
+     "composed group rejects a hosted fallback smuggled into the labels arm"],
+    [composed_expr("toJSON(inputs.runner_group)", "toJSON('chapel-nix')"), :fail,
+     "composed group rejects a repo-shaped label"],
   ]
   matrix_job = { "strategy" => { "matrix" => { "os" => %w[ubuntu-latest macos-latest] } } }
   matrix_cases = [

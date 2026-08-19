@@ -87,6 +87,29 @@ on:
           Runner-class label for the playwright job (playwright_enabled=true
           only). Same org-tenancy rationale as heavy_runner_class. Default
           preserves pre-v2.8.1 behavior byte-identically.
+      runner_group:
+        type: string
+        default: ""
+        description: >-
+          Optional owner-scoped GitHub Actions runner group. Default "" =
+          today's label-only routing, byte-identical for every non-opted
+          consumer (AGENTS.md rule 2). When non-empty, every self-hosted job
+          (flywheel-build, flywheel-test, bazel-graph, playwright) switches
+          from a bare label/array `runs-on` to GitHub's structured
+          `runs-on: { group: <runner_group>, labels: <the same labels this
+          job resolves today> }`, composed at runtime via
+          fromJSON(format(...)) because YAML cannot express a conditional
+          mapping. The already-resolved labels are carried through toJSON, so
+          `runner_labels_json` / `matrix.lane.runner_class` /
+          `default_runner_class` / `heavy_runner_class` / `kvm_runner_class`
+          keep their exact precedence and their string-vs-array shape. The
+          three hosted `ubuntu-latest` jobs (secrets-scan, lanes-load,
+          repo-manifest) are never group-routed. A group mapping matches only
+          runners that are BOTH in that org-level runner group AND carry the
+          labels, so the group must already exist, have this repository in its
+          selection, and serve the capability label — workflow source is not
+          proof of any of those. Generic groups (Default / shared /
+          GitHub-hosted) are rejected by the runs-on linter.
       gitleaks_config:
         type: string
         default: .gitleaks.toml
@@ -156,7 +179,15 @@ jobs:
       fail-fast: false
       matrix:
         lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
-    runs-on: ${{ inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class }}
+    # runner_group unset (default): the trailing arm is byte-for-byte the
+    # pre-runner_group expression, so `false && … ||` short-circuits straight
+    # into it. Set: the SAME resolved labels are carried into GitHub's
+    # structured `runs-on: {group, labels}` via toJSON (string or array).
+    runs-on: >-
+      ${{ inputs.runner_group != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group),
+      toJSON(inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class)))
+      || inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
@@ -281,7 +312,15 @@ jobs:
       fail-fast: false
       matrix:
         lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
-    runs-on: ${{ inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class }}
+    # runner_group unset (default): the trailing arm is byte-for-byte the
+    # pre-runner_group expression, so `false && … ||` short-circuits straight
+    # into it. Set: the SAME resolved labels are carried into GitHub's
+    # structured `runs-on: {group, labels}` via toJSON (string or array).
+    runs-on: >-
+      ${{ inputs.runner_group != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group),
+      toJSON(inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class)))
+      || inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -292,7 +331,11 @@ jobs:
 
   bazel-graph:
     needs: [secrets-scan]
-    runs-on: ${{ inputs.heavy_runner_class }}
+    # Same default-off shape as the matrix jobs (see flywheel-build).
+    runs-on: >-
+      ${{ inputs.runner_group != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.heavy_runner_class)))
+      || inputs.heavy_runner_class }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -366,7 +409,11 @@ jobs:
       fail-fast: false
       matrix:
         lane: ${{ fromJson(needs.lanes-load.outputs.lanes_json) }}
-    runs-on: ${{ inputs.kvm_runner_class }}
+    # Same default-off shape as the matrix jobs (see flywheel-build).
+    runs-on: >-
+      ${{ inputs.runner_group != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.kvm_runner_class)))
+      || inputs.kvm_runner_class }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
