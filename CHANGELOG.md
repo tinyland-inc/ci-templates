@@ -89,6 +89,24 @@ Versioning: [SemVer 2.0](https://semver.org/).
   it at the next `v2` re-point. Do not re-point `v2` past a future eviction of
   that half until the darkmap sender is retired.
 
+### Fixed
+
+- **`spoke-lane-env` default-off digest re-recorded (TIN-3903)** — the
+  TIN-489 deprecation banner added to `.github/workflows/spoke-lane-env.yml`
+  (#122) changed the file's bytes without re-pinning
+  `SPECS["spoke-lane-env"][:legacy_sha256]` in
+  `scripts/restricted-workflow-contract.rb`, so `just check` failed on a clean
+  `main` with `legacy workflow bytes changed (8e7e444f…); default-off proof
+  invalid` — a fleet-wide gate, not a local one. Re-recorded the pin
+  `759ebf6d…` → `8e7e444f…`. The #122 edit is six leading `#` comment lines
+  and nothing else: the diff of both revisions with comment and blank lines
+  stripped is empty (157 significant lines on each side), and the parsed YAML
+  documents compare equal — identical `on:` / `workflow_call` inputs and
+  secrets, `permissions`, `concurrency`, the same six jobs in the same order,
+  and byte-identical `if:` guards. The default-off proof the digest anchors is
+  therefore unchanged; only the bytes it is taken over moved. The `spoke-ci`
+  pin was verified still current and is untouched.
+
 ## [2.13.0] — 2026-08-06
 
 ### Deprecated

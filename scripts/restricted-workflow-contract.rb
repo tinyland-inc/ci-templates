@@ -94,7 +94,7 @@ SPECS = {
   "spoke-lane-env" => {
     legacy: ".github/workflows/spoke-lane-env.yml",
     restricted: ".github/workflows/spoke-lane-env-restricted.yml",
-    legacy_sha256: "759ebf6dfed8932e853ed6e03d47968d488e0ec867c245bb9a5fe2df0cd056ce",
+    legacy_sha256: "8e7e444fc3b5029dd0984a0e8b985f5b62ac7fc13363015c7602b24651517c32",
     inputs: {
       "runner_group" => "tinyland-infra",
       "nix_runner_label" => "tinyland-nix",
