@@ -1,0 +1,19 @@
+name: rust-bazel-binary-custody
+description: >-
+  Validate the runner-owned immutable Bazelisk binary before caller checkout.
+  This action never consults caller input or PATH for Bazelisk selection.
+
+outputs:
+  path:
+    description: Canonical unwrapped Bazelisk path in the Nix store.
+    value: ${{ steps.custody.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate runner-owned Bazelisk fact
+      id: custody
+      shell: bash
+      run: >-
+        python3 "${{ github.action_path }}/custody.py"
+        --github-output "$GITHUB_OUTPUT"

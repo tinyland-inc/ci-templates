@@ -1,0 +1,78 @@
+name: rust-bazel-preflight
+description: >-
+  Validate and canonicalize the complete native Rust+Bazel matrix before any
+  dynamic runner is scheduled or caller source is checked out.
+
+inputs:
+  repository_private:
+    description: GitHub repository-private signal for private-runner admission.
+    required: true
+  event_name:
+    description: Exact caller event name.
+    required: true
+  repository:
+    description: Exact owner/name of the caller repository.
+    required: true
+  head_repository:
+    description: Pull-request head owner/name, or empty for non-PR events.
+    required: true
+  timeout_minutes:
+    description: Native lane timeout, constrained to 5-180 minutes.
+    required: true
+  max_parallel:
+    description: Native lane concurrency, constrained to 1-4.
+    required: true
+  runner_group:
+    description: Exact reviewed private runner group (tinyland-infra in v2.14.0).
+    required: true
+  platform_matrix_json:
+    description: Non-empty native platform matrix with at most four lanes.
+    required: true
+  rustfmt_targets_json:
+    description: Non-empty finite JSON array of exact rustfmt test labels.
+    required: true
+  clippy_targets_json:
+    description: Non-empty finite JSON array of exact clippy test labels.
+    required: true
+  build_targets_json:
+    description: Non-empty finite JSON array of exact application build labels.
+    required: true
+  unit_test_targets_json:
+    description: Non-empty finite JSON array of exact unit-test labels.
+    required: true
+  integration_test_targets_json:
+    description: Non-empty finite JSON array of exact integration-test labels.
+    required: true
+  package_targets_json:
+    description: Non-empty finite JSON array of exact package build labels.
+    required: true
+
+outputs:
+  platform_matrix_json:
+    description: Canonical validated platform matrix safe for strategy expansion.
+    value: ${{ steps.validate.outputs.platform_matrix_json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate native matrix before dynamic scheduling
+      id: validate
+      shell: bash
+      env:
+        REPOSITORY_PRIVATE: ${{ inputs.repository_private }}
+        EVENT_NAME: ${{ inputs.event_name }}
+        REPOSITORY: ${{ inputs.repository }}
+        HEAD_REPOSITORY: ${{ inputs.head_repository }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+        MAX_PARALLEL: ${{ inputs.max_parallel }}
+        RUNNER_GROUP: ${{ inputs.runner_group }}
+        PLATFORM_MATRIX_JSON: ${{ inputs.platform_matrix_json }}
+        RUSTFMT_TARGETS_JSON: ${{ inputs.rustfmt_targets_json }}
+        CLIPPY_TARGETS_JSON: ${{ inputs.clippy_targets_json }}
+        BUILD_TARGETS_JSON: ${{ inputs.build_targets_json }}
+        UNIT_TEST_TARGETS_JSON: ${{ inputs.unit_test_targets_json }}
+        INTEGRATION_TEST_TARGETS_JSON: ${{ inputs.integration_test_targets_json }}
+        PACKAGE_TARGETS_JSON: ${{ inputs.package_targets_json }}
+      run: >-
+        python3 "${{ github.action_path }}/../rust-bazel-contract/contract.py"
+        --matrix-preflight --github-output "$GITHUB_OUTPUT"

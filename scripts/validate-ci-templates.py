@@ -7,10 +7,65 @@ import argparse
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+RUST_BAZEL_RELEASE = "v2.14.0"
+RUST_BAZEL_CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
+RUBY_USES_SCRIPT = r"""
+require "json"
+require "yaml"
+
+document = YAML.safe_load(
+  STDIN.read,
+  permitted_classes: [],
+  permitted_symbols: [],
+  aliases: true,
+)
+references = []
+walk = nil
+walk = lambda do |node|
+  case node
+  when Hash
+    node.each do |key, value|
+      if key.to_s == "uses"
+        references << value
+      else
+        walk.call(value)
+      end
+    end
+  when Array
+    node.each { |value| walk.call(value) }
+  end
+end
+walk.call(document)
+puts JSON.generate(references)
+"""
+
+
+def structural_uses(document: str) -> list[str]:
+    """Return every YAML `uses` value without relying on textual spelling."""
+
+    result = subprocess.run(
+        ["ruby", "-e", RUBY_USES_SCRIPT],
+        input=document,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError(result.stderr.strip() or "Ruby YAML parser failed")
+    try:
+        references = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Ruby YAML parser emitted invalid JSON: {exc}") from exc
+    if not isinstance(references, list) or any(
+        not isinstance(reference, str) or not reference for reference in references
+    ):
+        raise ValueError("every YAML uses value must be a non-empty string")
+    return references
 
 
 def validate_manifest() -> int:
@@ -97,6 +152,7 @@ def check_js_bazel_package_runner_contract() -> int:
                 file=sys.stderr,
             )
             ok = False
+
     for snippet in required_docs_snippets:
         if snippet not in docs:
             print(
@@ -357,6 +413,426 @@ def check_cache_backed_optin_contract() -> int:
     return 0
 
 
+def check_rust_bazel_application_contract() -> int:
+    """Guard the opt-in native Rust+Bazel application workflow."""
+    workflow_path = ROOT / ".github/workflows/rust-bazel-application.yml"
+    action_path = ROOT / ".github/actions/rust-bazel-contract/action.yml"
+    preflight_action_path = ROOT / ".github/actions/rust-bazel-preflight/action.yml"
+    custody_action_path = (
+        ROOT / ".github/actions/rust-bazel-binary-custody/action.yml"
+    )
+    custody_contract_path = (
+        ROOT / ".github/actions/rust-bazel-binary-custody/custody.py"
+    )
+    contract_path = ROOT / ".github/actions/rust-bazel-contract/contract.py"
+    driver_path = ROOT / ".github/actions/rust-bazel-contract/bazelisk-ci"
+    docs_path = ROOT / "docs/rust-bazel-application.md"
+    paths = (
+        workflow_path,
+        action_path,
+        preflight_action_path,
+        custody_action_path,
+        custody_contract_path,
+        contract_path,
+        driver_path,
+        docs_path,
+    )
+    ok = True
+    for path in paths:
+        if not path.is_file():
+            print(f"missing {path.relative_to(ROOT)}", file=sys.stderr)
+            ok = False
+    if not ok:
+        return 1
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+    action = action_path.read_text(encoding="utf-8")
+    preflight_action = preflight_action_path.read_text(encoding="utf-8")
+    custody_action = custody_action_path.read_text(encoding="utf-8")
+    custody_contract = custody_contract_path.read_text(encoding="utf-8")
+    contract = contract_path.read_text(encoding="utf-8")
+    driver = driver_path.read_text(encoding="utf-8")
+    docs = docs_path.read_text(encoding="utf-8")
+
+    uses_oracles = {
+        "      uses: actions/checkout@abc": ["actions/checkout@abc"],
+        "      - uses: evil/action@main": ["evil/action@main"],
+        "      - uses: './local-action'": ["./local-action"],
+        "      - {uses: inline/action@main}": ["inline/action@main"],
+        '      "uses": quoted/action@main': ["quoted/action@main"],
+        "      - uses : spaced/action@main": ["spaced/action@main"],
+    }
+    for fragment, expected in uses_oracles.items():
+        sample = f"steps:\n{fragment}\n"
+        try:
+            observed = structural_uses(sample)
+        except ValueError as exc:
+            print(
+                f"Rust+Bazel structural uses parser rejected oracle {fragment!r}: {exc}",
+                file=sys.stderr,
+            )
+            ok = False
+            continue
+        if observed != expected:
+            print(
+                "Rust+Bazel structural uses parser returned the wrong closure for "
+                f"{fragment!r}: expected {expected}, got {observed}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    closure_errors: list[str] = []
+    closure_queue = [workflow_path]
+    closure_visited: set[pathlib.Path] = set()
+    internal_actions: set[str] = set()
+    external_actions: set[str] = set()
+    while closure_queue:
+        closure_path = closure_queue.pop()
+        if closure_path in closure_visited:
+            continue
+        closure_visited.add(closure_path)
+        closure_text = closure_path.read_text(encoding="utf-8")
+        try:
+            references = structural_uses(closure_text)
+        except ValueError as exc:
+            closure_errors.append(
+                f"{closure_path.relative_to(ROOT)}: cannot parse immutable action closure: {exc}"
+            )
+            continue
+        for reference in references:
+            if reference.startswith("./"):
+                closure_errors.append(
+                    f"{closure_path.relative_to(ROOT)}: consumer-relative action is not release-vendored: {reference}"
+                )
+                continue
+            prefix = "tinyland-inc/ci-templates/.github/actions/"
+            if reference.startswith(prefix):
+                action_ref = reference.removeprefix(prefix)
+                if "@" not in action_ref:
+                    closure_errors.append(
+                        f"{closure_path.relative_to(ROOT)}: internal action has no release ref: {reference}"
+                    )
+                    continue
+                action_name, release_ref = action_ref.rsplit("@", maxsplit=1)
+                if release_ref != RUST_BAZEL_RELEASE:
+                    closure_errors.append(
+                        f"{closure_path.relative_to(ROOT)}: internal action {action_name} must use @{RUST_BAZEL_RELEASE}"
+                    )
+                action_file = ROOT / ".github/actions" / action_name / "action.yml"
+                if not action_file.is_file():
+                    closure_errors.append(
+                        f"{closure_path.relative_to(ROOT)}: missing internal action {action_file.relative_to(ROOT)}"
+                    )
+                    continue
+                internal_actions.add(action_name)
+                closure_queue.append(action_file)
+                continue
+            if "@" not in reference:
+                closure_errors.append(
+                    f"{closure_path.relative_to(ROOT)}: external action has no immutable ref: {reference}"
+                )
+                continue
+            _action_name, release_ref = reference.rsplit("@", maxsplit=1)
+            if not re.fullmatch(r"[0-9a-f]{40}", release_ref):
+                closure_errors.append(
+                    f"{closure_path.relative_to(ROOT)}: external action must use a full commit SHA: {reference}"
+                )
+            external_actions.add(reference)
+
+    expected_internal_actions = {
+        "cache-attachment-validate",
+        "rust-bazel-binary-custody",
+        "rust-bazel-contract",
+        "rust-bazel-preflight",
+    }
+    if internal_actions != expected_internal_actions:
+        closure_errors.append(
+            "Rust+Bazel internal action closure changed: "
+            f"expected {sorted(expected_internal_actions)}, got {sorted(internal_actions)}"
+        )
+    expected_external_actions = {f"actions/checkout@{RUST_BAZEL_CHECKOUT_SHA}"}
+    if external_actions != expected_external_actions:
+        closure_errors.append(
+            "Rust+Bazel external action closure changed: "
+            f"expected {sorted(expected_external_actions)}, got {sorted(external_actions)}"
+        )
+    for error in closure_errors:
+        print(error, file=sys.stderr)
+        ok = False
+
+    default_false_inputs = ("enabled", "cache_enabled", "trusted_cache_upload")
+    for input_name in default_false_inputs:
+        block = re.search(
+            rf"\n      {re.escape(input_name)}:\n(?:.*\n)*?        default: (\w+)\n",
+            workflow,
+        )
+        if not block or block.group(1) != "false":
+            print(
+                f"{workflow_path.relative_to(ROOT)}: {input_name} must default false",
+                file=sys.stderr,
+            )
+            ok = False
+
+    required_workflow_snippets = [
+        "runs-on: ubuntu-24.04",
+        "repository_private: ${{ github.event.repository.private }}",
+        "head_repository: ${{ github.event.pull_request.head.repo.full_name || '' }}",
+        "timeout_minutes: ${{ inputs.timeout_minutes }}",
+        "max_parallel: ${{ inputs.max_parallel }}",
+        "rust-bazel-preflight@v2.14.0",
+        "rust-bazel-binary-custody@v2.14.0",
+        "steps.bazelisk-custody.outputs.path",
+        "needs: trust-gate",
+        'default: "[]"',
+        "lane: ${{ fromJSON(needs.trust-gate.outputs.platform_matrix_json) }}",
+        "group: ${{ inputs.runner_group }}",
+        "labels: ${{ matrix.lane.runner_labels }}",
+        "lane_name: ${{ matrix.lane.name }}",
+        "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+        "rust-bazel-contract@v2.14.0",
+        "cache-attachment-validate@v2.14.0",
+        "github.ref_protected",
+        "trusted_cache_upload: ${{ inputs.trusted_cache_upload }}",
+        "cache_substrate_mode: ${{ inputs.cache_substrate_mode }}",
+        "cache_endpoint: ${{ inputs.cache_enabled && secrets.GF_BAZEL_REMOTE_CACHE || '' }}",
+        "cache_read_header_present: ${{ secrets.GF_BAZEL_REMOTE_CACHE_READ_HEADER != '' }}",
+        "cache_write_header_present: ${{ secrets.GF_BAZEL_REMOTE_CACHE_WRITE_HEADER != '' }}",
+        "cache_headers_distinct: ${{ secrets.GF_BAZEL_REMOTE_CACHE_READ_HEADER != secrets.GF_BAZEL_REMOTE_CACHE_WRITE_HEADER }}",
+        "GF_BAZEL_REMOTE_UPLOAD: ${{ steps.contract.outputs.cache_upload }}",
+        "secrets.GF_BAZEL_REMOTE_CACHE_READ_HEADER",
+        "secrets.GF_BAZEL_REMOTE_CACHE_WRITE_HEADER",
+        "steps.contract.outputs.cache_upload == 'true' && secrets.GF_BAZEL_REMOTE_CACHE_WRITE_HEADER",
+        '--remote_upload_local_results="$GF_BAZEL_REMOTE_UPLOAD"',
+        "remote_args=(--remote_executor=)",
+        'BAZEL_REMOTE_EXECUTOR: ""',
+        "remote_args+=(--remote_cache= --remote_upload_local_results=false)",
+        '"$BAZELISK_DRIVER" mod deps --lockfile_mode=update',
+        '"$BAZELISK_DRIVER" "$command"',
+        "--lockfile_mode=error",
+        "BAZELISK_DRIVER: ${{ steps.contract.outputs.bazelisk_driver }}",
+        "CI_BAZEL_HOME: ${{ steps.contract.outputs.bazel_home }}",
+        "CI_BAZELISK_BIN: ${{ steps.bazelisk-custody.outputs.path }}",
+        "CI_BAZEL_VERSION: ${{ steps.contract.outputs.bazel_version }}",
+        "dependency_authorities=(MODULE.bazel.lock Cargo.lock cargo-bazel-lock.json)",
+        'run_group "rustfmt" test',
+        'run_group "clippy" test',
+        'run_group "application build" build',
+        'run_group "unit tests" test',
+        'run_group "integration tests" test',
+        'run_group "packages" build',
+        "Bzlmod or crate-universe authority changed during the authoritative target suite",
+    ]
+    for snippet in required_workflow_snippets:
+        if snippet not in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: missing Rust+Bazel contract snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    custody_step = workflow.find(
+        "      - name: Validate trusted Bazelisk before caller checkout\n"
+    )
+    checkout_step = workflow.find("      - name: Check out exact caller revision\n")
+    if custody_step < 0 or checkout_step < 0 or custody_step >= checkout_step:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: binary custody must run before caller checkout",
+            file=sys.stderr,
+        )
+        ok = False
+
+    required_contract_snippets = [
+        'OS_MAP = {"darwin": "macOS", "linux": "Linux"}',
+        'ARCH_MAP = {"aarch64": "ARM64", "x86_64": "X64"}',
+        "LANE_NAME_RE = re.compile",
+        "RUNNER_GROUP_RE = re.compile",
+        'ADMITTED_RUNNER_GROUPS = {"tinyland-infra"}',
+        "ORG_CAPABILITY_RE = re.compile",
+        "BAZEL_PLATFORM_MAP = {",
+        "validate_bazel_platform",
+        "cache_upload_allowed",
+        "validate_cache_authority",
+        "validate_caller_admission",
+        "bounded_integer",
+        "validate_matrix_contract",
+        'target_name in {"all", "all-targets"}',
+        '"cargo-bazel-lock.json",',
+        "maximum=64",
+        "required workspace file is not tracked",
+        "workspace .bazeliskrc is not admitted",
+        "BAZELISK_HOME_DARWIN",
+        "CARGO_BAZEL_GENERATOR_URL",
+        "CARGO_BAZEL_REPIN_ONLY",
+    ]
+    for snippet in required_contract_snippets:
+        if snippet not in contract:
+            print(
+                f"{contract_path.relative_to(ROOT)}: missing fail-closed snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    for snippet in (
+        "-u XDG_CACHE_HOME",
+        'XDG_CACHE_HOME="$CI_BAZEL_HOME/xdg-cache"',
+        '--output_user_root="$CI_BAZEL_HOME/bazel-output"',
+    ):
+        if snippet not in driver:
+            print(
+                f"{driver_path.relative_to(ROOT)}: missing job-scoped Bazel state snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    for snippet in (
+        "TINYLAND_CI_BAZELISK_BIN",
+        "STORE_BASENAME_RE",
+        "path.resolve(strict=True) != path",
+        "stat.S_IMODE(metadata.st_mode) & 0o022",
+        "required_uid: int = 0",
+        "rust-bazel binary custody self-test passed",
+    ):
+        if snippet not in custody_contract:
+            print(
+                f"{custody_contract_path.relative_to(ROOT)}: missing custody snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    if "custody.py" not in custody_action:
+        print(
+            f"{custody_action_path.relative_to(ROOT)}: custody action does not execute its contract",
+            file=sys.stderr,
+        )
+        ok = False
+    for snippet in (
+        "value: ${{ steps.custody.outputs.path }}",
+        '--github-output "$GITHUB_OUTPUT"',
+    ):
+        if snippet not in custody_action:
+            print(
+                f"{custody_action_path.relative_to(ROOT)}: missing custody output wiring: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    if 'handle.write(f"path={path}\\n")' not in custody_contract:
+        print(
+            f"{custody_contract_path.relative_to(ROOT)}: canonical path is not written to the action output",
+            file=sys.stderr,
+        )
+        ok = False
+
+    required_docs_snippets = [
+        "opt-in, default-off",
+        "does not claim a four-platform",
+        "tinyland-infra",
+        "same-repository",
+        "@v2.14.0",
+        "github.ref_protected == true",
+        "cache-first",
+        "release publication remains a",
+        "TINYLAND_CI_BAZELISK_BIN",
+        "before caller checkout",
+        "not consult PATH for Bazelisk",
+        "XDG_CACHE_HOME",
+        "--output_user_root",
+    ]
+    for snippet in required_docs_snippets:
+        if snippet not in docs:
+            print(
+                f"{docs_path.relative_to(ROOT)}: missing public contract snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    forbidden_workflow_snippets = [
+        "GF_BAZEL_REMOTE_HEADER",
+        "GF_BAZEL_CREDENTIAL_HELPER",
+        "ubuntu-latest",
+        "macos-latest",
+        "windows-latest",
+        "cargo build",
+        "cargo test",
+        "//...",
+    ]
+    for snippet in forbidden_workflow_snippets:
+        if snippet in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: forbidden Rust+Bazel workflow snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+    if "--remote_executor" in workflow.replace("--remote_executor=", ""):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: remote executor may only appear as an explicit empty override",
+            file=sys.stderr,
+        )
+        ok = False
+    if "BAZEL_REMOTE_EXECUTOR" in workflow.replace('BAZEL_REMOTE_EXECUTOR: ""', ""):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: inherited executor authority may only be cleared with an explicit empty step env",
+            file=sys.stderr,
+        )
+        ok = False
+    if re.search(
+        r"tinyland-inc/ci-templates/\.github/actions/[^@\s]+@v2(?:\s|$)", workflow
+    ):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: floating internal action reference",
+            file=sys.stderr,
+        )
+        ok = False
+    native_job_header = workflow.split("\n  native:\n", maxsplit=1)[1].split(
+        "\n    steps:\n", maxsplit=1
+    )[0]
+    if "secrets.GF_BAZEL" in native_job_header:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: cache secrets must be step-scoped",
+            file=sys.stderr,
+        )
+        ok = False
+    for secret_name in (
+        "secrets.GF_BAZEL_REMOTE_CACHE_READ_HEADER",
+        "secrets.GF_BAZEL_REMOTE_CACHE_WRITE_HEADER",
+    ):
+        if workflow.count(secret_name) != 3:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: {secret_name} must have one presence check, one equality check, and one step-scoped materialization",
+                file=sys.stderr,
+            )
+            ok = False
+    if (
+        "--matrix-preflight" not in preflight_action
+        or "contract.py" not in preflight_action
+    ):
+        print(
+            f"{preflight_action_path.relative_to(ROOT)}: preflight must use the release-vendored matrix contract",
+            file=sys.stderr,
+        )
+        ok = False
+    if re.search(r"(?:grpc|grpcs|http|https)://", workflow):
+        print(
+            f"{workflow_path.relative_to(ROOT)}: workflow source must remain endpoint-free",
+            file=sys.stderr,
+        )
+        ok = False
+    if (
+        "contract.py" not in action
+        or "required_bazel_major" not in action
+        or "cache_upload" not in action
+        or "runner_group" not in action
+    ):
+        print(
+            f"{action_path.relative_to(ROOT)}: action must invoke the pinned Bazel contract",
+            file=sys.stderr,
+        )
+        ok = False
+
+    if not ok:
+        return 1
+    print("Rust+Bazel application workflow contract documented and guarded")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -367,6 +843,7 @@ def main() -> int:
             "js-bazel-runner-contract",
             "flywheel-reapi-proof-contract",
             "cache-backed-optin-contract",
+            "rust-bazel-application-contract",
         ],
     )
     args = parser.parse_args()
@@ -379,6 +856,8 @@ def main() -> int:
         return check_flywheel_reapi_proof_contract()
     if args.check == "cache-backed-optin-contract":
         return check_cache_backed_optin_contract()
+    if args.check == "rust-bazel-application-contract":
+        return check_rust_bazel_application_contract()
     return check_internal_refs()
 
 

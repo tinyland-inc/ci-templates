@@ -114,8 +114,9 @@ validates `tinyland.repo.json`, verifies internal action refs resolve to
 checked-in sibling actions, recursively proves the restricted workflows' exact
 self/third-party dependency closure, asserts `bazelrc/flywheel.bazelrc` and
 `bazelrc/ci-cached.bazelrc` remain endpoint-free, asserts the `cache_backed`
-opt-in lane stays default-off and cache-first, and runs the canonical Tinyland
-gitleaks working-tree scan.
+opt-in lane stays default-off and cache-first, guards the finite/native contract
+of `rust-bazel-application.yml`, and runs the canonical Tinyland gitleaks
+working-tree scan.
 
 ## Composite actions
 
@@ -136,6 +137,9 @@ gitleaks working-tree scan.
 | **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run, correlated by a unique request id. |
 | **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
 | **`pulse-ingest-validate`** | Validate a Pulse / static projection snapshot. |
+| **`rust-bazel-preflight`** | Validate the complete native matrix, owner-group route, and finite target arrays before any dynamic runner is scheduled or caller source is checked out. |
+| **`rust-bazel-binary-custody`** | Validate the operator-projected, root-owned raw Bazelisk Nix-store path before caller checkout; never use caller input or PATH to select Bazelisk. |
+| **`rust-bazel-contract`** | Fail-closed lane validation for native platform identity, tracked Bazel 9 pin/Bzlmod lock, finite exact targets, and protected-ref cache-write admission. No build, endpoint, credential, or publication authority. |
 
 See per-action `action.yml` files for full input/output documentation.
 
@@ -189,6 +193,7 @@ Set `attic-public-read: "true"` on any of the three to opt in. What flips:
 |---|---|
 | `js-bazel-package.yml` | Pre-existing: JS/TS packages built by Bazel and published to GitHub Packages, with npmjs required/optional/disabled by package policy. Supports an **opt-in, default-off `cache_backed`** shared-cache Bazel validation lane (cache-first; see below). |
 | `npm-publish.yml` | Pre-existing: hosted-only Node package build + publish, callable only (no local tag/manual trigger). |
+| **`rust-bazel-application.yml`** | Opt-in/default-off native Darwin/Linux Rust application validation with Bazel-only rustfmt, clippy, build, unit, integration, and package targets; cache reads are runtime-attached and writes require an explicitly enabled protected push ref. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
 | **`spoke-lane-env.yml`** *(deprecated)* | Retired-era Blahaj-dispatch PR-env workflow, kept callable only. The PR-env producer is the product's owner-overlay repository — see site.scaffold `docs/patterns/owner-overlay-apply-plane.md` and the merged scaffold #119 recut. Do not point a new spoke at it. |
 | **`spoke-ci-restricted.yml`** | Explicit private-repo opt-in variant of `spoke-ci.yml`; every job requires an owner `-infra` runner group plus its reviewed capability label. |
@@ -347,6 +352,21 @@ the identical fail-closed contract, and execute a cache-backed Bazel build of
 the flywheel-eligible targets reading the shared cache. The default path is
 byte-identical for the ~34 non-opted spoke consumers. An opted spoke must also
 set `flywheel_config: flywheel` so `flywheel-bazel` forwards the remote cache.
+
+## Native Rust+Bazel applications
+
+`rust-bazel-application.yml` is a separate opt-in/default-off workflow for
+Bazel-authoritative Rust applications. It takes an exact caller-owned native
+Darwin/Linux matrix, owner-overlay runner group, and finite target arrays. A
+hosted, no-checkout/no-secret admission job rejects public, fork, and
+`pull_request_target` events before any private native runner is assigned.
+Each admitted runner must project one immutable raw Bazelisk Nix-store path;
+the workflow validates it before checkout and never executes PATH Bazelisk.
+Pull-request cache use receives only a distinct server-enforced read
+credential. A write credential is materialized only after a caller opts in and
+GitHub marks the pushed main branch or release tag protected; remote execution
+is always disabled. See
+[`docs/rust-bazel-application.md`](docs/rust-bazel-application.md).
 
 ## Contributing
 

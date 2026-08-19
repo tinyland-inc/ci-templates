@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CI_BAZEL_VERSION:?CI_BAZEL_VERSION is required}"
+: "${CI_BAZEL_HOME:?CI_BAZEL_HOME is required}"
+: "${CI_BAZELISK_BIN:?CI_BAZELISK_BIN is required}"
+
+[[ "$CI_BAZEL_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+  echo "invalid exact CI_BAZEL_VERSION" >&2
+  exit 2
+}
+[[ "$CI_BAZEL_HOME" == /* ]] || {
+  echo "CI_BAZEL_HOME must be absolute" >&2
+  exit 2
+}
+[[ "$CI_BAZELISK_BIN" == /*/bin/bazelisk ]] || {
+  echo "CI_BAZELISK_BIN must be the absolute custody-validated binary" >&2
+  exit 2
+}
+
+umask 077
+mkdir -p \
+  "$CI_BAZEL_HOME/home" \
+  "$CI_BAZEL_HOME/bazelisk" \
+  "$CI_BAZEL_HOME/xdg-cache" \
+  "$CI_BAZEL_HOME/bazel-output"
+
+exec env \
+  -u BAZELISK \
+  -u BAZEL_REAL \
+  -u BAZELISK_BASE_URL \
+  -u BAZELISK_CLEAN \
+  -u BAZELISK_FORMAT_URL \
+  -u BAZELISK_GITHUB_TOKEN \
+  -u BAZELISK_HOME \
+  -u BAZELISK_HOME_DARWIN \
+  -u BAZELISK_HOME_LINUX \
+  -u BAZELISK_HOME_WINDOWS \
+  -u BAZELISK_INCOMPATIBLE_FLAGS \
+  -u BAZELISK_NOJDK \
+  -u BAZELISK_SHOW_PROGRESS \
+  -u BAZELISK_SHUTDOWN \
+  -u BAZELISK_SKIP_WRAPPER \
+  -u BAZELISK_USER_AGENT \
+  -u BAZELISK_VERIFY_SHA256 \
+  -u CARGO_BAZEL_DEBUG \
+  -u CARGO_BAZEL_GENERATOR_SHA256 \
+  -u CARGO_BAZEL_GENERATOR_URL \
+  -u CARGO_BAZEL_ISOLATED \
+  -u CARGO_BAZEL_REPIN \
+  -u CARGO_BAZEL_REPIN_ONLY \
+  -u CARGO_BAZEL_TIMEOUT \
+  -u REPIN \
+  -u USE_BAZEL_FALLBACK_VERSION \
+  -u USE_BAZEL_VERSION \
+  -u XDG_CACHE_HOME \
+  HOME="$CI_BAZEL_HOME/home" \
+  BAZELISK_HOME="$CI_BAZEL_HOME/bazelisk" \
+  BAZELISK_SKIP_WRAPPER=1 \
+  USE_BAZEL_VERSION="$CI_BAZEL_VERSION" \
+  XDG_CACHE_HOME="$CI_BAZEL_HOME/xdg-cache" \
+  "$CI_BAZELISK_BIN" \
+    --output_user_root="$CI_BAZEL_HOME/bazel-output" \
+    --ignore_all_rc_files \
+    "$@"
