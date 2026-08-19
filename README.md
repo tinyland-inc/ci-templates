@@ -320,6 +320,54 @@ reporting them as unknown. It is a declaration, not a suppression: a typo'd or
 repo-shaped label still reports, and `scripts/lint-runs-on.rb` remains the
 authority on which labels are admissible.
 
+### The repo-role census on `spoke-ci.yml` (opt-in `allowed_repo_roles`)
+
+`spoke-ci.yml`'s `repo-manifest` job asserts that the calling repo's
+`taxonomy.primary_role` is one this template is for. Until `v3.1.0` that
+allowlist was hardcoded — **at two independent sites**: the `repo-manifest` job
+and, again, the `cache_backed` lane's manifest gate inside `flywheel-build`. A
+spoke could satisfy one and fail the other, and a fix to either would have
+looked complete. `allowed_repo_roles` replaces both, and the matching pair in
+`spoke-ci-restricted.yml`.
+
+```yaml
+    with:
+      # comma-separated or a JSON array — both normalize identically
+      allowed_repo_roles: static-spoke,static-spoke-scaffold,app-stateful-spoke
+```
+
+- **Default `"static-spoke,static-spoke-scaffold"` = today's exact literal.**
+  Every consumer that does not opt in renders byte-identically (`AGENTS.md`
+  rule 2), proved site by site — and the site *count* pinned — by
+  `just repo-role-census-contract-check`.
+- **`app-stateful-spoke` is ratified but not defaulted.** It is in the vendored
+  schema's `$defs.repoRole`, so it is a valid role; it is not in this default,
+  because ratifying a role is not ratifying a template binding. The schema's own
+  `allOf` block constrains `static-spoke`/`static-spoke-scaffold` to
+  `owns_runtime_backend`/`owns_auth`/`owns_payments`/… `== false` and
+  deliberately omits `app-stateful-spoke` — the families are materially
+  different, and this census is the only place in ci-templates where
+  `primary_role` is enforced at all. Opting in is one line; widening the default
+  for ~190 consumers would be a MAJOR to undo. Full argument in the `v3.1.0`
+  CHANGELOG entry.
+- **A census failure now names its remedy** — the error prints the exact
+  `allowed_repo_roles:` line that would admit the rejected role.
+
+**GFTB spokes: one edit covers all three.** A Great-Falls-Tool-Bus spoke moving
+to a private runner group, an org capability class, and a non-static role does
+it in a single `with:` block plus the pin bump:
+
+```yaml
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci.yml@v3.1.0
+    with:
+      default_runner_class: great-falls-tool-bus-nix
+      heavy_runner_class: great-falls-tool-bus-nix
+      kvm_runner_class: great-falls-tool-bus-nix
+      runner_group: great-falls-tool-bus-infra
+      allowed_repo_roles: static-spoke,static-spoke-scaffold,app-stateful-spoke
+    secrets: inherit
+```
+
 ### Owner-scoped runner groups on `spoke-ci.yml` (opt-in `runner_group`)
 
 `spoke-ci.yml` takes an optional `runner_group` input. **Default `""` = today's

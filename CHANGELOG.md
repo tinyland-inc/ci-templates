@@ -5,6 +5,89 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+> **This section releases as `v3.1.0` (MINOR)** per `RELEASING.md`: a new
+> optional input, with the default preserving today's behaviour byte-for-byte.
+> No existing caller changes, and no repo that passes CI today starts failing.
+
+### Added
+
+- **TIN-3815: `allowed_repo_roles` input on `spoke-ci.yml`** — makes the
+  repo-manifest role census caller-configurable, so a repo whose ratified
+  `taxonomy.primary_role` is not a static-spoke variant can run this lane
+  without a template edit. Accepts a comma-separated list **or a JSON array**;
+  both normalize identically (surrounding brackets, quotes, and whitespace are
+  stripped before the comma split, so there is no second code path).
+
+  **The defect was two hardcoded sites, not one.** `spoke-ci.yml` pinned
+  `required_roles: static-spoke,static-spoke-scaffold` at the `repo-manifest`
+  job **and** again at the `cache_backed` lane's manifest gate inside
+  `flywheel-build` — independently. A spoke could satisfy one and fail the
+  other, and a fix applied to either would have looked complete. Both are
+  threaded now, and so are the matching pair in `spoke-ci-restricted.yml`.
+
+  New `just repo-role-census-contract-check` (+ `-selftest`, 9 negative
+  oracles) therefore asserts a **site census** first and values second: the set
+  of `repo-manifest-validate` invocations is pinned, and every one must route
+  through the input — add a third census site without threading it and the
+  build fails. It then proves `allowed_repo_roles` unset renders the pinned
+  pre-TIN-3815 literal byte-for-byte, set threads the caller's value verbatim,
+  and `spoke-ci-restricted.yml` matches site for site. The oracles reject each
+  site left hardcoded (separately), a silently widened *or* narrowed default,
+  an undeclared input, a dropped `required_roles`, an untreaded new site, and
+  restricted-variant drift.
+
+- **A census failure now names its remedy.** `repo-manifest-validate` printed
+  only `taxonomy.primary_role=X is not one of: …`, which read as a hard wall.
+  It now adds the exact caller-side line that widens the census. That silence
+  is a fair share of why this looked like a template limitation rather than a
+  one-line input.
+
+### Changed
+
+- **`SPECS["spoke-ci"][:legacy_sha256]` re-recorded** (`a312785b…` →
+  `ac5018e8…`) for the input above, with the reason written at the pin. The two
+  literals became `${{ inputs.allowed_repo_roles }}` whose declared default is
+  that same literal, so the default execution path is unchanged; the digest is a
+  tripwire on the legacy bytes, not a claim they never change deliberately.
+
+### Deliberately not changed
+
+- **`app-stateful-spoke` is NOT in the default allowlist.** It is ratified in
+  the vendored schema's `$defs.repoRole`, and adding it to the default was
+  proposed — but ratification of a **role** is not ratification of a **template
+  binding**, and three things argue against it:
+
+  1. **The schema itself separates the families, materially.** Its `allOf`
+     block constrains `static-spoke`/`static-spoke-scaffold` to
+     `owns_runtime_backend`, `owns_auth`, `owns_payments`,
+     `owns_activitypub_delivery`, `owns_live_broker_fetch`,
+     `owns_gitops_apply`, `owns_cloudflare_mutation` **all `const: false`**, and
+     deliberately omits `app-stateful-spoke` from that `if`. An app-stateful
+     spoke may own a runtime backend, auth, and payments. The two roles are not
+     interchangeable inputs to a census whose job is "is this the right
+     template for this repo".
+  2. **The premise that other gates would cover it does not hold here.** This
+     census is the *only* place in ci-templates where `taxonomy.primary_role` is
+     enforced at all (`grep -rn primary_role` reaches exactly one action), and
+     the boundaries constraint above is precisely what does *not* apply to
+     `app-stateful-spoke`. Widening the default would remove a signal with
+     nothing behind it, in the workflow that runs on every spoke.
+  3. **AGENTS.md rule 2, and the semver line this repo just drew.** Widening the
+     default changes behaviour for consumers who did not opt in; the input *is*
+     the mechanism rule 2 prescribes. `v3.0.0` took a MAJOR precisely because it
+     changed defaults without an opt-out, and `docs/migration-v2-to-v3.md`
+     argues a MINOR must be a safe unread pin bump. Shipping a widened default
+     as a MINOR one release later would retract that.
+
+  Widening by default is also close to irreversible: once ~190 consumers
+  inherit a wider census, narrowing it again is a MAJOR. Widening per-spoke via
+  the input is reversible and costs the adopting spoke one line. An
+  app-stateful spoke opts in with:
+
+  ```yaml
+      allowed_repo_roles: static-spoke,static-spoke-scaffold,app-stateful-spoke
+  ```
+
 ## [3.0.0] — 2026-08-19
 
 > **This section releases as `v3.0.0` (MAJOR).** TIN-3914 below changes default

@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check repo-role-census-contract-selftest repo-role-census-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -104,6 +104,21 @@ runner-group-contract-check:
 # group mapping, group leaking into a hosted job, dropped/rerouted labels).
 runner-group-contract-selftest:
     cd {{ root }} && ruby scripts/runner-group-contract.rb --self-test
+
+# Prove spoke-ci's optional allowed_repo_roles input (TIN-3815) is default-off
+# and reaches EVERY census site. The bug it fixes was two independently
+# hardcoded allowlists, so the primary assertion is a site census: the set of
+# repo-manifest-validate invocations is pinned, and each must route through the
+# input. Unset renders the pre-TIN-3815 literal byte-for-byte; set threads the
+# caller's value verbatim; spoke-ci-restricted must match site for site.
+repo-role-census-contract-check:
+    cd {{ root }} && ruby scripts/repo-role-census-contract.rb
+
+# Prove that checker rejects a site left hardcoded (either one), a silently
+# widened or narrowed default, an undeclared input, a dropped required_roles, a
+# NEW census site added without threading the input, and restricted-variant drift.
+repo-role-census-contract-selftest:
+    cd {{ root }} && ruby scripts/repo-role-census-contract.rb --self-test
 
 # Ensure the v2 Flywheel bazelrc fragment has no baked endpoints or upload authority.
 endpoint-free-check:

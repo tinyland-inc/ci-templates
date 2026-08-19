@@ -83,7 +83,20 @@ SPECS = {
     # which re-renders every job over the scenario grid; the restricted
     # variant's own routing is unaffected because `validate_restricted`
     # normalizes runs-on back to the legacy node before the structural compare.
-    legacy_sha256: "a312785bf7b5fa23aad75c4a79b86cf82f059a0c91bac2acf1827795d0677d49",
+    # Re-recorded for TIN-3815 (optional `allowed_repo_roles` input).
+    # Previously a312785b… (TIN-3914, no GitHub-hosted runners).
+    #
+    # Why this one moved, and why it is not a default-behaviour change: the two
+    # hardcoded `required_roles: static-spoke,static-spoke-scaffold` literals in
+    # the legacy lane became `${{ inputs.allowed_repo_roles }}`, whose declared
+    # default is that same literal. Every consumer that does not opt in renders
+    # byte-identically, proved site by site by
+    # `just repo-role-census-contract-check` — which also pins the SITE COUNT,
+    # because the defect TIN-3815 fixes was two independently hardcoded
+    # allowlists, not a wrong value. The restricted variant declares the same
+    # input and threads the same two sites, so it stays a strict subset and
+    # `validate_restricted`'s structural comparison is unaffected.
+    legacy_sha256: "ac5018e895d55056867a8065ded9ed0484ff90da9a8f39378bb1fdc3734483f4",
     inputs: {
       "runner_group" => "tinyland-infra",
       "nix_runner_label" => "tinyland-nix",
