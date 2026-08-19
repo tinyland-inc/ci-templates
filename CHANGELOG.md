@@ -5,7 +5,209 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+> **This section releases as `v3.0.0` (MAJOR).** TIN-3914 below changes default
+> consumer behavior with no opt-out and narrows two documented input value
+> domains. The MAJOR-vs-MINOR argument is written out in
+> `docs/migration-v2-to-v3.md`; the short version is that a MINOR is a promise
+> that a pin bump is safe without reading the changelog, and that promise cannot
+> be kept here. `RELEASING.md` also requires a `docs/migration-vN-to-vN+1.md`
+> for a MAJOR — that document is the consumer migration.
+
+### Removed
+
+- **TIN-3914: every GitHub-hosted runner is gone from this repository.**
+  Operator ruling, 2026-08-19, verbatim: *"we should NEVER have gh ubuntu
+  runners in place ever, we ONLY use GF infra cache fronted runners."* Every
+  `runs-on` in `.github/workflows/*` now names a self-hosted org
+  capability-class label. There is deliberately **no opt-out input**: an
+  estate-wide prohibition with a "keep using hosted" knob would not be a
+  prohibition, which is exactly why this ships as a MAJOR instead of the
+  default-off addition `AGENTS.md` rule 2 would otherwise require.
+
+  | Workflow | Job(s) | Before | After |
+  |---|---|---|---|
+  | `spoke-ci.yml` | `secrets-scan`, `lanes-load`, `repo-manifest` | `ubuntu-latest` | `inputs.default_runner_class` (default `tinyland-nix`), group-routed when `runner_group` is set |
+  | `spoke-lane-env.yml` *(deprecated)* | `check-blahaj-token`, `lanes-load`, `dispatch-apply`, `destroy-lanes` | `ubuntu-latest` | `tinyland-nix` |
+  | `js-bazel-package.yml` | `resolve-runner` | `ubuntu-latest` | `tinyland-nix` |
+  | `npm-publish.yml` | `build-and-test`, `publish-gpr`, `publish-npm` | `ubuntu-latest` | `tinyland-nix` |
+  | `rust-bazel-application.yml` | `trust-gate` | `ubuntu-24.04` | `tinyland-nix` |
+  | `spoke-deploy-cloudflare-pages.yml` | `build` | `ubuntu-latest` | `tinyland-nix` |
+  | `spoke-public-preview.yml` | `dispatch` | `ubuntu-latest` | `tinyland-nix` |
+
+  `spoke-ci-restricted.yml`, `spoke-lane-env-restricted.yml`, and
+  `spoke-pulse-ingest.yml` had no hosted path and are unchanged. The restricted
+  variants stay a strict subset with **no edit**: `validate_restricted`
+  normalizes each job's `runs-on` back to the legacy node before the structural
+  comparison, so a legacy routing change cannot widen the restricted contract.
+
+  Routing choice, and why it differs per workflow: a hosted job was moved onto
+  the workflow's **existing** runner-class input where one exists
+  (`spoke-ci.yml` → `default_runner_class`, so a tenant org that already passes
+  `great-falls-tool-bus-nix` gets every job routed with one edit), and onto a
+  literal `tinyland-nix` where none exists. No new runner-class inputs were
+  invented: `npm-publish.yml`, `spoke-deploy-cloudflare-pages.yml`, and
+  `spoke-public-preview.yml` have zero callers in the 2026-08-19 fleet sweep,
+  and `spoke-lane-env.yml` is deprecated and must not grow a new caller-facing
+  contract.
+
+- **`js-bazel-package.yml`: `runner_mode: hosted` and
+  `publish_mode: hosted_exception` are retired and now REJECTED** with a
+  migration error, not silently re-routed. All 30 current publish call-sites in
+  the sweep pass `hosted_exception`, so this is the break that forces the MAJOR
+  on its own. Rejecting rather than aliasing is deliberate: a token-bearing
+  publish job changing which machine it executes on is a security-relevant
+  change and should be an edit the caller makes, not one that happens to them.
+
+  **Read this before bumping a package pin:** the publish step only passes
+  `npm publish --provenance` when `runner.environment != 'self-hosted'`. That
+  guard is unchanged, but publishes are now always self-hosted, so
+  `npm_publish_provenance` is **inert and npm provenance is no longer
+  requested**. The job now emits a `::warning::` rather than dropping the
+  supply-chain claim silently. A package whose policy requires provenance
+  should not bump its pin until a provenance-capable self-hosted path exists.
+
+### Fixed
+
+- **`npm-publish.yml` requested `npm publish --provenance` unconditionally on a
+  job TIN-3914 had just moved to a self-hosted runner** — which does not merely
+  drop an attestation, it **fails the publish**. npm validates provenance
+  server-side by comparing the Runner Environment extension in the Fulcio
+  signing certificate against an allow-list that excludes `self-hosted`; the
+  OIDC token is obtainable there, the attestation is still rejected. The step is
+  now gated on `runner.environment == 'github-hosted'` and emits the same
+  `::warning::` as `js-bazel-package.yml`. `docs/npm-publish.md` had claimed the
+  guard already existed "the same way `js-bazel-package.yml`'s does"; it did
+  not, and the sentence is replaced with what the file actually does. Both
+  provenance guards now fail **closed**: they test for `github-hosted` rather
+  than `!= self-hosted`, so an empty or unexpected value takes the
+  no-provenance path instead of attempting a publish that would be rejected.
+
+- **`schemas/lanes.schema.json` still sanctioned a GitHub-hosted label straight
+  into `runs-on`.** `runnerClass` carried `{"const": "ubuntu-latest"}` with a
+  description blessing it "for jobs whose entire purpose is a `gh api` call".
+  That was the last sanctioned hosted path in the estate and none of the new
+  gates could see it, because it is **consumer data**: `lanes-load` validates a
+  spoke's `lanes.json` against this schema, and `spoke-ci.yml` resolves
+  `flywheel-build` / `flywheel-test` `runs-on` through
+  `matrix.lane.runner_class` on the default path. `lint-runs-on.rb` reads
+  workflow text; the textual backstop read `.github/` only. The const arm and
+  its description clause are gone, and new `just lanes-schema-runner-class-check`
+  proves the point **semantically** rather than textually: it executes every
+  accept-arm of the schema against 9 hostile labels (mixed case included) and 6
+  capability classes, so an arm that re-opens the hole in a new spelling fails
+  even if it never writes a hosted label down — and an arm tightened until it
+  drops tenant-org classes fails too. `schema_version` stays `1` deliberately:
+  bumping it would invalidate every consumer's `lanes.json` over a restriction,
+  a far larger break than the restriction itself. No surveyed consumer used a
+  hosted `runner_class`, so this closes a hole rather than breaking callers.
+
+- **The linter silently PASSed an expression that resolved only some of its
+  arms.** An arm resolving to nothing pushed no result, so
+  `${{ github.event_name == 'push' && 'tinyland-nix' || vars.FALLBACK_RUNNER }}`
+  returned **`:pass`** — not even WARN — while handing the consumer an unaudited
+  runtime path to any label, hosted included. The header's "unresolvable forms
+  WARN" promise had excluded the mixed shape, which is the easy one to write.
+  A surviving context reference now **floors the verdict at `:warn`**. Floored,
+  not failed: this guard's core promise is that it never FAILs a `runs-on` it
+  cannot statically resolve, and escalating would break every legitimate
+  repo-variable routing shape in the estate and bury the real hosted FAILs in
+  noise. Flooring only raises `:pass` to `:warn` and never lowers a `:fail`.
+  Comparison operands are now consumed whole, so a dynamic *condition*
+  (`vars.X == 'true' && 'a' || 'b'`) stays a clean PASS — only a dynamic *value*
+  arm warns. Two pre-existing oracles flip `:pass` → `:warn` and are relabelled
+  in place; five new cases pin the rule. Oracle 70 → 75.
+
+- **`no-hosted-runners-check` was a substring grep, and its effective policy was
+  decided by spelling.** It was case-blind, so `Ubuntu-Latest` — which schedules
+  on GitHub's fleet, since runner labels are case-insensitive — walked straight
+  past it. And it failed `blacksmith-4vcpu-ubuntu-2204` (which merely *embeds*
+  `ubuntu-2`) while passing `namespace-profile-default`: two labels in the same
+  third-party fleet, opposite verdicts, contradicting the documented "third-party
+  fleets WARN" policy the linter correctly implements. Replaced by
+  `scripts/no-hosted-runners.rb`, which tokenizes whole labels and classifies
+  them through the shared taxonomy (so it is case-insensitive by construction
+  and agrees with `lint-runs-on.rb` on third-party fleets), and which now scans
+  `schemas/*.json`, `tinyland.repo.json`, and `bazelrc/*` as well as
+  `.github/` — the scope gap that hid the lanes-schema hole. 19-case self-test
+  covering mixed case, both third-party fleets, schema consts, and comment-only
+  prose.
+
+- **`js-bazel-package.yml`'s hosted-label rejection named the wrong input.**
+  `reject_hosted` ran once on the *selected* label list with a hardcoded
+  `"runner_labels_json"`, but in `shared` mode that list *is*
+  `shared_runner_labels_json` — so a `shared`-mode caller was told to fix an
+  input they never set, during a MAJOR migration. Both lists are now checked
+  under their own names, before selection, which also makes the docs true where
+  they say every mode rejects hosted labels in both inputs.
+
+- **`docs/rust-bazel-application.md` documented `v3.0.0` behavior while telling
+  consumers to pin `@v2.14.0`** — a reader copying the example would have got
+  `runs-on: ubuntu-24.04`. Consumer example bumped; the distinction between the
+  consumer pin and the workflow's internal `@v2.14.0` composite refs (which stay,
+  and are the immutability contract) is now stated.
+
+- **`Justfile`'s `runner-group-contract-check` comment** — the text operators
+  read from `just --list` — still described the pre-TIN-3914 world ("the
+  pre-TIN-3902 value", "the four self-hosted jobs", "the `ubuntu-latest` jobs
+  never do"). The script's own header had been updated; this had not.
+
+- **`SPECS["spoke-ci"][:legacy_sha256]` re-recorded** (`7595e406…` →
+  `656e8c69…`) for the `runner_group` addition above, and the restricted
+  contract's input normalization now restores the legacy declaration for a
+  routing input the legacy workflow also declares (instead of dropping it), so
+  `spoke-ci-restricted.yml`'s required-and-defaultless `runner_group` is still
+  compared against the rest of the inputs surface structurally. The default-off
+  proof the digest pins is unchanged and is now additionally machine-checked by
+  `runner-group-contract-check`. (TIN-3914, above, re-recorded this same digest
+  a second time within this release — `656e8c69…` is an intermediate value, not
+  what `v3.0.0` ships.)
+
 ### Added
+
+- **`.github/actionlint.yaml`** declaring the six shared capability labels, so
+  actionlint stops reporting every migrated job as an unknown `runner-label`
+  (14 findings → 0, including 3 that pre-dated this change). It is a
+  declaration, not a suppression: a typo'd or repo-shaped label still reports,
+  and `scripts/lint-runs-on.rb` remains the authority on admissibility.
+
+- **`docs/migration-v2-to-v3.md`** — the consumer migration required by
+  `RELEASING.md` for a MAJOR: per-workflow before/after, the two retired
+  `js-bazel-package.yml` input values with diffs, the `lanes.json`
+  `runner_class` tightening, the npm-provenance consequence, the "queued
+  forever, never degrades" failure mode, ARC capacity numbers for the added job
+  classes, and the MAJOR-vs-MINOR argument.
+
+  It now also carries a **"what will fail after you bump"** section separating
+  the two timelines, because conflating them either panics or under-prepares a
+  migrant. *Immediately on the pin bump:* the retired input values, the
+  `lanes.json` schema tightening, an unserved capability class (which queues,
+  never falls back), and the provenance loss. *Later, on first wiring the
+  `runs-on` gate:* the fleet numbers. `lint-runs-on` is a composite action that
+  **no reusable workflow here invokes** and no consumer invoked as of the sweep,
+  so the tightened linter does not retroactively fail anyone on a bump — which
+  is precisely why the blast radius is published rather than discovered one repo
+  at a time. Measured over the 50 local checkouts referencing this repo:
+  **4 FAIL across 2 repos at `v2.14.0` → 99 FAIL across 21 repos at `v3.0.0`,
+  i.e. 95 new FAILs across 20 repos (40% of consumers; ~75 of ~190 extrapolated)**.
+  Per-repo table plus all three failure classes with a diff for each: bare hosted
+  literal (75, all new), hosted label baked into a `fromJSON` fallback (20, all
+  new — the previously-blessed "graceful degradation" shape), and non-canonical
+  self-hosted arrays (4, none new — these already failed at `v2.14.0`). There is
+  no long tail; those three classes are all 99.
+
+  **Capacity (from the 2026-08-19 sweep's ARC facts):** `tinyland-nix` is
+  `min 0 / max 10`, `great-falls-tool-bus-nix` is `min 0 / max 4`. Added job
+  classes: 3 short `spoke-ci` jobs per run × 4 live spokes; 4 short
+  `spoke-lane-env` jobs per PR event × 2 spokes (deprecated lane); and
+  `js-bazel-package`'s `resolve-runner`, one short job on the critical path of
+  **every** invocation across 68 call-sites (62 of them SHA-pinned to a
+  2026-05-27 commit, so they arrive only as pins are bumped). `resolve-runner`
+  is the one to watch — raise the `tinyland-nix` `AutoScalingRunnerSet` max and
+  stage the bumps before a fleet-wide pin bump. `npm-publish.yml`,
+  `spoke-deploy-cloudflare-pages.yml`, `spoke-public-preview.yml`, and
+  `rust-bazel-application.yml`'s `trust-gate` have zero callers and add no
+  immediate load.
+
 
 - **TIN-3902: optional `runner_group` input on `spoke-ci.yml`** — lets a spoke
   express GitHub's structured `runs-on: { group: <g>, labels: <class> }` for
@@ -21,13 +223,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
   emit the mapping with **the same labels they resolve today** — the labels are
   carried through `toJSON`, preserving `runner_labels_json`'s array shape and
   the `runner_labels_json` → `matrix.lane.runner_class` → `default_runner_class`
-  precedence. The jobs whose `runs-on` is a plain literal today (`secrets-scan`,
-  `lanes-load`, `repo-manifest`, currently `ubuntu-latest`) are never
-  group-routed. That hosted-job class is itself slated for removal under the
-  no-GitHub-hosted-runners ruling (TIN-3914) in a separate PR; nothing added
-  here assumes `ubuntu-latest` survives — the gate below derives the
-  never-group-routed set from "literal `runs-on` today", so the migration only
-  needs a deliberate re-record.
+  precedence. Jobs whose `runs-on` is a plain literal in the pinned baseline are
+  never group-routed. As shipped in this same release, TIN-3914 (above) retired
+  the hosted-job class those three jobs belonged to, so `secrets-scan`,
+  `lanes-load`, and `repo-manifest` now route through `default_runner_class` and
+  are group-routed too — all seven jobs are. Nothing here assumed
+  `ubuntu-latest` would survive: the gate derives the never-group-routed set
+  from "literal `runs-on` in the baseline", so absorbing TIN-3914 needed only a
+  deliberate re-record, not a rewrite.
 
   A group mapping *narrows*: GitHub schedules only onto a runner that is in the
   group **and** carries the labels, so the group must already exist, select the
@@ -40,7 +243,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
   renders both paths over a scenario grid — scaffold defaults, the GFTB
   org-scope overlay, a per-lane `runner_class`, and a `runner_labels_json`
   array — and fails if the default path ever stops rendering byte-identically
-  or a literal-`runs-on` job starts group-routing. `scripts/lint-runs-on.rb`
+  or a literal-`runs-on` job starts group-routing (that class is empty after
+  TIN-3914, so the self-test keeps the branch executable against a synthetic
+  baseline). `scripts/lint-runs-on.rb`
   now evaluates the runtime-composed
   `fromJSON(format('{{"group":{0},"labels":{1}}}', …))` form with the same
   structural semantics as a static `{group, labels}` node (runtime group WARNs;
@@ -51,6 +256,67 @@ Versioning: [SemVer 2.0](https://semver.org/).
   and falls back to the ordinary literal scan, which FAILs it.
 
 ### Changed
+
+- **TIN-3914: `scripts/lint-runs-on.rb` fails closed on GitHub-hosted labels.**
+  A hosted label was PASS; it is now a **FAIL** wherever it can be read
+  statically — a bare scalar, any element of a label array (previously
+  `[tinyland-nix, ubuntu-latest]` PASSed as "reduces to a shared capability"; it
+  does not, GitHub AND-s the labels), a literal arm of a `${{ … }}` ternary, a
+  `fromJSON(vars.X || '[…]')` fallback array, a resolved `matrix` value
+  including via `matrix.include`, and either arm of a static or
+  runtime-composed `{group, labels}` mapping. The previously-blessed "graceful
+  degradation to hosted when cluster labels are not reachable" fromJSON shape is
+  now a failure: there is nothing left to degrade to. Third-party managed fleets
+  (`blacksmith-*`, `depot-*`, `buildjet-*`, …) are neither GitHub's
+  infrastructure nor GF cache-fronted, and the ruling named GitHub runners: they
+  **WARN**, surfacing for a deliberate decision instead of passing silently.
+  `runner_label_taxonomy.rb` splits `hosted_label?` into
+  `github_hosted_label?` (FAIL) and `third_party_hosted_label?` (WARN). The
+  self-test oracle grew 52 → 75 cases (70 for the hosted rules, then 5 more
+  for the mixed-resolvability floor below), every previously-passing hosted case
+  flipped in place with its old verdict recorded in the case label. Fleet
+  dogfood (`just lint-runs-on-check`) is 0 FAIL.
+
+- **TIN-3914: `just runner-group-contract-check` covers all seven `spoke-ci.yml`
+  jobs, and `LEGACY_RUNS_ON` was re-recorded.** The pinned baseline was the
+  pre-TIN-3902 expression set, in which the three utility jobs were literal
+  `ubuntu-latest`; it is now the post-TIN-3914 label-only routing. What the pin
+  proves is unchanged and is the whole point: `runner_group` stays default-off,
+  rendering byte-identically over the scenario grid with the input unset. The
+  literal-`runs-on` class is now empty, so the "a literal job never gains a
+  group mapping" branch is kept executable by two new negative oracles against a
+  **synthetic** baseline that declares one — the invariant stays proven rather
+  than merely asserted, and a future literal-`runs-on` job lands on a tested
+  rule. Job/class derivation is unchanged: nothing names `ubuntu-latest`.
+
+- **TIN-3914: both `legacy_sha256` digests in
+  `scripts/restricted-workflow-contract.rb` were re-recorded**, with the reason
+  written at each pin. `spoke-ci.yml`
+  `656e8c69…` → `a312785b…`; `spoke-lane-env.yml` `8e7e444f…` → `c238ab59…`.
+  These digests are a tripwire on the **legacy** bytes so that adding or
+  changing the restricted variant cannot silently move the shared lane — not a
+  claim that the legacy files never change on purpose. The accompanying
+  default-off proof is `just runner-group-contract-check`.
+
+- **TIN-3914: `runner_mode`/`publish_mode`/label validation fails closed in
+  every mode.** `js-bazel-package.yml`'s `resolve-runner` and its inline
+  workflow-contract step now reject a GitHub-hosted label in
+  `runner_labels_json` / `shared_runner_labels_json` in **all** modes, including
+  `compat`, where labels were previously unvalidated. `runner_labels_json`'s
+  declared default changes from `'["ubuntu-latest"]'` to `""`, resolving to
+  `["tinyland-nix"]`; the `runner_mode=repo_owned` explicitness check now tests
+  for an empty value instead of comparing against the retired hosted sentinel.
+
+- **TIN-3914: `scripts/validate-ci-templates.py` forbids the hosted label
+  families, not three `-latest` aliases.** `rust-bazel-application.yml`'s
+  forbidden-snippet list was `ubuntu-latest` / `macos-latest` / `windows-latest`
+  — which is why its own `runs-on: ubuntu-24.04` slipped past it. It is now
+  `ubuntu-` / `macos-` / `windows-`, and the required snippet is
+  `runs-on: tinyland-nix`. The deny-list gap is the smaller half of the story:
+  `runs-on: ubuntu-24.04` was in the same file's **required**-snippet list, so
+  the validator did not merely tolerate a GitHub-hosted runner, it *mandated*
+  one and would have failed the build for removing it. "We required the thing
+  we now forbid" is the strongest single argument for the MAJOR bump.
 
 - **TIN-3900: `secrets-scan` gitleaks pin 8.21.2 → 8.30.1, so repo
   `[[allowlists]]` actually apply.** Gitleaks added the plural `[[allowlists]]`
@@ -86,17 +352,6 @@ Versioning: [SemVer 2.0](https://semver.org/).
   Scanned clean under 8.30.1 with the action's exact invocation: this repo,
   `greatfallstoolbus.org`, `site.scaffold`, and the GFTB acceptance tree
   carrying the runtime-assembled `ghp_` fixture plus its `.gitleaksignore`.
-
-### Fixed
-
-- **`SPECS["spoke-ci"][:legacy_sha256]` re-recorded** (`7595e406…` →
-  `656e8c69…`) for the `runner_group` addition above, and the restricted
-  contract's input normalization now restores the legacy declaration for a
-  routing input the legacy workflow also declares (instead of dropping it), so
-  `spoke-ci-restricted.yml`'s required-and-defaultless `runner_group` is still
-  compared against the rest of the inputs surface structurally. The default-off
-  proof the digest pins is unchanged and is now additionally machine-checked by
-  `runner-group-contract-check`.
 
 ## [2.14.0] — 2026-08-18
 

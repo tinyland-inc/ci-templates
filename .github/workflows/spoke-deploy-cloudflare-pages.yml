@@ -71,10 +71,13 @@ concurrency:
   group: cloudflare-pages-${{ github.ref }}
   cancel-in-progress: false
 
+# TIN-3914: the build/deploy job runs on the estate base capability class
+# `tinyland-nix` instead of a GitHub-hosted runner. The lane already used
+# `nix develop --command`, which is native on that class.
 jobs:
   build:
     name: Build and deploy
-    runs-on: ubuntu-latest
+    runs-on: tinyland-nix
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6

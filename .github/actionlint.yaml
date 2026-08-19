@@ -1,0 +1,20 @@
+# actionlint configuration for tinyland-inc/ci-templates.
+#
+# TIN-3914 (operator ruling, 2026-08-19) retired GitHub-hosted runners from the
+# estate: every `runs-on` in this repo now names a self-hosted org
+# capability-class label. actionlint only knows GitHub's own label list, so
+# without this file every migrated job reports `runner-label`. Declaring the
+# labels is actionlint's documented mechanism for custom self-hosted runners —
+# it is a declaration, not a suppression: a typo'd or repo-shaped label still
+# reports, and `scripts/lint-runs-on.rb` remains the authority on which labels
+# are admissible (see scripts/runner_label_taxonomy.rb).
+#
+# Keep this list in sync with RunnerLabelTaxonomy::SHARED_CAPABILITY_LABELS.
+self-hosted-runner:
+  labels:
+    - tinyland-docker
+    - tinyland-dind
+    - tinyland-nix
+    - tinyland-nix-gpu
+    - tinyland-nix-heavy
+    - tinyland-nix-kvm

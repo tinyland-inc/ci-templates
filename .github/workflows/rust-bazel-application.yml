@@ -100,7 +100,13 @@ permissions:
 jobs:
   trust-gate:
     if: inputs.enabled
-    runs-on: ubuntu-24.04
+    # TIN-3914: the pre-scheduling admission job runs on the estate base
+    # capability class, never a GitHub-hosted runner. It stays a BARE label —
+    # not `{group: inputs.runner_group, labels: ...}` — precisely because its
+    # job is to validate `runner_group` before any group-routed lane is
+    # scheduled; routing the gate through the value it validates would make an
+    # inadmissible group queue forever instead of failing loudly.
+    runs-on: tinyland-nix
     timeout-minutes: 2
     outputs:
       platform_matrix_json: ${{ steps.preflight.outputs.platform_matrix_json }}

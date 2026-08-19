@@ -27,7 +27,7 @@ It is meant for packages like:
   disabled
 - optionally validates GitHub Packages dry-runs after rewriting package metadata
 - uploads the Bazel-built package artifact for publish jobs
-- publishes from the same runner class or from an explicit hosted exception path
+- publishes from the same self-hosted runner class that validated the artifact
 
 ## Contract inputs
 
@@ -36,17 +36,20 @@ It is meant for packages like:
 Allowed values:
 
 - `compat`
-- `hosted`
 - `shared`
 - `repo_owned`
+
+`hosted` was **retired by TIN-3914** (`v3.0.0`) and is now rejected with a
+migration error. The estate has no GitHub-hosted runners; see
+[`migration-v2-to-v3.md`](migration-v2-to-v3.md).
 
 Meaning:
 
 - `compat`
   - preserve the legacy `runner_labels_json` behavior
   - use this only as a migration bridge
-- `hosted`
-  - validate and publish on GitHub-hosted runners intentionally
+  - since `v3.0.0` the unset default resolves to `["tinyland-nix"]` (it was
+    `["ubuntu-latest"]`), and a GitHub-hosted label passed here is rejected
 - `shared`
   - validate and publish on a documented shared GloriousFlywheel lane
   - pass a non-empty `shared_runner_labels_json`; an empty value is rejected
@@ -84,15 +87,24 @@ Meaning:
 Allowed values:
 
 - `same_runner`
-- `hosted_exception`
+
+`hosted_exception` was **retired by TIN-3914** (`v3.0.0`). It is rejected with a
+migration error rather than silently re-routed: a token-bearing publish job
+changing which machine it executes on should be an edit the caller makes, not
+one that happens to them. Delete the line — `same_runner` is the default.
 
 Meaning:
 
 - `same_runner`
   - publish from the same runner class that validated the Bazel artifact
-- `hosted_exception`
-  - validate on the chosen runner class
-  - publish from `ubuntu-latest` intentionally after artifact handoff
+
+**Consequence of the retirement:** publishes are now always self-hosted, and the
+publish step only passes `npm publish --provenance` when
+`runner.environment != 'self-hosted'`. That guard is unchanged, so
+`npm_publish_provenance` is now inert and **npm provenance is no longer
+requested**. The job emits a `::warning::` saying so rather than dropping the
+supply-chain claim silently. A package whose policy requires provenance should
+not bump its pin until a provenance-capable self-hosted path exists.
 
 ### `npm_publish_mode`
 
@@ -253,7 +265,7 @@ It must not resolve to a known repo-label fossil. Pull-request validation remain
 safe for forks because publish jobs are still gated by tag/workflow policy and
 GitHub does not expose protected publish secrets to untrusted fork PRs.
 
-## Example: hosted template consumer
+## Example: capability-class template consumer
 
 ```yaml
 on:
@@ -265,11 +277,12 @@ on:
 
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v2.0.0
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v3.0.0
     with:
-      runner_mode: hosted
+      runner_mode: repo_owned
+      runner_labels_json: '["tinyland-nix"]'
       workspace_mode: isolated
-      publish_mode: hosted_exception
+      # publish_mode defaults to same_runner; hosted_exception is retired
       lint_command: pnpm lint
       typecheck_command: pnpm typecheck
       unit_test_command: pnpm test
@@ -290,23 +303,29 @@ jobs:
   label set must include an org capability-class label. It does not authorize
   known repo-label fossils.
 - `runner_mode=shared` uses `shared_runner_labels_json`. The workflow resolves
-  the selected labels in a small hosted setup job, then passes simple JSON
-  outputs into `runs-on` to avoid the complex inline expressions that previously
-  caused GitHub Actions startup failures before jobs were created.
+  the selected labels in a small `resolve-runner` setup job, then passes simple
+  JSON outputs into `runs-on` to avoid the complex inline expressions that
+  previously caused GitHub Actions startup failures before jobs were created.
+  Since TIN-3914 that setup job itself runs on `tinyland-nix`: it is on the
+  critical path of every invocation, so leaving it hosted would have kept a
+  GitHub-hosted runner in every run.
 - `runner_mode=shared` rejects an explicitly empty `shared_runner_labels_json`.
   This catches missing caller repo variables before the workflow silently falls
   back to the default shared runner class.
 - Package repos that need fork-safe owned capacity should prefer
   `runner_mode=repo_owned` with explicit capability-shaped
-  `runner_labels_json`. Use `hosted` for packages that do not need
-  cluster-internal REAPI access yet.
+  `runner_labels_json`. Packages that do not need cluster-internal REAPI access
+  yet should use `compat` with a base capability class rather than the retired
+  `hosted` mode.
 - `bazel_fetch_retry_attempts` defaults to `3` and wraps consumer-provided
   validation commands plus explicit Bazel target validation. It only retries
   when the command log matches transient Bazel external archive fetch failures,
   such as upstream GitHub release `502` responses. Deterministic compile/test
   failures are not retried.
-- `publish_mode=hosted_exception` intentionally overrides the selected runner
-  lane for publish jobs and uses `ubuntu-latest`.
+- every mode now rejects a GitHub-hosted label in `runner_labels_json` /
+  `shared_runner_labels_json`, including `compat`, where labels were previously
+  unvalidated. There is no hosted lane left to degrade to, so a hosted label is
+  a routing error, not a fallback.
 - `dry_run: true` keeps pull requests and branch pushes in validation-only mode.
   Set `publish_on_tag: true` in package repositories that should publish the
   Bazel artifact when the caller workflow is triggered by a `push` to `refs/tags/v*`.
@@ -321,9 +340,10 @@ jobs:
   `workspace_mode=persistent_compat`.
 - publish jobs always extract into an isolated temp directory, even when the
   validation workspace stays in compatibility mode.
-- npmjs publication still requests provenance on hosted runners and skips it on
-  self-hosted runners when needed, but only when `npm_publish_mode` allows an
-  npmjs publish attempt.
+- npmjs publication requests provenance only off self-hosted runners. Since
+  TIN-3914 every publish is self-hosted, so provenance is never requested and
+  `npm_publish_provenance` is inert; the job warns instead of dropping the claim
+  silently.
 - real publish jobs are idempotent for already-published package versions. After
   extracting the Bazel artifact, the npmjs and GitHub Packages jobs check
   whether the exact `name@version` already exists in the target registry and

@@ -7,14 +7,29 @@
 # Forbids repo-shaped / project-identity self-hosted labels (e.g.
 # `runs-on: dollhouse-farm-nix`, `chapel-nix`, `jesssullivan-nix-heavy`), bare
 # `self-hosted`, and drift smuggled into a fromJSON() fallback — while PASSing
-# org capability labels (tinyland-nix, great-falls-tool-bus-nix, ...),
-# GitHub-hosted labels (ubuntu-latest, ...), and the legitimate dynamic
-# `${{ fromJSON(vars.* || '["ubuntu-latest"]') }}` indirection. GitHub's
-# `runs-on: {group, labels}` mapping is evaluated structurally: the group must
-# be explicit or runtime-resolved and the labels must still reduce to a shared
-# capability (hosted labels cannot satisfy a group mapping). Never crashes and
-# never FAILs on a runs-on it cannot statically resolve (pure needs-output /
-# inputs / unresolvable matrix) — those WARN.
+# org capability labels (tinyland-nix, great-falls-tool-bus-nix, ...).
+#
+# TIN-3914 (operator ruling, 2026-08-19: "we should NEVER have gh ubuntu
+# runners in place ever, we ONLY use GF infra cache fronted runners"): every
+# GitHub-hosted label family — `ubuntu-*`, `windows-*`, `macos-*` — is now a
+# hard FAIL wherever it can be read statically: a bare scalar, any element of a
+# YAML/JSON label array, a literal arm of a `${{ … }}` ternary, a fromJSON()
+# fallback array, a resolved matrix value, and either arm of a static or
+# runtime-composed `{group, labels}` mapping. Before TIN-3914 hosted labels
+# PASSed and the fromJSON hosted-fallback shape was explicitly blessed; both
+# are failures now, and there is no hosted degrade path left anywhere in the
+# estate. Third-party managed hosted fleets (blacksmith-*, depot-*, …) are not
+# GitHub's infrastructure and were not named by the ruling: they WARN, so they
+# surface for a deliberate decision instead of passing silently.
+#
+# GitHub's `runs-on: {group, labels}` mapping is evaluated structurally: the
+# group must be explicit or runtime-resolved and the labels must still reduce
+# to a shared capability (hosted labels cannot satisfy a group mapping). Never
+# crashes and never FAILs on a runs-on it cannot statically resolve
+# (needs-output / inputs / unresolvable matrix) — those WARN, and so does an
+# expression that resolves only SOME of its arms (see the mixed-resolvability
+# rule on evaluate_expression; the word "pure" used to do a lot of quiet work
+# in this sentence, and the mixed shape returned :pass).
 #
 # Taxonomy authority: GloriousFlywheel/scripts/validate-arc-runner-taxonomy.py,
 # ported in runner_label_taxonomy.rb and pinned by --self-test.
@@ -32,9 +47,15 @@ GENERIC_ARRAY_TAGS = %w[self-hosted linux x64 x86_64 arm64 aarch64 macos windows
 
 # ── verdict primitives ──────────────────────────────────────────────────────
 
+HOSTED_FAIL_DETAIL = "GitHub-hosted runner label: the estate runs only on GF cache-fronted " \
+                     "self-hosted runners (TIN-3914); route through an org capability class"
+THIRD_PARTY_WARN_DETAIL = "third-party managed hosted fleet: neither GitHub-hosted nor a GF " \
+                          "cache-fronted org capability class (TIN-3914 named GitHub runners only)"
+
 def verdict_for_label(label)
   return [:pass, "shared/constructed capability label"] if T.shared_or_constructed?(label)
-  return [:pass, "GitHub-hosted / known hosted fleet"] if T.hosted_label?(label)
+  return [:fail, HOSTED_FAIL_DETAIL] if T.github_hosted_label?(label)
+  return [:warn, THIRD_PARTY_WARN_DETAIL] if T.third_party_hosted_label?(label)
 
   [:fail, T.label_errors(label).join("; ")]
 end
@@ -42,11 +63,25 @@ end
 # A YAML/JSON array of labels (GitHub AND-s them).
 def evaluate_array(labels, opts)
   labels = labels.map(&:to_s)
-  return { verdict: :pass, detail: "hosted runner array", resolved: labels.join(",") } if labels.all? { |l| T.hosted_label?(l) }
+
+  # TIN-3914: a GitHub-hosted label ANYWHERE in the array fails, including
+  # alongside a valid capability label. Pre-TIN-3914 the extras filter treated
+  # hosted labels as innocuous companions, so `[tinyland-nix, ubuntu-latest]`
+  # PASSed as "reduces to a shared capability" — it does not; GitHub AND-s the
+  # labels, and no GF runner carries a hosted label, so that array is either
+  # unschedulable or a hosted escape hatch.
+  github_hosted = labels.select { |l| T.github_hosted_label?(l) }
+  unless github_hosted.empty?
+    return { verdict: :fail, detail: "GitHub-hosted label(s) #{github_hosted.join(",")} in a runs-on array: #{HOSTED_FAIL_DETAIL}", resolved: labels.join(",") }
+  end
+
+  if !labels.empty? && labels.all? { |l| T.third_party_hosted_label?(l) }
+    return { verdict: :warn, detail: "third-party hosted-fleet array: #{THIRD_PARTY_WARN_DETAIL}", resolved: labels.join(",") }
+  end
 
   shared = labels.select { |l| T.shared_or_constructed?(l) }
   bare_self_hosted = labels.any? { |l| l.casecmp?("self-hosted") }
-  extras = labels.reject { |l| shared.include?(l) || T.hosted_label?(l) || GENERIC_ARRAY_TAGS.include?(l.downcase) }
+  extras = labels.reject { |l| shared.include?(l) || GENERIC_ARRAY_TAGS.include?(l.downcase) }
 
   if shared.length >= 1 && !bare_self_hosted && extras.empty?
     return { verdict: :pass, detail: "array reduces to shared capability label(s) #{shared.join(",")}", resolved: labels.join(",") }
@@ -98,11 +133,34 @@ def resolve_matrix_ref(expr, job)
   cands.uniq
 end
 
+# Context references that are opaque at author time. If one of these survives
+# every extraction pass below, some ARM of the expression was never audited.
+UNRESOLVED_CONTEXT_RE = /\b(?:inputs|vars|env|secrets|needs|github|matrix|steps|runner|job|strategy)\.[A-Za-z0-9_.\-]+/.freeze
+
 # A `${{ ... }}` expression: extract every statically-knowable label, verdict
 # the worst, WARN if nothing is statically resolvable. Never raises.
+#
+# MIXED-RESOLVABILITY RULE (TIN-3914 review). An arm that resolves to nothing
+# used to push no result at all, so an expression pairing one good literal with
+# one opaque arm —
+#   ${{ github.event_name == 'push' && 'tinyland-nix' || vars.FALLBACK_RUNNER }}
+# — returned PASS, not even WARN, while handing the consumer an unaudited
+# runtime path to any label including a hosted one. The header's "unresolvable
+# forms WARN" promise quietly excluded the mixed shape, which is the easy one to
+# write. Now: if any context reference survives extraction, the verdict is
+# FLOORED at :warn.
+#
+# Floored at WARN and not FAIL, deliberately. This guard's core promise is that
+# it never FAILs a runs-on it cannot statically resolve; escalating here would
+# break every legitimate `${{ inputs.runner_label }}` / repo-variable routing
+# shape in the estate and bury the real hosted-label FAILs in noise. WARN is
+# the honest verdict for "the audit is incomplete", and a hosted label that IS
+# readable still FAILs — flooring only raises :pass to :warn, never lowers a
+# :fail.
 def evaluate_expression(raw, job, opts)
   results = []
   work = raw.dup
+  matrix_resolved = false
 
   # (0) A structured `{group, labels}` runs-on composed at runtime. Consume the
   # whole fromJSON(format(...)) region: its arms are mapping arms, not bare
@@ -124,8 +182,17 @@ def evaluate_expression(raw, job, opts)
     end
   end
 
-  # (2) Drop comparison operands so `vars.X == 'true'` does not look like a label.
-  work = work.gsub(/(==|!=)\s*'[^']*'/, " ").gsub(/'[^']*'\s*(==|!=)/, " ")
+  # (2) Drop whole comparisons so `vars.X == 'true'` neither looks like a label
+  # nor counts as an unresolved ARM: a dynamic CONDITION is not a runner-label
+  # path, only a dynamic VALUE is. Consuming the identifier too (not just the
+  # quoted operand, as before) is what keeps
+  # `${{ vars.USE_HEAVY == 'true' && 'tinyland-nix-heavy' || 'tinyland-nix' }}`
+  # a clean PASS under the mixed-resolvability rule.
+  work = work
+         .gsub(/[A-Za-z_][A-Za-z0-9_.\-]*\s*(?:==|!=)\s*'[^']*'/, " ")
+         .gsub(/'[^']*'\s*(?:==|!=)\s*[A-Za-z_][A-Za-z0-9_.\-]*/, " ")
+         .gsub(/(==|!=)\s*'[^']*'/, " ")
+         .gsub(/'[^']*'\s*(==|!=)/, " ")
 
   # (3) Remaining single-quoted plain strings are value-position label literals.
   work.scan(/'([^'\[\]]*)'/).each do |m|
@@ -138,7 +205,9 @@ def evaluate_expression(raw, job, opts)
 
   # (4) Matrix resolution only if no literal was found.
   if results.empty? && raw.include?("matrix.")
-    resolve_matrix_ref(raw, job).each do |label|
+    resolved_from_matrix = resolve_matrix_ref(raw, job)
+    matrix_resolved = !resolved_from_matrix.empty?
+    resolved_from_matrix.each do |label|
       verdict, why = verdict_for_label(label)
       results << { verdict: verdict, detail: "matrix #{label.inspect}: #{why}", resolved: label }
     end
@@ -151,7 +220,19 @@ def evaluate_expression(raw, job, opts)
   worst = results.find { |r| r[:verdict] == :fail } ||
           results.find { |r| r[:verdict] == :warn } ||
           results.first
-  worst.merge(resolved: results.map { |r| r[:resolved] }.join(","))
+  worst = worst.merge(resolved: results.map { |r| r[:resolved] }.join(","))
+
+  # A matrix ref that step (4) actually resolved is audited, not opaque.
+  residual = matrix_resolved ? work.gsub(/matrix\.[A-Za-z0-9_.]+/, " ") : work
+  unresolved = residual.scan(UNRESOLVED_CONTEXT_RE).uniq
+  if worst[:verdict] == :pass && !unresolved.empty?
+    return worst.merge(
+      verdict: :warn,
+      detail: "#{worst[:detail]}; but #{unresolved.join(", ")} resolves only at runtime, so that arm is unaudited",
+    )
+  end
+
+  worst
 end
 
 def worst_result(results, resolved)
@@ -232,7 +313,7 @@ def evaluate_group_labels(value, job, opts)
            end
   return result unless hosted
 
-  { verdict: :fail, detail: "GitHub-hosted labels cannot satisfy a runner-group mapping", resolved: result[:resolved] }
+  { verdict: :fail, detail: "hosted labels (GitHub-hosted or third-party fleet) cannot satisfy a runner-group mapping", resolved: result[:resolved] }
 end
 
 # YAML cannot express a CONDITIONAL runs-on mapping, so a workflow that must
@@ -439,8 +520,21 @@ def self_test
     ["tinyland-nix-darwin", :pass, "constructed-valid"],
     ["great-falls-tool-bus-nix", :pass, "tenant org capability label"],
     ["medical-massage-specialists-docker", :pass, "tenant org capability label"],
-    ["ubuntu-latest", :pass, "hosted family"],
-    ["macos-15", :pass, "hosted family"],
+    # TIN-3914: every GitHub-hosted family FAILs, at every nesting.
+    ["ubuntu-latest", :fail, "hosted family (was :pass before TIN-3914)"],
+    ["ubuntu-24.04", :fail, "pinned hosted Ubuntu image"],
+    ["macos-15", :fail, "hosted family (was :pass before TIN-3914)"],
+    ["windows-2022", :fail, "hosted Windows family"],
+    [%w[ubuntu-latest], :fail, "single-element hosted array"],
+    [%w[ubuntu-latest ubuntu-24.04], :fail, "all-hosted array (was :pass before TIN-3914)"],
+    [%w[tinyland-nix ubuntu-latest], :fail, "hosted label smuggled beside a capability label (was :pass)"],
+    [%w[self-hosted linux ubuntu-latest], :fail, "hosted label inside a self-hosted-shaped array"],
+    ["${{ inputs.runner_label || 'ubuntu-latest' }}", :fail, "hosted fallback literal in a ternary tail"],
+    ["${{ fromJSON(vars.X || '[\"tinyland-nix\",\"ubuntu-latest\"]') }}", :fail, "hosted label inside a fromJSON fallback array"],
+    # Third-party managed fleets are not GitHub's infra and were not named by
+    # the ruling: WARN, never PASS.
+    ["blacksmith-16vcpu-ubuntu-2404", :warn, "third-party managed fleet"],
+    [%w[blacksmith-16vcpu-ubuntu-2404], :warn, "third-party managed fleet array"],
     ["dollhouse-farm-nix", :fail, "repo-shaped (empirical target)"],
     ["chapel-nix", :fail, "repo-shaped (live drift)"],
     ["jesssullivan-nix-heavy", :fail, "repo-shaped (live drift x4)"],
@@ -449,11 +543,29 @@ def self_test
     [%w[self-hosted aarch64-darwin nix], :fail, "array, no shared label"],
     [["self-hosted", "Linux", "X64", "honey", "tinyland-nix", "nix"], :fail, "non-canonical mixed array (honey host pin)"],
     [%w[self-hosted printbox], :fail, "array, bespoke host, no shared label"],
-    ["${{ fromJSON(vars.BAZEL_LINUX_RUNNER_LABELS_JSON || vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '[\"ubuntu-latest\"]') }}", :pass, "legitimate darkmap fromJSON pattern"],
+    ["${{ fromJSON(vars.BAZEL_LINUX_RUNNER_LABELS_JSON || vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '[\"ubuntu-latest\"]') }}", :fail,
+     "the darkmap hosted-degrade fromJSON fallback: blessed pre-TIN-3914, forbidden now"],
+    ["${{ fromJSON(vars.BAZEL_LINUX_RUNNER_LABELS_JSON || '[\"tinyland-nix\"]') }}", :warn,
+     "fromJSON indirection with a capability fallback: the fallback is audited, the var is not (mixed-resolvability floor)"],
     ["${{ fromJSON(vars.CI_RUNNER_LABELS_JSON || '[\"massageithaca-dind\"]') }}", :fail, "drift baked into fromJSON fallback"],
-    ["${{ vars.USE_SELFHOSTED == 'true' && vars.GF_SHARED_RUNNERS_REACHABLE == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}", :pass, "ternary; both branches valid"],
-    ["${{ vars.ATTIC_DEPLOY_RUNNER_LABEL || 'tinyland-nix-operator' }}", :pass, "trailing literal valid via operator suffix"],
-    ["${{ inputs.runner || 'depot-macos-latest' }}", :pass, "hosted fleet fallback"],
+    ["${{ vars.USE_SELFHOSTED == 'true' && vars.GF_SHARED_RUNNERS_REACHABLE == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}", :fail,
+     "graceful-degrade-to-hosted ternary: there is no hosted degrade path left"],
+    ["${{ vars.ATTIC_DEPLOY_RUNNER_LABEL || 'tinyland-nix-operator' }}", :warn,
+     "trailing literal valid, leading var opaque: :pass before the mixed-resolvability floor"],
+    # Mixed resolvability (TIN-3914 review M3): one audited arm + one opaque arm
+    # used to return :pass, hiding an unaudited runtime path to any label.
+    ["${{ github.event_name == 'push' && 'tinyland-nix' || vars.FALLBACK_RUNNER }}", :warn,
+     "dynamic condition, good literal, opaque fallback arm (was :pass)"],
+    ["${{ inputs.heavy && 'tinyland-nix-heavy' || inputs.runner_label }}", :warn,
+     "truthiness condition, good literal, opaque fallback arm (was :pass)"],
+    ["${{ needs.route.outputs.labels || 'tinyland-nix' }}", :warn, "opaque needs-output arm beside a capability literal"],
+    ["${{ vars.USE_HEAVY == 'true' && 'tinyland-nix-heavy' || 'tinyland-nix' }}", :pass,
+     "a dynamic CONDITION is not an unaudited arm: both VALUE arms are literals"],
+    ["${{ vars.X || 'ubuntu-latest' }}", :fail,
+     "the floor only raises :pass to :warn; a readable hosted label still FAILs"],
+    ["${{ inputs.opaque && 'chapel-nix' || vars.OTHER }}", :fail,
+     "repo-shaped literal still FAILs through the floor"],
+    ["${{ inputs.runner || 'depot-macos-latest' }}", :warn, "third-party fleet fallback (was :pass before TIN-3914)"],
     ["${{ fromJSON(needs.route-preflight.outputs.labels_json) }}", :warn, "pure needs-output indirection"],
     ["${{ inputs.runner_label }}", :warn, "bare input ref"],
     [{ "group" => "tinyland-infra", "labels" => "tinyland-nix" }, :pass, "group mapping with capability"],
@@ -465,6 +577,8 @@ def self_test
     [{ "group" => "${{ inputs.runner_group || 'GitHub Actions' }}", "labels" => "tinyland-nix" }, :fail, "dynamic group rejects GitHub-hosted fallback"],
     [{ "group" => "${{ inputs.runner_group || 'ubuntu-latest' }}", "labels" => "tinyland-nix" }, :fail, "dynamic group rejects hosted-label fallback"],
     [{ "group" => "tinyland-infra", "labels" => "ubuntu-latest" }, :fail, "group mapping rejects hosted label"],
+    [{ "group" => "tinyland-infra", "labels" => %w[tinyland-nix ubuntu-latest] }, :fail, "group mapping rejects a hosted label in its label array"],
+    [{ "group" => "tinyland-infra", "labels" => "${{ inputs.x || 'macos-15' }}" }, :fail, "group mapping rejects a hosted fallback in its labels expression"],
     [{ "group" => "ubuntu-latest", "labels" => "tinyland-nix" }, :fail, "group mapping rejects hosted group"],
     [{ "labels" => "tinyland-nix" }, :fail, "group mapping requires group"],
     [{ "group" => "Default", "labels" => "tinyland-nix" }, :fail, "group mapping rejects Default"],
@@ -484,6 +598,8 @@ def self_test
      "composed group rejects a hosted fallback smuggled into the labels arm"],
     [composed_expr("toJSON(inputs.runner_group)", "toJSON('chapel-nix')"), :fail,
      "composed group rejects a repo-shaped label"],
+    [composed_expr("toJSON(inputs.runner_group)", "toJSON(inputs.default_runner_class)", "'ubuntu-latest'"), :fail,
+     "composed group rejects a hosted label-only DEFAULT arm outside the mapping"],
     # The template is pinned, so drift hardcoded INTO it is not this pattern:
     # it falls through to the literal scan, which FAILs the template text.
     [composed_expr("toJSON(inputs.runner_group)", "toJSON(inputs.default_runner_class)",
@@ -495,7 +611,10 @@ def self_test
   ]
   matrix_job = { "strategy" => { "matrix" => { "os" => %w[ubuntu-latest macos-latest] } } }
   matrix_cases = [
-    ["${{ matrix.os }}", matrix_job, :pass, "matrix.os resolves to hosted"],
+    ["${{ matrix.os }}", matrix_job, :fail, "matrix.os resolves to hosted (was :pass before TIN-3914)"],
+    ["${{ matrix.os }}", { "strategy" => { "matrix" => { "os" => %w[tinyland-nix ubuntu-latest] } } }, :fail, "one hosted value in an otherwise valid matrix"],
+    ["${{ matrix.runner }}", { "strategy" => { "matrix" => { "include" => [{ "runner" => "tinyland-nix" }, { "runner" => "ubuntu-latest" }] } } }, :fail, "hosted value reached through matrix.include"],
+    ["${{ matrix.os }}", { "strategy" => { "matrix" => { "os" => %w[tinyland-nix tinyland-nix-heavy] } } }, :pass, "matrix.os resolves to capability classes"],
     ["${{ matrix.os }}", { "strategy" => { "matrix" => { "os" => ["tinyland-nix", "chapel-nix"] } } }, :fail, "matrix.os includes repo-shaped drift"],
     ["${{ matrix.missing }}", {}, :warn, "unresolvable matrix ref"],
   ]

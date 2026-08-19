@@ -57,20 +57,30 @@ on:
       default_runner_class:
         type: string
         default: tinyland-nix
-        description: Single runner-class label for matrix jobs. Used when `runner_labels_json` is unset and lanes.json doesn't override per-lane.
+        description: >-
+          Base runner-class label. Used by the matrix jobs when
+          `runner_labels_json` is unset and lanes.json doesn't override
+          per-lane, and — since TIN-3914 retired the GitHub-hosted class — it
+          is also the label the secrets-scan, lanes-load, and repo-manifest
+          jobs run on. A tenant org whose pool is not `tinyland-nix` (e.g.
+          Great-Falls-Tool-Bus) passes its served capability label here and
+          every job follows.
       runner_labels_json:
         type: string
         default: ""
         description: |
           Optional JSON-array expression evaluating to the runs-on labels
           for matrix jobs. When set (non-empty), takes precedence over
-          matrix.lane.runner_class and default_runner_class. Enables
-          spokes with dynamic fallback patterns (e.g. graceful degradation
-          to ubuntu-latest when cluster labels are not reachable) to
+          matrix.lane.runner_class and default_runner_class. Enables spokes
+          that resolve their capability class from a repo/org variable to
           adopt the wrapper without losing their runner-routing logic.
           The string must be a JSON array. The receiver passes it
-          through fromJSON when non-empty. See README + the v1.1
-          release notes for an end-to-end caller example.
+          through fromJSON when non-empty. Since TIN-3914 every label in it
+          must be a self-hosted capability class. Any GitHub-hosted label
+          family, including one hidden in a `fromJSON(vars.X || …)`
+          fallback array, is a FAIL in `scripts/lint-runs-on.rb` — there is
+          no hosted degrade path left.
+          See README + the v1.1 release notes for an end-to-end caller example.
       heavy_runner_class:
         type: string
         default: tinyland-nix-heavy
@@ -92,19 +102,20 @@ on:
         default: ""
         description: >-
           Optional owner-scoped GitHub Actions runner group. Default "" =
-          today's label-only routing, byte-identical for every non-opted
-          consumer (AGENTS.md rule 2). When non-empty, every self-hosted job
-          (flywheel-build, flywheel-test, bazel-graph, playwright) switches
-          from a bare label/array `runs-on` to GitHub's structured
+          today's label-only routing, byte-identical for every consumer that
+          does not opt in (AGENTS.md rule 2). When non-empty, EVERY job —
+          since TIN-3914 removed the GitHub-hosted class, that is all seven:
+          secrets-scan, lanes-load, repo-manifest, flywheel-build,
+          flywheel-test, bazel-graph, playwright — switches from a bare
+          label/array `runs-on` to GitHub's structured
           `runs-on: { group: <runner_group>, labels: <the same labels this
           job resolves today> }`, composed at runtime via
           fromJSON(format(...)) because YAML cannot express a conditional
           mapping. The already-resolved labels are carried through toJSON, so
           `runner_labels_json` / `matrix.lane.runner_class` /
           `default_runner_class` / `heavy_runner_class` / `kvm_runner_class`
-          keep their exact precedence and their string-vs-array shape. The
-          three hosted `ubuntu-latest` jobs (secrets-scan, lanes-load,
-          repo-manifest) are never group-routed. A group mapping matches only
+          keep their exact precedence and their string-vs-array shape. A
+          group mapping matches only
           runners that are BOTH in that org-level runner group AND carry the
           labels, so the group must already exist, have this repository in its
           selection, and serve the capability label — workflow source is not
@@ -130,7 +141,15 @@ concurrency:
 
 jobs:
   secrets-scan:
-    runs-on: ubuntu-latest
+    # TIN-3914: the estate runs only on GF cache-fronted self-hosted runners,
+    # so this job routes through the base capability class like every other
+    # job. runner_group unset (default): the trailing arm renders the plain
+    # `default_runner_class` label. Set: the SAME label inside GitHub's
+    # structured `runs-on: {group, labels}` mapping.
+    runs-on: >-
+      ${{ inputs.runner_group != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.default_runner_class)))
+      || inputs.default_runner_class }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -138,7 +157,11 @@ jobs:
       - uses: tinyland-inc/ci-templates/.github/actions/secrets-scan@v2
 
   lanes-load:
-    runs-on: ubuntu-latest
+    # Base capability class, group-routed on opt-in (see secrets-scan).
+    runs-on: >-
+      ${{ inputs.runner_group != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.default_runner_class)))
+      || inputs.default_runner_class }}
     timeout-minutes: 5
     outputs:
       lanes_json: ${{ steps.load.outputs.lanes_json }}
@@ -154,7 +177,11 @@ jobs:
           path: ${{ inputs.lanes_path }}
 
   repo-manifest:
-    runs-on: ubuntu-latest
+    # Base capability class, group-routed on opt-in (see secrets-scan).
+    runs-on: >-
+      ${{ inputs.runner_group != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.default_runner_class)))
+      || inputs.default_runner_class }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6

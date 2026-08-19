@@ -65,10 +65,12 @@ on:
 permissions:
   contents: read
 
+# TIN-3914: the dispatch job runs on the estate base capability class
+# `tinyland-nix` instead of a GitHub-hosted runner.
 jobs:
   dispatch:
     name: Dispatch public preview
-    runs-on: ubuntu-latest
+    runs-on: tinyland-nix
     timeout-minutes: 5
     steps:
       - uses: tinyland-inc/ci-templates/.github/actions/public-preview-dispatch@v2

@@ -49,11 +49,20 @@ module RunnerLabelTaxonomy
     massageithaca-dind
   ].freeze
 
-  # GitHub-hosted runner families and operator-controlled third-party hosted
-  # fleets. Hosted labels are allowed by THIS guard (it polices self-hosted
-  # capability drift; the RBE-prefer-self-hosted posture is a separate audit).
-  HOSTED_FAMILY_RE = /\A(ubuntu|macos|windows)-[a-z0-9_.-]+\z/i.freeze
-  HOSTED_FLEET_RE  = /\A(depot|warp|buildjet|blacksmith|namespace-profile)-[a-z0-9_.-]+\z/i.freeze
+  # GitHub-hosted runner families. TIN-3914 (operator ruling, 2026-08-19):
+  # the estate runs ONLY on GF cache-fronted self-hosted runners, so these are
+  # a hard FAIL for this guard — not a pass, not a warning. Before TIN-3914
+  # they were PASSed here on the theory that the prefer-self-hosted posture was
+  # a separate audit; there is no separate audit any more, the posture is the
+  # rule.
+  GITHUB_HOSTED_FAMILY_RE = /\A(ubuntu|macos|windows)-[a-z0-9_.-]+\z/i.freeze
+
+  # Third-party managed hosted fleets (Blacksmith, Depot, …). These are neither
+  # GitHub's infrastructure nor the org's ARC pool, and they are not GF
+  # cache-fronted either — but the TIN-3914 ruling named GitHub runners, and no
+  # ci-templates surface uses one. They WARN: surfaced for a deliberate
+  # operator decision, never silently blessed.
+  HOSTED_FLEET_RE = /\A(depot|warp|buildjet|blacksmith|namespace-profile)-[a-z0-9_.-]+\z/i.freeze
 
   module_function
 
@@ -95,8 +104,19 @@ module RunnerLabelTaxonomy
     label_errors(label).empty?
   end
 
-  # A GitHub-hosted or known third-party hosted-fleet label?
+  # A GitHub-hosted runner label (ubuntu-* / macos-* / windows-*)? FAIL.
+  def github_hosted_label?(label)
+    GITHUB_HOSTED_FAMILY_RE.match?(label)
+  end
+
+  # A third-party managed hosted fleet label? WARN.
+  def third_party_hosted_label?(label)
+    HOSTED_FLEET_RE.match?(label)
+  end
+
+  # Any hosted runner label, of either kind. Neither can ever satisfy a
+  # self-hosted runner-group mapping, so the group rules use this predicate.
   def hosted_label?(label)
-    HOSTED_FAMILY_RE.match?(label) || HOSTED_FLEET_RE.match?(label)
+    github_hosted_label?(label) || third_party_hosted_label?(label)
   end
 end

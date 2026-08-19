@@ -26,14 +26,27 @@ a fleet-wide change.
 2. **Default-off, opt-in changes only.** A new behavior added to a shared
    workflow MUST be gated behind a new input that defaults to the pre-existing
    behavior. Non-opted consumers must be byte-identical. Prove it by diffing the
-   default execution path.
-3. **No baked endpoints, credentials, or upload authority** in `bazelrc/*.bazelrc`
+   default execution path. The single standing exception is rule 3: a
+   prohibition cannot ship with an opt-out, so TIN-3914 changed default routing
+   for every consumer and took a MAJOR bump instead of a gate.
+3. **No GitHub-hosted runners, ever.** Operator ruling, 2026-08-19: the estate
+   runs ONLY on GF cache-fronted self-hosted runners. Every `runs-on` names an
+   org capability class. Three gates, deliberately reading different things:
+   `just lint-runs-on-check` verdicts `runs-on` values structurally,
+   `just no-hosted-runners-check` scans every schedulable surface textually
+   (label-aware and case-insensitive), and
+   `just lanes-schema-runner-class-check` proves no hosted label is even
+   REPRESENTABLE as consumer `lanes.json` data. The third exists because the
+   first two both missed a schema that sanctioned one. There is no opt-out
+   input, and reintroducing one is not a local decision. See
+   `docs/migration-v2-to-v3.md`.
+4. **No baked endpoints, credentials, or upload authority** in `bazelrc/*.bazelrc`
    (enforced by `just endpoint-free-check` + `just ci-cached-endpoint-free-check`).
    Cache/executor endpoints are runtime authority, supplied as flags by the
    composite/workflow from validated env.
-4. **Amend `CHANGELOG.md` `## [Unreleased]`** in every feature/fix PR. Release
+5. **Amend `CHANGELOG.md` `## [Unreleased]`** in every feature/fix PR. Release
    PRs move that content into the dated version section.
-5. **Run `just check` before pushing** (or `nix develop --command just check`).
+6. **Run `just check` before pushing** (or `nix develop --command just check`).
 
 ## Local validation
 
@@ -46,7 +59,10 @@ nix develop --command just check # if tools are not on PATH
 `tinyland.repo.json`, asserts internal action refs resolve, traverses the
 restricted workflows' exact dependency closure, guards the js-bazel-package
 runner + cache-backed contracts, asserts the bazelrc fragments stay
-endpoint-free, and runs the gitleaks working-tree scan.
+endpoint-free, dogfoods the `runs-on` linter at 0 FAIL, proves no GitHub-hosted
+runner label survives on a schedulable surface or is representable as consumer
+lanes data (`no-hosted-runners-check` + `lanes-schema-runner-class-check`,
+TIN-3914), and runs the gitleaks working-tree scan.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 

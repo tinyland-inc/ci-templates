@@ -3,10 +3,9 @@
 `npm-publish.yml` is the reusable workflow for straightforward Node package
 build, test, and publish flows that publish directly from the workspace tree.
 
-Unlike `js-bazel-package.yml`, this reusable workflow is currently
-GitHub-hosted only. It does not expose shared-runner or repo-owned runner modes,
-and it has no repository-local push-tag or manual trigger. Publishing happens
-only when an existing consumer explicitly calls the pinned workflow.
+Unlike `js-bazel-package.yml`, this reusable workflow exposes no runner modes
+at all, and it has no repository-local push-tag or manual trigger. Publishing
+happens only when an existing consumer explicitly calls the pinned workflow.
 
 ## What it does
 
@@ -69,12 +68,32 @@ Current jobs:
 - `publish-gpr`
 - `publish-npm`
 
-All three jobs currently run on:
+All three jobs run on:
 
-- `ubuntu-latest`
+- `tinyland-nix`
 
-This is a hosted-only reusable workflow today. The ci-templates repository does
-not invoke it when an immutable workflow-library release is tagged.
+TIN-3914 (`v3.0.0`) moved them off GitHub-hosted runners; the estate runs only
+on GF cache-fronted self-hosted runners. The label is a literal rather than a
+new caller-facing input because the 2026-08-19 fleet sweep found zero callers of
+this template — adding a routing contract for nobody would be inventing an
+interface. A tenant org that adopts this workflow and cannot reach
+`tinyland-nix` should file for the input rather than reintroduce a hosted lane.
+`actions/setup-node` and `pnpm/action-setup` provision their own toolchains on
+the self-hosted class, so no Nix devshell wiring was added.
+
+`publish-npm` requested `npm publish --provenance` unconditionally. That is not
+merely a lost attestation on a self-hosted runner — npm validates provenance
+server-side by comparing the Runner Environment extension in the signing
+certificate against an allow-list that excludes `self-hosted`, so the registry
+**rejects the publish**. The step is now gated on
+`runner.environment == 'github-hosted'` (fail-closed: an empty or unexpected
+value takes the no-provenance path) and emits a `::warning::` naming what was
+skipped, matching `js-bazel-package.yml`. Since this workflow now always runs
+self-hosted, provenance is in practice never requested. See
+[`migration-v2-to-v3.md`](migration-v2-to-v3.md).
+
+The ci-templates repository does not invoke this workflow when an immutable
+workflow-library release is tagged.
 
 ## Example
 

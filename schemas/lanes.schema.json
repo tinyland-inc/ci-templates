@@ -82,14 +82,9 @@
 	},
 	"$defs": {
 		"runnerClass": {
-			"anyOf": [
-				{
-					"type": "string",
-					"pattern": "^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$"
-				},
-				{ "const": "ubuntu-latest" }
-			],
-			"description": "GitHub Actions runs-on label: an org-namespaced capability class — `<org-pool>` prefix + one of `-nix`, `-nix-heavy`, `-nix-kvm`, `-nix-gpu`, `-docker`, `-dind` (e.g. `tinyland-nix`, `great-falls-tool-bus-nix`) — or `ubuntu-latest`, which is permitted only for jobs whose entire purpose is a `gh api` call. Cluster classes require a runner-pool grant: tinyland pools via tinyland-infra/modules/spoke/runner-binding; tenant pools via the org's own infra stack (TIN-2353)."
+			"type": "string",
+			"pattern": "^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$",
+			"description": "GitHub Actions runs-on label: an org-namespaced capability class — `<org-pool>` prefix + one of `-nix`, `-nix-heavy`, `-nix-kvm`, `-nix-gpu`, `-docker`, `-dind` (e.g. `tinyland-nix`, `great-falls-tool-bus-nix`). TIN-3914 removed the GitHub-hosted const arm that previously carved out `gh api`-only lanes: this value is consumer data that `lanes-load` feeds into spoke-ci's `matrix.lane.runner_class`, i.e. straight into `runs-on`, so it was the one sanctioned hosted path left in the estate and no workflow-text linter could see it. A `gh api`-only lane runs on the base capability class like everything else. `schema_version` stays 1 deliberately — bumping it would invalidate every consumer's lanes.json over a restriction, a far larger break than the restriction itself; the tightening rides the v3.0.0 MAJOR instead. Cluster classes require a runner-pool grant: tinyland pools via tinyland-infra/modules/spoke/runner-binding; tenant pools via the org's own infra stack (TIN-2353)."
 		},
 		"laneTrigger": {
 			"enum": ["pull_request", "merge_main", "release_tag", "manual"],

@@ -4,9 +4,15 @@
 Rust application whose build, test, and package authority is Bazel. It was
 introduced for the Prompt Pulse Rust productization canary, but it contains no
 Prompt Pulse repository names, endpoints, product-specific/native-lane runner
-labels, or release claims. A fixed GitHub-hosted admission job runs no caller
-code and receives no secrets; private native runners are assigned only after it
-accepts a private same-repository event, route, matrix, and finite targets.
+labels, or release claims. A fixed admission job runs no caller code and
+receives no secrets; private native runners are assigned only after it accepts a
+private same-repository event, route, matrix, and finite targets. Since TIN-3914
+(`v3.0.0`) that admission job runs on the estate base capability class
+`tinyland-nix` rather than a GitHub-hosted runner. It deliberately stays a
+**bare label**, not a `{group, labels}` mapping: its job is to validate
+`runner_group` before any group-routed lane is scheduled, and routing the gate
+through the value it validates would make an inadmissible group queue forever
+instead of failing loudly.
 
 ## Contract
 
@@ -73,7 +79,7 @@ on:
 
 jobs:
   rust:
-    uses: tinyland-inc/ci-templates/.github/workflows/rust-bazel-application.yml@v2.14.0
+    uses: tinyland-inc/ci-templates/.github/workflows/rust-bazel-application.yml@v3.0.0
     with:
       enabled: true
       runner_group: tinyland-infra
@@ -90,8 +96,13 @@ jobs:
       package_targets_json: '["//packaging:release_archives"]'
 ```
 
-`v2.14.0` is the first planned immutable release containing this workflow and
-its internal actions. Do not replace that pin with `@v2` or `@main`.
+`v2.14.0` was the first immutable release containing this workflow and its
+internal actions; its `trust-gate` ran on a GitHub-hosted runner. `v3.0.0` is
+the first release in which every job — admission included — routes to a GF
+cache-fronted self-hosted runner (TIN-3914), so a consumer copying the example
+above should pin `@v3.0.0`, not `@v2.14.0`. The workflow's own internal
+composites stay pinned at their `@v2.14.0` exact refs, which is the immutability
+contract, not a consumer pin. Do not replace either with `@v2` or `@main`.
 
 Those two entries are an interface example, not a claim that the labels are
 currently served. The workflow proves only platforms that a caller explicitly
@@ -100,10 +111,11 @@ matrix, cross-built release parity, or any GloriousFlywheel remote-execution
 support.
 
 Public repositories, `pull_request_target`, and fork pull requests fail in the
-hosted admission job; they never receive a private runner, caller checkout, or
-cache credential. A private same-repository pull request may use the native
-lanes. A public/open-source product needs a separate fork-safe hosted build; it
-must not route public events into this native private-runner workflow.
+admission job; they never receive a private runner, caller checkout, or cache
+credential. A private same-repository pull request may use the native lanes. A
+public/open-source product needs a separate fork-safe build design; it must not
+route public events into this native private-runner workflow, and since TIN-3914
+that separate design cannot be a GitHub-hosted lane in this repository.
 
 ## GloriousFlywheel cache policy
 

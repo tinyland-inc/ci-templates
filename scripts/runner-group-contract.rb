@@ -7,16 +7,26 @@
 # Two things are proven, mechanically, offline:
 #
 #   (a) With `runner_group` unset, every job's RENDERED runs-on is byte-for-byte
-#       what the pre-TIN-3902 workflow rendered. The pre-TIN-3902 expressions are
-#       pinned below (recorded from main @ d67c76f, the same discipline as the
-#       restricted contract's `legacy_sha256`), and both the old and the new
-#       expression are evaluated over a scenario grid; the results must be equal.
+#       the pinned label-only baseline below (the same discipline as the
+#       restricted contract's `legacy_sha256`), and both the baseline and the
+#       live expression are evaluated over a scenario grid; the results must be
+#       equal.
 #
-#   (b) With `runner_group` set, the four runner-class jobs render GitHub's
-#       structured `{group, labels}` mapping carrying exactly the labels they
-#       resolve today, and every job whose runs-on is a plain literal today
-#       renders that unchanged literal — a group mapping is never emitted for
-#       them. That class is derived, not pinned to `ubuntu-latest` (TIN-3914).
+#   (b) With `runner_group` set, every runner-class job renders GitHub's
+#       structured `{group, labels}` mapping carrying exactly the labels it
+#       resolves today, and any job whose runs-on is a plain literal renders
+#       that unchanged literal — a group mapping is never emitted for it. That
+#       class is DERIVED from the baseline, never hardcoded.
+#
+# TIN-3914 re-record: the baseline was the pre-TIN-3902 expression set, in which
+# secrets-scan / lanes-load / repo-manifest were the literal `ubuntu-latest`
+# class. The no-GitHub-hosted-runners ruling moved those three onto
+# `inputs.default_runner_class`, so all seven jobs are runner-class jobs now and
+# the literal class is empty. The baseline below is therefore re-recorded to the
+# post-TIN-3914 label-only routing. What it proves is unchanged and is the whole
+# point of the pin: `runner_group` stays default-off. Do NOT re-record it again
+# to make a check pass — a diff here means a routing change that needs its own
+# review.
 #
 # The evaluator implements the slice of the GitHub Actions expression language
 # these runs-on values use: `!=`, `&&`, `||` with GitHub's operand-returning
@@ -35,27 +45,38 @@ require "yaml"
 ROOT = File.expand_path("..", __dir__)
 WORKFLOW = File.join(ROOT, ".github/workflows/spoke-ci.yml")
 
-# runs-on as it stood before TIN-3902 (main @ d67c76f). Never edit these to make
-# a check pass: they ARE the backward-compatibility baseline.
+# The pinned label-only baseline: what every job's runs-on renders to with
+# `runner_group` unset. Re-recorded once, deliberately, for TIN-3914 (see the
+# header). Never edit these to make a check pass: they ARE the
+# backward-compatibility baseline.
 LEGACY_RUNS_ON = {
-  "secrets-scan" => "ubuntu-latest",
-  "lanes-load" => "ubuntu-latest",
-  "repo-manifest" => "ubuntu-latest",
+  "secrets-scan" => "${{ inputs.default_runner_class }}",
+  "lanes-load" => "${{ inputs.default_runner_class }}",
+  "repo-manifest" => "${{ inputs.default_runner_class }}",
   "flywheel-build" => "${{ inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class }}",
   "flywheel-test" => "${{ inputs.runner_labels_json != '' && fromJSON(inputs.runner_labels_json) || matrix.lane.runner_class || inputs.default_runner_class }}",
   "bazel-graph" => "${{ inputs.heavy_runner_class }}",
   "playwright" => "${{ inputs.kvm_runner_class }}",
 }.freeze
 
-# Derived, never hardcoded to `ubuntu-latest`: a job whose runs-on is a plain
-# literal today must keep exactly that literal and must never gain a group
-# mapping; a job that routes through a runner-class expression MUST gain one
-# when runner_group is set. The literal class happens to be the three
-# GitHub-hosted jobs right now, and TIN-3914 (no GitHub-hosted runners in the
-# estate) will move them off `ubuntu-latest` in a separate PR — that migration
-# then needs only a deliberate LEGACY_RUNS_ON re-record, not a rewrite here.
-LITERAL_JOBS = LEGACY_RUNS_ON.reject { |_job, value| value.include?("${{") }.keys.freeze
-EXPRESSION_JOBS = (LEGACY_RUNS_ON.keys - LITERAL_JOBS).freeze
+# Derived from the baseline, never hardcoded: a job whose runs-on is a plain
+# literal must keep exactly that literal and must never gain a group mapping; a
+# job that routes through a runner-class expression MUST gain one when
+# runner_group is set. After TIN-3914 the literal class is EMPTY — all seven
+# jobs route through a runner-class input — so the literal branch is kept
+# executable by a synthetic negative oracle in the self-test rather than by the
+# live workflow. Derivation is the point: a future job added with a literal
+# runs-on is covered without editing this logic.
+def literal_jobs(baseline)
+  baseline.reject { |_job, value| value.include?("${{") }.keys
+end
+
+def expression_jobs(baseline)
+  baseline.keys - literal_jobs(baseline)
+end
+
+LITERAL_JOBS = literal_jobs(LEGACY_RUNS_ON).freeze
+EXPRESSION_JOBS = expression_jobs(LEGACY_RUNS_ON).freeze
 
 # ── expression evaluator (the GitHub Actions subset used by runs-on) ─────────
 
@@ -313,24 +334,26 @@ def workflow_runs_on(document)
   document.fetch("jobs").each_with_object({}) { |(job, body), out| out[job] = body.is_a?(Hash) ? body["runs-on"] : nil }
 end
 
-def check_runs_on(runs_on)
+def check_runs_on(runs_on, baseline = LEGACY_RUNS_ON)
   errors = []
-  expected_jobs = LEGACY_RUNS_ON.keys.sort
+  literal = literal_jobs(baseline)
+  expression = expression_jobs(baseline)
+  expected_jobs = baseline.keys.sort
   unless runs_on.keys.sort == expected_jobs
     errors << "job set changed (#{runs_on.keys.sort.join(", ")}); re-record LEGACY_RUNS_ON deliberately"
   end
 
-  LEGACY_RUNS_ON.each do |job, legacy|
+  baseline.each do |job, legacy|
     current = runs_on[job]
     next errors << "#{job}: missing runs-on" if current.nil?
 
     # (b) a literal-runs-on job stays that exact literal — never group-routed.
-    if LITERAL_JOBS.include?(job)
+    if literal.include?(job)
       errors << "#{job}: literal runs-on changed (#{current.inspect}); must stay #{legacy.inspect}" unless current == legacy
       next
     end
 
-    errors << "#{job}: expected a runner-class expression job" unless EXPRESSION_JOBS.include?(job)
+    errors << "#{job}: expected a runner-class expression job" unless expression.include?(job)
 
     BASE_SCENARIOS.each do |label, scenario|
       unset = render(current, with_group(scenario, ""))
@@ -368,7 +391,7 @@ def self_test
   mutants = {
     "unconditional group mapping (default path broken)" =>
       runs_on.merge("bazel-graph" => composed.sub("inputs.runner_group != '' &&", "true &&")),
-    "group mapping leaks into a literal-runs-on job" =>
+    "utility job silently re-routed to the heavy class" =>
       runs_on.merge("secrets-scan" => composed),
     "opted path drops the resolved labels" =>
       runs_on.merge("bazel-graph" => composed.sub("toJSON(inputs.heavy_runner_class))", "toJSON('tinyland-nix'))")),
@@ -379,8 +402,31 @@ def self_test
   }
 
   survivors = mutants.reject { |_label, mutant| check_runs_on(mutant).any? }.keys
+
+  # TIN-3914 emptied the literal-runs-on class (every job now routes through a
+  # runner-class input), so the "a literal job never gains a group mapping"
+  # branch has no live subject. Keep it executable against a synthetic baseline
+  # that declares one, so the invariant is still proven rather than merely
+  # asserted, and so a future literal-runs-on job lands on a tested rule.
+  synthetic_baseline = LEGACY_RUNS_ON.merge("synthetic-literal" => "tinyland-nix")
+  synthetic_runs_on = runs_on.merge("synthetic-literal" => "tinyland-nix")
+  synthetic_mutants = {
+    "group mapping leaks into a literal-runs-on job" =>
+      synthetic_runs_on.merge("synthetic-literal" => composed),
+    "literal-runs-on job silently relabelled" =>
+      synthetic_runs_on.merge("synthetic-literal" => "tinyland-nix-heavy"),
+  }
+  if check_runs_on(synthetic_runs_on, synthetic_baseline).any?
+    survivors << "synthetic literal-job baseline rejected its own unmutated input"
+  end
+  survivors.concat(
+    synthetic_mutants.reject { |_label, mutant| check_runs_on(mutant, synthetic_baseline).any? }.keys
+  )
+
+  total = mutants.length + synthetic_mutants.length
   if survivors.empty?
-    puts "runner_group contract self-test passed (#{mutants.length} negative oracles rejected)"
+    puts "runner_group contract self-test passed (#{total} negative oracles rejected, " \
+         "#{synthetic_mutants.length} against a synthetic literal-runs-on baseline)"
     return 0
   end
 
@@ -405,7 +451,8 @@ def main
   if errors.empty?
     checked = EXPRESSION_JOBS.length * BASE_SCENARIOS.length
     puts "runner_group contract passed (#{LITERAL_JOBS.length} literal runs-on jobs unchanged; " \
-         "#{checked} rendered runner-class runs-on values: default path byte-identical, opted path structured)"
+         "#{checked} rendered runner-class runs-on values across #{EXPRESSION_JOBS.length} jobs: " \
+         "default path byte-identical to the pinned label-only baseline, opted path structured)"
     return 0
   end
 

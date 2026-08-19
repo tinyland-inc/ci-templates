@@ -24,7 +24,8 @@ outputs:
       First org-namespaced capability-class label found in `runner.labels`
       (`<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind`, e.g.
       `tinyland-nix`, `great-falls-tool-bus-nix`), or empty string if none
-      (e.g. github-hosted `ubuntu-latest`). Consumed by `flywheel-bazel` to
+      (e.g. a GitHub-hosted runner, retired estate-wide by TIN-3914).
+      Consumed by `flywheel-bazel` to
       refuse executor mode off-cluster. See
       tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §6.
     value: ${{ steps.detect.outputs.runner_class }}

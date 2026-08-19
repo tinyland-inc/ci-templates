@@ -23,11 +23,25 @@ behaviorally unchanged for every caller that does not opt in, and their bytes
 stay pinned by `SPECS[…][:legacy_sha256]` in
 `scripts/restricted-workflow-contract.rb`. `spoke-ci.yml`'s optional
 `runner_group` input (TIN-3902) is *not* this surface: it adds group routing
-with no trust gate, is default-off (unset renders the pre-TIN-3902 runs-on
-byte-for-byte, proved by `just runner-group-contract-check`), and admits any
-non-generic group the caller names. A private repo that needs the fail-closed,
-reviewed group+capability contract — required inputs, no defaults, fork and
-pre-scheduling trust gate — still uses the restricted variants here.
+with no trust gate, is default-off (unset renders the pinned label-only
+baseline byte-for-byte, proved by `just runner-group-contract-check`), and
+admits any non-generic group the caller names. A private repo that needs the
+fail-closed, reviewed group+capability contract — required inputs, no defaults,
+fork and pre-scheduling trust gate — still uses the restricted variants here.
+
+**TIN-3914 (v3.0.0) changed the legacy files, not this surface.** Both
+`legacy_sha256` pins were re-recorded because the no-GitHub-hosted-runners
+ruling moved the legacy lanes' hosted jobs onto self-hosted capability classes
+(`spoke-ci.yml`'s three utility jobs through `default_runner_class`,
+`spoke-lane-env.yml`'s four through a literal `tinyland-nix`). Those digests are
+a tripwire on the legacy bytes so that adding or changing the restricted variant
+cannot silently move the shared lane — they are not a claim that the legacy
+files never change on purpose. The restricted variants needed **no** edit and
+remain a strict subset: `validate_restricted` normalizes each job's `runs-on`
+back to the legacy node before the structural comparison, so a legacy routing
+change cannot widen the restricted contract. The restricted lanes were already
+the "can never resolve to a hosted runner" variants; TIN-3914 simply removed the
+gap between them and the shared lanes.
 The restricted variants additionally close their dependency graph: internal
 actions use exact `@v2.12.1` refs, third-party Actions use full commit SHAs
 (`actions/checkout` is the verified v6.1.0 commit), the cache contract executes
@@ -107,7 +121,10 @@ to a runner; the shell checks are defense in depth, not the admission gate. All
 other jobs directly depend on the trust job and may not use `always()` to bypass
 a skipped dependency. Default/shared/hosted/repo-shaped/wrong-capability
 routes, fork or untrusted `pull_request_target` heads, and non-private callers
-therefore skip before assignment and before checkout.
+therefore skip before assignment and before checkout. Since TIN-3914 a hosted
+route is doubly unreachable here: the trust gate rejected it before scheduling
+already, and `scripts/lint-runs-on.rb` now FAILs a GitHub-hosted label in either
+arm of a `{group, labels}` mapping at author time.
 
 These workflows add no provider credentials, Tofu state, plan/apply authority,
 production promotion policy, or app deployment ownership. `spoke-lane-env`'s
