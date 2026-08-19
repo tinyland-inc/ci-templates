@@ -77,7 +77,7 @@ Versioning: [SemVer 2.0](https://semver.org/).
   line or is an exact release pin (the restricted variants' immutability
   contract), and carries an explicit debt ledger for files still on the old
   line — `js-bazel-package.yml`, `spoke-deploy-cloudflare-pages.yml`,
-  `spoke-public-preview.yml` (TIN-3816). The ledger fails closed in **both**
+  `spoke-public-preview.yml` (TIN-3914). The ledger fails closed in **both**
   directions: an unlisted file with a stale ref fails, and a listed file that is
   no longer stale also fails, so it cannot rot into a lie.
 

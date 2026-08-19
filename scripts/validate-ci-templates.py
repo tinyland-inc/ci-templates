@@ -113,9 +113,9 @@ CURRENT_RELEASE_LINE = "v3"
 # description-only (`nix-setup`), which is why they are sequenced separately
 # from spoke-ci, where the delta is the gitleaks fix above.
 STALE_INTERNAL_REF_FILES = {
-    ".github/workflows/js-bazel-package.yml": "TIN-3816",
-    ".github/workflows/spoke-deploy-cloudflare-pages.yml": "TIN-3816",
-    ".github/workflows/spoke-public-preview.yml": "TIN-3816",
+    ".github/workflows/js-bazel-package.yml": "TIN-3914",
+    ".github/workflows/spoke-deploy-cloudflare-pages.yml": "TIN-3914",
+    ".github/workflows/spoke-public-preview.yml": "TIN-3914",
 }
 
 
