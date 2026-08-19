@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-08-19
+
 > **This section releases as `v3.0.0` (MAJOR).** TIN-3914 below changes default
 > consumer behavior with no opt-out and narrows two documented input value
 > domains. The MAJOR-vs-MINOR argument is written out in
