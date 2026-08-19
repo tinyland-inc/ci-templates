@@ -261,9 +261,11 @@ each self-hosted job routes with GitHub's structured form instead:
 ```yaml
 jobs:
   ci:
-    # Pin the exact release that carries `runner_group` (see CHANGELOG); the
-    # input does not exist in v2.13.0 or earlier.
-    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci.yml@vX.Y.Z
+    # Pin the exact release that carries `runner_group`: the input does not
+    # exist in v2.14.0 or earlier; it ships in v2.15.0. Bumping the pin is
+    # REQUIRED alongside the input — a caller that adds `runner_group:` while
+    # pinned to an older release fails at workflow start with an unknown input.
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci.yml@v2.15.0
     with:
       default_runner_class: tinyland-nix
       heavy_runner_class: tinyland-nix
@@ -274,7 +276,7 @@ jobs:
 
 | Job | `runner_group` unset | `runner_group` set |
 |---|---|---|
-| `secrets-scan`, `lanes-load`, `repo-manifest` | `ubuntu-latest` | `ubuntu-latest` (**never** group-routed) |
+| `secrets-scan`, `lanes-load`, `repo-manifest` | literal (today `ubuntu-latest`) | unchanged literal — **never** group-routed |
 | `flywheel-build`, `flywheel-test` | `runner_labels_json` → `matrix.lane.runner_class` → `default_runner_class` | `{ group: <runner_group>, labels: <same value> }` |
 | `bazel-graph` | `heavy_runner_class` | `{ group: <runner_group>, labels: heavy_runner_class }` |
 | `playwright` | `kvm_runner_class` | `{ group: <runner_group>, labels: kvm_runner_class }` |
@@ -282,6 +284,11 @@ jobs:
 - **Label resolution is untouched.** The group mapping carries the *same* value
   the job resolves today, including the string-vs-array shape of
   `runner_labels_json`. The input adds a group; it never re-picks a label.
+- **The hosted class is on its way out.** The three literal-`runs-on` jobs are
+  GitHub-hosted today; TIN-3914 (no GitHub-hosted runners in the estate) retires
+  that class in a separate ci-templates PR. This input's gate derives the
+  never-group-routed set from "literal `runs-on` today", so it does not assume
+  `ubuntu-latest` survives.
 - **A group narrows, it does not widen.** GitHub schedules onto a runner that is
   in that group **and** carries the labels. A group whose runners lack the
   capability label queues forever — which is why this is opt-in per spoke.

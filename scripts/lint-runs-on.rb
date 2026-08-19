@@ -248,7 +248,17 @@ end
 # gets the same structural verdict instead of being mistaken for a bare label
 # literal. An arm that is a single quoted literal is verdicted statically;
 # anything else is runtime-resolved (WARN, plus the forbidden-fallback scan).
-COMPOSED_GROUP_TEMPLATE = /format\(\s*'\{\{\s*"group"\s*:[^']*'/
+# Only the exact canonical template above is read this way — see
+# CANONICAL_COMPOSED_TEMPLATE.
+# The ONE canonical template, pinned byte-for-byte. Positional trust in the
+# format() arguments is only sound while the template itself is fixed: a
+# template with a group or a label hardcoded into it (`{{"group":"Default",…}}`)
+# would otherwise be read through arg positions that no longer describe what the
+# mapping actually emits. Any other template is NOT this pattern — it falls
+# through to the ordinary literal scan below, which verdicts the template text
+# as the runner label it is not, i.e. FAILs.
+CANONICAL_COMPOSED_TEMPLATE = %q('{{"group":{0},"labels":{1}}}').freeze
+COMPOSED_GROUP_CALL = /format\(\s*'\{\{/.freeze
 STATIC_CALL_ARG = /\A(?:toJSON\()?\s*'([^']*)'\s*\)?\z/
 
 # Split the argument list of the call whose `(` is at open_paren, honouring
@@ -301,14 +311,15 @@ end
 # Returns { source:, results: } for the composed mapping, or nil when the
 # expression does not build one. Never raises.
 def evaluate_composed_group(raw, job, opts)
-  match = COMPOSED_GROUP_TEMPLATE.match(raw)
+  match = COMPOSED_GROUP_CALL.match(raw)
   return nil unless match
 
   open_paren = raw.index("(", match.begin(0))
   return nil unless open_paren
 
   args, close_paren = split_call_args(raw, open_paren)
-  return nil if args.length < 3
+  return nil if args.length != 3
+  return nil unless args[0].to_s.strip == CANONICAL_COMPOSED_TEMPLATE
 
   group = evaluate_runner_group(composed_arm(args[1]))
   labels = evaluate_group_labels(composed_arm(args[2]), job, opts)
@@ -405,9 +416,10 @@ end
 
 # The exact composed shape spoke-ci.yml emits for its optional `runner_group`
 # input, so the workflow and this guard cannot drift apart silently.
-def composed_expr(group_arg, labels_arg, fallback = "inputs.default_runner_class")
+def composed_expr(group_arg, labels_arg, fallback = "inputs.default_runner_class",
+                  template = CANONICAL_COMPOSED_TEMPLATE)
   "${{ inputs.runner_group != '' && " \
-    "fromJSON(format('{{\"group\":{0},\"labels\":{1}}}', #{group_arg}, #{labels_arg})) " \
+    "fromJSON(format(#{template}, #{group_arg}, #{labels_arg})) " \
     "|| #{fallback} }}"
 end
 
@@ -472,6 +484,14 @@ def self_test
      "composed group rejects a hosted fallback smuggled into the labels arm"],
     [composed_expr("toJSON(inputs.runner_group)", "toJSON('chapel-nix')"), :fail,
      "composed group rejects a repo-shaped label"],
+    # The template is pinned, so drift hardcoded INTO it is not this pattern:
+    # it falls through to the literal scan, which FAILs the template text.
+    [composed_expr("toJSON(inputs.runner_group)", "toJSON(inputs.default_runner_class)",
+                   "inputs.default_runner_class", %q('{{"group":"Default","labels":{1}}}')), :fail,
+     "composed group rejects a Default group hardcoded into the format template"],
+    [composed_expr("toJSON(inputs.runner_group)", "toJSON(inputs.default_runner_class)",
+                   "inputs.default_runner_class", %q('{{"group":{0},"labels":"chapel-nix"}}')), :fail,
+     "composed group rejects a repo-shaped label hardcoded into the format template"],
   ]
   matrix_job = { "strategy" => { "matrix" => { "os" => %w[ubuntu-latest macos-latest] } } }
   matrix_cases = [

@@ -12,10 +12,11 @@
 #       restricted contract's `legacy_sha256`), and both the old and the new
 #       expression are evaluated over a scenario grid; the results must be equal.
 #
-#   (b) With `runner_group` set, the four self-hosted jobs render GitHub's
+#   (b) With `runner_group` set, the four runner-class jobs render GitHub's
 #       structured `{group, labels}` mapping carrying exactly the labels they
-#       resolve today, and the three GitHub-hosted (`ubuntu-latest`) jobs render
-#       an unchanged bare label — a group mapping is never emitted for them.
+#       resolve today, and every job whose runs-on is a plain literal today
+#       renders that unchanged literal — a group mapping is never emitted for
+#       them. That class is derived, not pinned to `ubuntu-latest` (TIN-3914).
 #
 # The evaluator implements the slice of the GitHub Actions expression language
 # these runs-on values use: `!=`, `&&`, `||` with GitHub's operand-returning
@@ -46,8 +47,15 @@ LEGACY_RUNS_ON = {
   "playwright" => "${{ inputs.kvm_runner_class }}",
 }.freeze
 
-HOSTED_JOBS = %w[secrets-scan lanes-load repo-manifest].freeze
-SELF_HOSTED_JOBS = %w[flywheel-build flywheel-test bazel-graph playwright].freeze
+# Derived, never hardcoded to `ubuntu-latest`: a job whose runs-on is a plain
+# literal today must keep exactly that literal and must never gain a group
+# mapping; a job that routes through a runner-class expression MUST gain one
+# when runner_group is set. The literal class happens to be the three
+# GitHub-hosted jobs right now, and TIN-3914 (no GitHub-hosted runners in the
+# estate) will move them off `ubuntu-latest` in a separate PR — that migration
+# then needs only a deliberate LEGACY_RUNS_ON re-record, not a rewrite here.
+LITERAL_JOBS = LEGACY_RUNS_ON.reject { |_job, value| value.include?("${{") }.keys.freeze
+EXPRESSION_JOBS = (LEGACY_RUNS_ON.keys - LITERAL_JOBS).freeze
 
 # ── expression evaluator (the GitHub Actions subset used by runs-on) ─────────
 
@@ -316,13 +324,13 @@ def check_runs_on(runs_on)
     current = runs_on[job]
     next errors << "#{job}: missing runs-on" if current.nil?
 
-    # (b) hosted jobs must stay a bare unchanged label — never group-routed.
-    if HOSTED_JOBS.include?(job)
-      errors << "#{job}: hosted runs-on changed (#{current.inspect}); must stay #{legacy.inspect}" unless current == legacy
+    # (b) a literal-runs-on job stays that exact literal — never group-routed.
+    if LITERAL_JOBS.include?(job)
+      errors << "#{job}: literal runs-on changed (#{current.inspect}); must stay #{legacy.inspect}" unless current == legacy
       next
     end
 
-    errors << "#{job}: expected a self-hosted job in SELF_HOSTED_JOBS" unless SELF_HOSTED_JOBS.include?(job)
+    errors << "#{job}: expected a runner-class expression job" unless EXPRESSION_JOBS.include?(job)
 
     BASE_SCENARIOS.each do |label, scenario|
       unset = render(current, with_group(scenario, ""))
@@ -353,14 +361,14 @@ def check_runs_on(runs_on)
 end
 
 # Negative oracle: prove the checker above actually rejects the ways this input
-# could stop being default-off or start group-routing the hosted jobs.
+# could stop being default-off or start group-routing a literal-runs-on job.
 def self_test
   runs_on = workflow_runs_on(load_workflow)
   composed = runs_on.fetch("bazel-graph")
   mutants = {
     "unconditional group mapping (default path broken)" =>
       runs_on.merge("bazel-graph" => composed.sub("inputs.runner_group != '' &&", "true &&")),
-    "group mapping leaks into a hosted job" =>
+    "group mapping leaks into a literal-runs-on job" =>
       runs_on.merge("secrets-scan" => composed),
     "opted path drops the resolved labels" =>
       runs_on.merge("bazel-graph" => composed.sub("toJSON(inputs.heavy_runner_class))", "toJSON('tinyland-nix'))")),
@@ -395,9 +403,9 @@ def main
   errors.concat(check_runs_on(workflow_runs_on(document)))
 
   if errors.empty?
-    checked = SELF_HOSTED_JOBS.length * BASE_SCENARIOS.length
-    puts "runner_group contract passed (#{HOSTED_JOBS.length} hosted jobs unchanged; " \
-         "#{checked} rendered self-hosted runs-on values: default path byte-identical, opted path structured)"
+    checked = EXPRESSION_JOBS.length * BASE_SCENARIOS.length
+    puts "runner_group contract passed (#{LITERAL_JOBS.length} literal runs-on jobs unchanged; " \
+         "#{checked} rendered runner-class runs-on values: default path byte-identical, opted path structured)"
     return 0
   end
 
