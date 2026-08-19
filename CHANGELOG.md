@@ -5,9 +5,15 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-08-19
+
 > **This section releases as `v3.1.0` (MINOR)** per `RELEASING.md`: a new
 > optional input, with the default preserving today's behaviour byte-for-byte.
 > No existing caller changes, and no repo that passes CI today starts failing.
+
+This bump silently upgrades gitleaks 8.21.2 → 8.30.1 for every `spoke-ci.yml`
+consumer (via the `@v2`→`@v3` internal-ref bump below) — spokes with
+`[[allowlists]]` will see them honored for the first time.
 
 ### Added
 
