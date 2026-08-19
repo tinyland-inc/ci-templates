@@ -18,7 +18,16 @@ every directly defined job routes through both:
 - a required GitHub runner group owned by the caller's `-infra` overlay; and
 - a required, reviewed GloriousFlywheel capability label.
 
-The legacy `spoke-ci.yml` and `spoke-lane-env.yml` files remain byte-identical.
+The legacy `spoke-ci.yml` and `spoke-lane-env.yml` files remain
+behaviorally unchanged for every caller that does not opt in, and their bytes
+stay pinned by `SPECS[…][:legacy_sha256]` in
+`scripts/restricted-workflow-contract.rb`. `spoke-ci.yml`'s optional
+`runner_group` input (TIN-3902) is *not* this surface: it adds group routing
+with no trust gate, is default-off (unset renders the pre-TIN-3902 runs-on
+byte-for-byte, proved by `just runner-group-contract-check`), and admits any
+non-generic group the caller names. A private repo that needs the fail-closed,
+reviewed group+capability contract — required inputs, no defaults, fork and
+pre-scheduling trust gate — still uses the restricted variants here.
 The restricted variants additionally close their dependency graph: internal
 actions use exact `@v2.12.1` refs, third-party Actions use full commit SHAs
 (`actions/checkout` is the verified v6.1.0 commit), the cache contract executes

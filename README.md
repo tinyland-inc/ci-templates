@@ -252,6 +252,57 @@ This release admits only the reviewed `tinyland-infra` group and exact Tinyland
 capability values; adding another owner group requires a reviewed source change
 and immutable release, not a caller-selected fallback.
 
+### Owner-scoped runner groups on `spoke-ci.yml` (opt-in `runner_group`)
+
+`spoke-ci.yml` takes an optional `runner_group` input. **Default `""` = today's
+label-only routing**, byte-identical for every non-opted consumer. Set it and
+each self-hosted job routes with GitHub's structured form instead:
+
+```yaml
+jobs:
+  ci:
+    # Pin the exact release that carries `runner_group`: the input does not
+    # exist in v2.14.0 or earlier; it ships in v2.15.0. Bumping the pin is
+    # REQUIRED alongside the input — a caller that adds `runner_group:` while
+    # pinned to an older release fails at workflow start with an unknown input.
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci.yml@v2.15.0
+    with:
+      default_runner_class: tinyland-nix
+      heavy_runner_class: tinyland-nix
+      kvm_runner_class: tinyland-nix
+      runner_group: great-falls-tool-bus-infra   # <- the only new line
+    secrets: inherit
+```
+
+| Job | `runner_group` unset | `runner_group` set |
+|---|---|---|
+| `secrets-scan`, `lanes-load`, `repo-manifest` | literal (today `ubuntu-latest`) | unchanged literal — **never** group-routed |
+| `flywheel-build`, `flywheel-test` | `runner_labels_json` → `matrix.lane.runner_class` → `default_runner_class` | `{ group: <runner_group>, labels: <same value> }` |
+| `bazel-graph` | `heavy_runner_class` | `{ group: <runner_group>, labels: heavy_runner_class }` |
+| `playwright` | `kvm_runner_class` | `{ group: <runner_group>, labels: kvm_runner_class }` |
+
+- **Label resolution is untouched.** The group mapping carries the *same* value
+  the job resolves today, including the string-vs-array shape of
+  `runner_labels_json`. The input adds a group; it never re-picks a label.
+- **The hosted class is on its way out.** The three literal-`runs-on` jobs are
+  GitHub-hosted today; TIN-3914 (no GitHub-hosted runners in the estate) retires
+  that class in a separate ci-templates PR. This input's gate derives the
+  never-group-routed set from "literal `runs-on` today", so it does not assume
+  `ubuntu-latest` survives.
+- **A group narrows, it does not widen.** GitHub schedules onto a runner that is
+  in that group **and** carries the labels. A group whose runners lack the
+  capability label queues forever — which is why this is opt-in per spoke.
+- **Workflow source is not proof.** The org-level group must already exist, have
+  the calling repository in its selection, and serve the capability label. The
+  runs-on linter rejects generic groups (`Default`, `shared*`, GitHub-hosted).
+- **This is routing, not trust.** It does not add the fork/pre-scheduling trust
+  gate; a private repo that needs a fail-closed group+capability contract still
+  uses `spoke-ci-restricted.yml`, where `runner_group` is *required*.
+- YAML cannot express a conditional mapping, so the workflow composes the
+  mapping at runtime via `fromJSON(format(...))`. `just runner-group-contract-check`
+  renders both paths over a scenario grid and fails if the default path ever
+  stops being byte-identical.
+
 ### Cloudflare Pages deploy lane (opt-in)
 
 `spoke-deploy-cloudflare-pages.yml` DRYs the hand-rolled CF-Pages publisher that
