@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.14.0] — 2026-08-18
+
 ### Fixed
 
 - **Rust+Bazel native jobs now own all local Bazel state** — the release-vendored
