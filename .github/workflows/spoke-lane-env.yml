@@ -4,6 +4,13 @@
 # tinyland-inc/site.scaffold docs/patterns/owner-overlay-apply-plane.md).
 # Kept callable, unchanged, only so existing callers don't break — do not
 # point a new spoke at this.
+# TIN-3914: the four formerly GitHub-hosted jobs (check-blahaj-token,
+# lanes-load, dispatch-apply, destroy-lanes) now run on the base capability
+# class `tinyland-nix`, matching the literal `tinyland-dind` /
+# `tinyland-nix-kvm` routing the other two jobs already use. No runner-class
+# input is added: this surface is deprecated and must not grow a new
+# caller-facing contract. A tenant org that still calls it and cannot reach
+# `tinyland-nix` should move to its owner-overlay apply plane.
 name: spoke-lane-env
 on:
   workflow_call:
@@ -61,7 +68,7 @@ jobs:
   # every downstream job's `if:` short-circuits. The workflow shows
   # green with all jobs skipped, NOT a parse-time failure.
   check-blahaj-token:
-    runs-on: ubuntu-latest
+    runs-on: tinyland-nix
     timeout-minutes: 2
     outputs:
       enabled: ${{ steps.probe.outputs.enabled }}
@@ -81,7 +88,7 @@ jobs:
   lanes-load:
     needs: [check-blahaj-token]
     if: needs.check-blahaj-token.outputs.enabled == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tinyland-nix
     outputs:
       lanes_json: ${{ steps.load.outputs.lanes_json }}
       spoke_name: ${{ steps.load.outputs.spoke_name }}
@@ -134,7 +141,7 @@ jobs:
   dispatch-apply:
     if: needs.check-blahaj-token.outputs.enabled == 'true' && github.event.action != 'closed' && !inputs.reap
     needs: [check-blahaj-token, lanes-load, publish-image]
-    runs-on: ubuntu-latest
+    runs-on: tinyland-nix
     steps:
       - uses: actions/checkout@v6
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
@@ -171,7 +178,7 @@ jobs:
   destroy-lanes:
     if: needs.check-blahaj-token.outputs.enabled == 'true' && (github.event.action == 'closed' || inputs.reap)
     needs: [check-blahaj-token, lanes-load]
-    runs-on: ubuntu-latest
+    runs-on: tinyland-nix
     steps:
       - uses: actions/checkout@v6
       - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2

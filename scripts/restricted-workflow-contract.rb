@@ -68,10 +68,22 @@ SPECS = {
   "spoke-ci" => {
     legacy: ".github/workflows/spoke-ci.yml",
     restricted: ".github/workflows/spoke-ci-restricted.yml",
-    # Re-recorded for TIN-3902 (optional `runner_group` input). The default-off
-    # proof this digest pins is unchanged: with runner_group unset every job's
-    # runs-on short-circuits into the byte-identical pre-TIN-3902 arm.
-    legacy_sha256: "656e8c69bf9532f1ea088307b15d22182ae6b5353ca47e852b486380fa9c3235",
+    # Re-recorded for TIN-3914 (no GitHub-hosted runners in the estate).
+    # Previously 656e8c69… (TIN-3902, optional `runner_group` input).
+    #
+    # WHAT THIS DIGEST PROVES, and why moving it is intentional and reviewed:
+    # it pins the LEGACY workflow's bytes so that adding or changing the
+    # restricted variant cannot silently alter the ~190 consumers of the shared
+    # lane. It is a tripwire on the legacy file, not a claim that the legacy
+    # file never changes. TIN-3914 changes the legacy file on purpose: the
+    # secrets-scan, lanes-load, and repo-manifest jobs move off the retired
+    # GitHub-hosted class onto `inputs.default_runner_class`, composed through
+    # the same default-off `runner_group` form the other jobs already use. The
+    # accompanying default-off proof is `just runner-group-contract-check`,
+    # which re-renders every job over the scenario grid; the restricted
+    # variant's own routing is unaffected because `validate_restricted`
+    # normalizes runs-on back to the legacy node before the structural compare.
+    legacy_sha256: "a312785bf7b5fa23aad75c4a79b86cf82f059a0c91bac2acf1827795d0677d49",
     inputs: {
       "runner_group" => "tinyland-infra",
       "nix_runner_label" => "tinyland-nix",
@@ -97,7 +109,13 @@ SPECS = {
   "spoke-lane-env" => {
     legacy: ".github/workflows/spoke-lane-env.yml",
     restricted: ".github/workflows/spoke-lane-env-restricted.yml",
-    legacy_sha256: "8e7e444fc3b5029dd0984a0e8b985f5b62ac7fc13363015c7602b24651517c32",
+    # Re-recorded for TIN-3914. Previously 8e7e444f… . The deprecated legacy
+    # lane's four GitHub-hosted jobs (check-blahaj-token, lanes-load,
+    # dispatch-apply, destroy-lanes) move to the literal base capability class
+    # `tinyland-nix`, matching the literal `tinyland-dind` / `tinyland-nix-kvm`
+    # routing its other two jobs already used. No input surface changes, so the
+    # restricted variant stays a strict subset unchanged.
+    legacy_sha256: "c238ab598b464d864c8e933ff951688833cd8107df3077b346db76b4d71ae470",
     inputs: {
       "runner_group" => "tinyland-infra",
       "nix_runner_label" => "tinyland-nix",

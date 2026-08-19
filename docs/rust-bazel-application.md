@@ -4,9 +4,15 @@
 Rust application whose build, test, and package authority is Bazel. It was
 introduced for the Prompt Pulse Rust productization canary, but it contains no
 Prompt Pulse repository names, endpoints, product-specific/native-lane runner
-labels, or release claims. A fixed GitHub-hosted admission job runs no caller
-code and receives no secrets; private native runners are assigned only after it
-accepts a private same-repository event, route, matrix, and finite targets.
+labels, or release claims. A fixed admission job runs no caller code and
+receives no secrets; private native runners are assigned only after it accepts a
+private same-repository event, route, matrix, and finite targets. Since TIN-3914
+(`v3.0.0`) that admission job runs on the estate base capability class
+`tinyland-nix` rather than a GitHub-hosted runner. It deliberately stays a
+**bare label**, not a `{group, labels}` mapping: its job is to validate
+`runner_group` before any group-routed lane is scheduled, and routing the gate
+through the value it validates would make an inadmissible group queue forever
+instead of failing loudly.
 
 ## Contract
 
@@ -100,10 +106,11 @@ matrix, cross-built release parity, or any GloriousFlywheel remote-execution
 support.
 
 Public repositories, `pull_request_target`, and fork pull requests fail in the
-hosted admission job; they never receive a private runner, caller checkout, or
-cache credential. A private same-repository pull request may use the native
-lanes. A public/open-source product needs a separate fork-safe hosted build; it
-must not route public events into this native private-runner workflow.
+admission job; they never receive a private runner, caller checkout, or cache
+credential. A private same-repository pull request may use the native lanes. A
+public/open-source product needs a separate fork-safe build design; it must not
+route public events into this native private-runner workflow, and since TIN-3914
+that separate design cannot be a GitHub-hosted lane in this repository.
 
 ## GloriousFlywheel cache policy
 

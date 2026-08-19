@@ -574,7 +574,11 @@ def check_rust_bazel_application_contract() -> int:
             ok = False
 
     required_workflow_snippets = [
-        "runs-on: ubuntu-24.04",
+        # TIN-3914: the admission job runs on the estate base capability
+        # class, never a GitHub-hosted runner. It stays a bare label (not a
+        # group mapping) because it validates runner_group before any
+        # group-routed lane is scheduled.
+        "runs-on: tinyland-nix",
         "repository_private: ${{ github.event.repository.private }}",
         "head_repository: ${{ github.event.pull_request.head.repo.full_name || '' }}",
         "timeout_minutes: ${{ inputs.timeout_minutes }}",
@@ -747,9 +751,12 @@ def check_rust_bazel_application_contract() -> int:
     forbidden_workflow_snippets = [
         "GF_BAZEL_REMOTE_HEADER",
         "GF_BAZEL_CREDENTIAL_HELPER",
-        "ubuntu-latest",
-        "macos-latest",
-        "windows-latest",
+        # TIN-3914: reject the whole GitHub-hosted label families, not the three
+        # `-latest` aliases that happened to be in use. `ubuntu-24.04` slipped
+        # past the old list for exactly that reason.
+        "ubuntu-",
+        "macos-",
+        "windows-",
         "cargo build",
         "cargo test",
         "//...",

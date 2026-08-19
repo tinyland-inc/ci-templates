@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -24,6 +24,26 @@ lint-runs-on-selftest:
 # Guard ci-templates' OWN workflow runs-on labels (dogfood the action).
 lint-runs-on-check:
     cd {{ root }} && ruby scripts/lint-runs-on.rb --root {{ root }}
+
+# TIN-3914 fixture: no GitHub-hosted runner label survives on any surface that
+# can schedule a job (.github/**/*.yml|yaml — workflows and composite actions),
+# outside comments. `lint-runs-on.rb` verdicts `runs-on` values structurally;
+# this is the blunt textual companion that also catches a hosted label hiding in
+# an input default, a fromJSON fallback string, or an env value. Helper scripts
+# under .github/actions/*/ carry no `runs-on` and are deliberately out of scope:
+# rust-bazel-contract/contract.py's hosted literals are negative-oracle fixtures
+# asserting that hosted labels are REJECTED, and deleting them would weaken the
+# proof rather than strengthen it.
+no-hosted-runners-check:
+    cd {{ root }} && hits=$(grep -rnE '(ubuntu|windows|macos)-[a-z0-9]' \
+        --include='*.yml' --include='*.yaml' .github/ \
+      | grep -vE ':[0-9]+:[[:space:]]*#' || true); \
+      if [ -n "$hits" ]; then \
+        echo "$hits" >&2; \
+        echo "GitHub-hosted runner label survives in a schedulable surface (TIN-3914)" >&2; \
+        exit 1; \
+      fi
+    @echo "no GitHub-hosted runner labels in schedulable .github/ surfaces (TIN-3914)"
 
 # Parse all vendored JSON schemas.
 json-parse:

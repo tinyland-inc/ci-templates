@@ -1,3 +1,9 @@
+# TIN-3914: this workflow no longer schedules on GitHub-hosted runners.
+# All three jobs run on the estate base capability class `tinyland-nix`;
+# `actions/setup-node` + `pnpm/action-setup` provide their own toolchains
+# there, so no Nix devshell wiring is required. This template has no
+# runner-class input and (as of the 2026-08-19 sweep) no caller, so the
+# label is a literal rather than a new caller-facing contract.
 name: NPM Publish
 
 on:
@@ -31,7 +37,7 @@ permissions:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: tinyland-nix
     strategy:
       fail-fast: false
       matrix:
@@ -75,7 +81,7 @@ jobs:
   publish-gpr:
     needs: build-and-test
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: tinyland-nix
     permissions:
       contents: read
       packages: write
@@ -107,7 +113,7 @@ jobs:
   publish-npm:
     needs: build-and-test
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: tinyland-nix
     permissions:
       contents: read
       id-token: write

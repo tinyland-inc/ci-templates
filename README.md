@@ -227,7 +227,7 @@ Set `attic-public-read: "true"` on any of the three to opt in. What flips:
 | Workflow | Purpose |
 |---|---|
 | `js-bazel-package.yml` | Pre-existing: JS/TS packages built by Bazel and published to GitHub Packages, with npmjs required/optional/disabled by package policy. Supports an **opt-in, default-off `cache_backed`** shared-cache Bazel validation lane (cache-first; see below). |
-| `npm-publish.yml` | Pre-existing: hosted-only Node package build + publish, callable only (no local tag/manual trigger). |
+| `npm-publish.yml` | Pre-existing: Node package build + publish, callable only (no local tag/manual trigger). Ran GitHub-hosted until TIN-3914 moved all three jobs to `tinyland-nix`. |
 | **`rust-bazel-application.yml`** | Opt-in/default-off native Darwin/Linux Rust application validation with Bazel-only rustfmt, clippy, build, unit, integration, and package targets; cache reads are runtime-attached and writes require an explicitly enabled protected push ref. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
 | **`spoke-lane-env.yml`** *(deprecated)* | Retired-era Blahaj-dispatch PR-env workflow, kept callable only. The PR-env producer is the product's owner-overlay repository — see site.scaffold `docs/patterns/owner-overlay-apply-plane.md` and the merged scaffold #119 recut. Do not point a new spoke at it. |
@@ -252,6 +252,59 @@ This release admits only the reviewed `tinyland-infra` group and exact Tinyland
 capability values; adding another owner group requires a reviewed source change
 and immutable release, not a caller-selected fallback.
 
+### No GitHub-hosted runners (TIN-3914)
+
+Operator ruling, 2026-08-19: *"we should NEVER have gh ubuntu runners in place
+ever, we ONLY use GF infra cache fronted runners."* As of `v3.0.0` every
+`runs-on` in this repository names a self-hosted org capability-class label.
+There is no opt-out input — an estate-wide prohibition with a "keep using
+hosted" knob would not be a prohibition — which is why this is a MAJOR release
+rather than a default-off addition (`AGENTS.md` rule 2). Consumers are
+unaffected until they bump their pin; the full mechanical migration, the
+capacity numbers, and the explicit MAJOR-vs-MINOR argument are in
+[`docs/migration-v2-to-v3.md`](docs/migration-v2-to-v3.md).
+
+What moved:
+
+| Workflow | Job(s) | Before | After |
+|---|---|---|---|
+| `spoke-ci.yml` | `secrets-scan`, `lanes-load`, `repo-manifest` | `ubuntu-latest` | `default_runner_class`, group-routed on opt-in |
+| `spoke-lane-env.yml` *(deprecated)* | `check-blahaj-token`, `lanes-load`, `dispatch-apply`, `destroy-lanes` | `ubuntu-latest` | `tinyland-nix` |
+| `js-bazel-package.yml` | `resolve-runner` | `ubuntu-latest` | `tinyland-nix` |
+| `npm-publish.yml` | `build-and-test`, `publish-gpr`, `publish-npm` | `ubuntu-latest` | `tinyland-nix` |
+| `rust-bazel-application.yml` | `trust-gate` | `ubuntu-24.04` | `tinyland-nix` |
+| `spoke-deploy-cloudflare-pages.yml` | `build` | `ubuntu-latest` | `tinyland-nix` |
+| `spoke-public-preview.yml` | `dispatch` | `ubuntu-latest` | `tinyland-nix` |
+
+Two `js-bazel-package.yml` input **values** are retired and now rejected with a
+migration error rather than silently re-routed: `runner_mode: hosted` and
+`publish_mode: hosted_exception`. Retiring the publish exception has one
+consequence worth reading before you bump: publishes are now always self-hosted,
+and the pre-existing provenance guard only requests `npm publish --provenance`
+off self-hosted runners, so **npm provenance is no longer requested** and
+`npm_publish_provenance` is inert (the job says so with a `::warning::`).
+
+`scripts/lint-runs-on.rb` enforces the rule at author time. A GitHub-hosted
+label is a **FAIL**, not a warning, wherever it can be read statically: a bare
+scalar, any element of a label array, a literal arm of a `${{ … }}` ternary, a
+`fromJSON(vars.X || '[…]')` fallback array, a resolved `matrix` value, and
+either arm of a static or runtime-composed `{group, labels}` mapping. The
+previously-blessed "graceful degradation to hosted when cluster labels are not
+reachable" fromJSON shape is now a failure — there is nothing left to degrade
+to. Third-party managed fleets (`blacksmith-*`, `depot-*`, …) are neither
+GitHub's infrastructure nor GF cache-fronted and were not named by the ruling:
+they WARN, so they surface for a deliberate decision instead of passing
+silently. `just lint-runs-on-selftest` pins the whole grammar to a 70-case
+oracle; `just lint-runs-on-check` dogfoods this repo at 0 FAIL; and
+`just no-hosted-runners-check` is the blunt textual backstop that also catches a
+hosted label hiding in an input default, a `fromJSON` fallback string, or an env
+value on any schedulable surface. All three are in `just check`.
+
+`.github/actionlint.yaml` declares the six capability labels so actionlint stops
+reporting them as unknown. It is a declaration, not a suppression: a typo'd or
+repo-shaped label still reports, and `scripts/lint-runs-on.rb` remains the
+authority on which labels are admissible.
+
 ### Owner-scoped runner groups on `spoke-ci.yml` (opt-in `runner_group`)
 
 `spoke-ci.yml` takes an optional `runner_group` input. **Default `""` = today's
@@ -262,10 +315,12 @@ each self-hosted job routes with GitHub's structured form instead:
 jobs:
   ci:
     # Pin the exact release that carries `runner_group`: the input does not
-    # exist in v2.14.0 or earlier; it ships in v2.15.0. Bumping the pin is
+    # exist in v2.14.0 or earlier; it ships in v3.0.0. Bumping the pin is
     # REQUIRED alongside the input — a caller that adds `runner_group:` while
     # pinned to an older release fails at workflow start with an unknown input.
-    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci.yml@v2.15.0
+    # v3.0.0 also retires GitHub-hosted runners; read docs/migration-v2-to-v3.md
+    # before bumping.
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci.yml@v3.0.0
     with:
       default_runner_class: tinyland-nix
       heavy_runner_class: tinyland-nix
@@ -276,7 +331,7 @@ jobs:
 
 | Job | `runner_group` unset | `runner_group` set |
 |---|---|---|
-| `secrets-scan`, `lanes-load`, `repo-manifest` | literal (today `ubuntu-latest`) | unchanged literal — **never** group-routed |
+| `secrets-scan`, `lanes-load`, `repo-manifest` | `default_runner_class` | `{ group: <runner_group>, labels: default_runner_class }` |
 | `flywheel-build`, `flywheel-test` | `runner_labels_json` → `matrix.lane.runner_class` → `default_runner_class` | `{ group: <runner_group>, labels: <same value> }` |
 | `bazel-graph` | `heavy_runner_class` | `{ group: <runner_group>, labels: heavy_runner_class }` |
 | `playwright` | `kvm_runner_class` | `{ group: <runner_group>, labels: kvm_runner_class }` |
@@ -284,17 +339,20 @@ jobs:
 - **Label resolution is untouched.** The group mapping carries the *same* value
   the job resolves today, including the string-vs-array shape of
   `runner_labels_json`. The input adds a group; it never re-picks a label.
-- **The hosted class is on its way out.** The three literal-`runs-on` jobs are
-  GitHub-hosted today; TIN-3914 (no GitHub-hosted runners in the estate) retires
-  that class in a separate ci-templates PR. This input's gate derives the
-  never-group-routed set from "literal `runs-on` today", so it does not assume
-  `ubuntu-latest` survives.
+- **The hosted class is gone, and the group now covers everything.** TIN-3914
+  moved `secrets-scan`, `lanes-load`, and `repo-manifest` off `ubuntu-latest`
+  onto `default_runner_class`, so all seven jobs are group-routed on opt-in.
+  The gate still *derives* the never-group-routed set from "literal `runs-on`
+  in the pinned baseline" rather than naming jobs, so that class is currently
+  empty and a future literal-`runs-on` job lands on an already-tested rule; the
+  self-test keeps that branch executable against a synthetic baseline.
 - **A group narrows, it does not widen.** GitHub schedules onto a runner that is
   in that group **and** carries the labels. A group whose runners lack the
   capability label queues forever — which is why this is opt-in per spoke.
 - **Workflow source is not proof.** The org-level group must already exist, have
   the calling repository in its selection, and serve the capability label. The
-  runs-on linter rejects generic groups (`Default`, `shared*`, GitHub-hosted).
+  runs-on linter rejects generic groups (`Default`, `shared*`, GitHub-hosted)
+  and any GitHub-hosted label in either arm of the mapping.
 - **This is routing, not trust.** It does not add the fork/pre-scheduling trust
   gate; a private repo that needs a fail-closed group+capability contract still
   uses `spoke-ci-restricted.yml`, where `runner_group` is *required*.

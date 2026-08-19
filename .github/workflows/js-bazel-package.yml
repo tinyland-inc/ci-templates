@@ -5,7 +5,11 @@ on:
     outputs: {}
     inputs:
       runner_mode:
-        description: "Runner policy for validate and same-runner publish jobs: compat, hosted, shared, or repo_owned"
+        description: >-
+          Runner policy for validate and publish jobs: compat, shared, or
+          repo_owned. TIN-3914 retired `hosted`: the estate has no
+          GitHub-hosted runners, so every mode resolves to a self-hosted
+          capability class and `hosted` is rejected with a migration error.
         type: string
         default: "compat"
       shared_runner_labels_json:
@@ -13,15 +17,25 @@ on:
         type: string
         default: '["tinyland-docker"]'
       runner_labels_json:
-        description: "JSON array of capability-class runner labels used by compat mode and required when runner_mode=repo_owned"
+        description: >-
+          JSON array of capability-class runner labels used by compat mode
+          and required when runner_mode=repo_owned. Empty (the default)
+          means "unset" and resolves to the estate base class
+          ["tinyland-nix"]. GitHub-hosted labels are rejected (TIN-3914);
+          the pre-TIN-3914 default was the GitHub-hosted Ubuntu label.
         type: string
-        default: '["ubuntu-latest"]'
+        default: ""
       workspace_mode:
         description: "Workspace policy for validation: isolated or persistent_compat"
         type: string
         default: "persistent_compat"
       publish_mode:
-        description: "Publish policy: same_runner or hosted_exception"
+        description: >-
+          Publish policy. `same_runner` is the only supported value:
+          TIN-3914 retired `hosted_exception`, which forced publish jobs
+          onto a GitHub-hosted runner. Passing it is a hard error carrying a
+          migration message, rather than a silent re-route of a token-bearing
+          job.
         type: string
         default: "same_runner"
       node_versions:
@@ -169,7 +183,11 @@ on:
 
 jobs:
   resolve-runner:
-    runs-on: ubuntu-latest
+    # TIN-3914: the label-resolution job itself runs on the estate base
+    # capability class. It is the job every other job reads its runs-on from,
+    # so leaving it hosted would have kept a GitHub-hosted runner on the
+    # critical path of every single invocation.
+    runs-on: tinyland-nix
     timeout-minutes: 5
     outputs:
       validate_runner_labels_json: ${{ steps.resolve.outputs.validate_runner_labels_json }}
@@ -194,10 +212,20 @@ jobs:
           publish_mode = os.environ.get("PUBLISH_MODE") or "same_runner"
           shared_runner_labels_raw = os.environ.get("SHARED_RUNNER_LABELS_JSON")
 
-          if runner_mode not in {"compat", "hosted", "shared", "repo_owned"}:
+          if runner_mode == "hosted":
+              raise SystemExit(
+                  "runner_mode=hosted was retired by TIN-3914 (the estate has no GitHub-hosted runners). Use compat/shared/repo_owned with a self-hosted capability class; see docs/migration-v2-to-v3.md"
+              )
+
+          if runner_mode not in {"compat", "shared", "repo_owned"}:
               raise SystemExit(f"Unsupported runner_mode: {runner_mode}")
 
-          if publish_mode not in {"same_runner", "hosted_exception"}:
+          if publish_mode == "hosted_exception":
+              raise SystemExit(
+                  "publish_mode=hosted_exception was retired by TIN-3914 (the estate has no GitHub-hosted runners). Drop the input: publish now runs on the same validated self-hosted capability class. Note that npm provenance is not requested on self-hosted runners; see docs/migration-v2-to-v3.md"
+              )
+
+          if publish_mode != "same_runner":
               raise SystemExit(f"Unsupported publish_mode: {publish_mode}")
 
           if runner_mode == "shared" and shared_runner_labels_raw is not None and not shared_runner_labels_raw.strip():
@@ -225,6 +253,19 @@ jobs:
           org_capability_label = re.compile(
               r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$"
           )
+          # TIN-3914: fail closed on a GitHub-hosted label in EVERY mode, not
+          # just the capability-required ones. There is no hosted lane left to
+          # degrade to, so a hosted label is a routing error, never a fallback.
+          github_hosted_label = re.compile(r"^(ubuntu|macos|windows)-", re.IGNORECASE)
+
+          def reject_hosted(labels: list[str], name: str) -> None:
+              hosted = [label for label in labels if github_hosted_label.match(label)]
+              if hosted:
+                  raise SystemExit(
+                      f"{name} contains GitHub-hosted runner label(s) "
+                      f"{hosted}; the estate runs only on GF cache-fronted "
+                      "self-hosted runners (TIN-3914)"
+                  )
 
           def require_org_capability(labels: list[str], name: str) -> None:
               if not any(org_capability_label.fullmatch(label) for label in labels):
@@ -233,31 +274,29 @@ jobs:
                       "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind)"
                   )
 
-          runner_labels = parse_labels("RUNNER_LABELS_JSON", '["ubuntu-latest"]')
+          runner_labels = parse_labels("RUNNER_LABELS_JSON", '["tinyland-nix"]')
           shared_runner_labels = parse_labels(
               "SHARED_RUNNER_LABELS_JSON",
               '["tinyland-docker"]',
           )
 
-          if runner_mode == "hosted":
-              validate_runner_labels = ["ubuntu-latest"]
-          elif runner_mode == "shared":
+          if runner_mode == "shared":
               validate_runner_labels = shared_runner_labels
           else:
               validate_runner_labels = runner_labels
 
-          if runner_mode == "repo_owned" and validate_runner_labels == ["ubuntu-latest"]:
+          if runner_mode == "repo_owned" and not (os.environ.get("RUNNER_LABELS_JSON") or "").strip():
               raise SystemExit("runner_mode=repo_owned requires explicit runner_labels_json")
 
+          reject_hosted(validate_runner_labels, "runner_labels_json")
           if runner_mode == "repo_owned":
               require_org_capability(validate_runner_labels, "runner_labels_json")
           elif runner_mode == "shared":
               require_org_capability(validate_runner_labels, "shared_runner_labels_json")
 
-          if publish_mode == "hosted_exception":
-              publish_runner_labels = ["ubuntu-latest"]
-          else:
-              publish_runner_labels = validate_runner_labels
+          # publish_mode is same_runner by construction above: publish runs on
+          # the validated self-hosted class, never a hosted exception lane.
+          publish_runner_labels = validate_runner_labels
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(
@@ -297,7 +336,11 @@ jobs:
         run: |
           set -euo pipefail
           case "$RUNNER_MODE" in
-            compat|hosted|shared|repo_owned) ;;
+            compat|shared|repo_owned) ;;
+            hosted)
+              echo "runner_mode=hosted was retired by TIN-3914 (the estate has no GitHub-hosted runners). Use compat/shared/repo_owned with a self-hosted capability class; see docs/migration-v2-to-v3.md" >&2
+              exit 1
+              ;;
             *)
               echo "Unsupported runner_mode: $RUNNER_MODE" >&2
               exit 1
@@ -311,7 +354,11 @@ jobs:
               ;;
           esac
           case "$PUBLISH_MODE" in
-            same_runner|hosted_exception) ;;
+            same_runner) ;;
+            hosted_exception)
+              echo "publish_mode=hosted_exception was retired by TIN-3914 (the estate has no GitHub-hosted runners). Drop the input: publish now runs on the same validated self-hosted capability class. Note that npm provenance is not requested on self-hosted runners; see docs/migration-v2-to-v3.md" >&2
+              exit 1
+              ;;
             *)
               echo "Unsupported publish_mode: $PUBLISH_MODE" >&2
               exit 1
@@ -338,8 +385,13 @@ jobs:
             echo "bazel_fetch_retry_attempts must be between 1 and 5" >&2
             exit 1
           fi
-          if [ "$RUNNER_MODE" = "repo_owned" ] && [ "$RUNNER_LABELS_JSON" = '["ubuntu-latest"]' ]; then
+          if [ "$RUNNER_MODE" = "repo_owned" ] && [ -z "${RUNNER_LABELS_JSON//[[:space:]]/}" ]; then
             echo "runner_mode=repo_owned requires explicit runner_labels_json" >&2
+            exit 1
+          fi
+          if printf '%s\n%s\n' "$RUNNER_LABELS_JSON" "$SHARED_RUNNER_LABELS_JSON" \
+            | grep -Eqi '"[[:space:]]*(ubuntu|macos|windows)-'; then
+            echo "GitHub-hosted runner labels are forbidden estate-wide (TIN-3914); pass a self-hosted capability class" >&2
             exit 1
           fi
           if [ "$RUNNER_MODE" = "repo_owned" ] || [ "$RUNNER_MODE" = "shared" ]; then
@@ -871,7 +923,11 @@ jobs:
         run: |
           set -euo pipefail
           case "${{ inputs.publish_mode }}" in
-            same_runner|hosted_exception) ;;
+            same_runner) ;;
+            hosted_exception)
+              echo "publish_mode=hosted_exception was retired by TIN-3914 (the estate has no GitHub-hosted runners). Drop the input: publish now runs on the same validated self-hosted capability class. Note that npm provenance is not requested on self-hosted runners; see docs/migration-v2-to-v3.md" >&2
+              exit 1
+              ;;
             *)
               echo "Unsupported publish_mode: ${{ inputs.publish_mode }}" >&2
               exit 1
@@ -954,6 +1010,11 @@ jobs:
           PUBLISH_ARGS=("$PACKAGE_PATH" --ignore-scripts --access "$NPM_ACCESS")
           if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
             PUBLISH_ARGS+=(--provenance)
+          elif [ "${{ inputs.npm_publish_provenance }}" = "true" ]; then
+            # TIN-3914 retired the hosted publish exception, so this job always
+            # runs self-hosted and npm provenance is never requested. Say so
+            # out loud rather than dropping a supply-chain claim silently.
+            echo "::warning::npm_publish_provenance=true but this publish runs on a self-hosted runner; npm provenance is NOT requested (TIN-3914 retired publish_mode=hosted_exception). See docs/migration-v2-to-v3.md."
           fi
           set +e
           npm publish "${PUBLISH_ARGS[@]}"
@@ -980,7 +1041,11 @@ jobs:
         run: |
           set -euo pipefail
           case "${{ inputs.publish_mode }}" in
-            same_runner|hosted_exception) ;;
+            same_runner) ;;
+            hosted_exception)
+              echo "publish_mode=hosted_exception was retired by TIN-3914 (the estate has no GitHub-hosted runners). Drop the input: publish now runs on the same validated self-hosted capability class. Note that npm provenance is not requested on self-hosted runners; see docs/migration-v2-to-v3.md" >&2
+              exit 1
+              ;;
             *)
               echo "Unsupported publish_mode: ${{ inputs.publish_mode }}" >&2
               exit 1
