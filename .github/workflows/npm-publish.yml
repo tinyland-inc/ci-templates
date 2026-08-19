@@ -138,6 +138,24 @@ jobs:
           fi
           pnpm build
 
-      - run: pnpm publish --no-git-checks --provenance
+      # TIN-3914 moved this job to a self-hosted runner. npm validates
+      # provenance server-side by comparing the Runner Environment extension in
+      # the Fulcio signing certificate against an allow-list that does not
+      # include `self-hosted` — an OIDC token is obtainable there, the
+      # attestation is still rejected. So requesting provenance off a
+      # github-hosted runner makes the publish FAIL, not merely lose a claim.
+      # Fails closed: only an explicit `github-hosted` environment opts in, so
+      # an empty or unexpected value takes the no-provenance path.
+      - name: Publish to npmjs
+        shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
+            pnpm publish --no-git-checks --provenance
+          else
+            echo "::warning::npm provenance is NOT requested: this publish runs on a self-hosted runner and npm rejects a provenance attestation whose certificate Runner Environment is not github-hosted (TIN-3914). See docs/migration-v2-to-v3.md."
+            pnpm publish --no-git-checks
+          fi

@@ -81,8 +81,15 @@ interface. A tenant org that adopts this workflow and cannot reach
 `actions/setup-node` and `pnpm/action-setup` provision their own toolchains on
 the self-hosted class, so no Nix devshell wiring was added.
 
-Note that `publish-npm`'s provenance request now depends on the runner
-environment the same way `js-bazel-package.yml`'s does; see
+`publish-npm` requested `npm publish --provenance` unconditionally. That is not
+merely a lost attestation on a self-hosted runner — npm validates provenance
+server-side by comparing the Runner Environment extension in the signing
+certificate against an allow-list that excludes `self-hosted`, so the registry
+**rejects the publish**. The step is now gated on
+`runner.environment == 'github-hosted'` (fail-closed: an empty or unexpected
+value takes the no-provenance path) and emits a `::warning::` naming what was
+skipped, matching `js-bazel-package.yml`. Since this workflow now always runs
+self-hosted, provenance is in practice never requested. See
 [`migration-v2-to-v3.md`](migration-v2-to-v3.md).
 
 The ci-templates repository does not invoke this workflow when an immutable

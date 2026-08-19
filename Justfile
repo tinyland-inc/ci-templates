@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -25,25 +25,32 @@ lint-runs-on-selftest:
 lint-runs-on-check:
     cd {{ root }} && ruby scripts/lint-runs-on.rb --root {{ root }}
 
-# TIN-3914 fixture: no GitHub-hosted runner label survives on any surface that
-# can schedule a job (.github/**/*.yml|yaml — workflows and composite actions),
-# outside comments. `lint-runs-on.rb` verdicts `runs-on` values structurally;
-# this is the blunt textual companion that also catches a hosted label hiding in
-# an input default, a fromJSON fallback string, or an env value. Helper scripts
-# under .github/actions/*/ carry no `runs-on` and are deliberately out of scope:
-# rust-bazel-contract/contract.py's hosted literals are negative-oracle fixtures
-# asserting that hosted labels are REJECTED, and deleting them would weaken the
-# proof rather than strengthen it.
+# TIN-3914 backstop: no GitHub-hosted runner label survives on ANY surface that
+# can carry one into a scheduler — workflow/action YAML, the vendored JSON
+# schemas that validate CONSUMER lanes.json, this repo's manifest, and the
+# bazelrc fragments. `lint-runs-on.rb` verdicts `runs-on` values structurally;
+# this catches a label hiding in an input default, a fromJSON fallback string,
+# an env value, or a schema enum. Label-aware and case-insensitive: the grep
+# this replaced failed `blacksmith-4vcpu-ubuntu-2204` while passing
+# `namespace-profile-default` (same third-party fleet, opposite verdicts, purely
+# because one embeds `ubuntu-2`) and let `Ubuntu-Latest` through entirely.
 no-hosted-runners-check:
-    cd {{ root }} && hits=$(grep -rnE '(ubuntu|windows|macos)-[a-z0-9]' \
-        --include='*.yml' --include='*.yaml' .github/ \
-      | grep -vE ':[0-9]+:[[:space:]]*#' || true); \
-      if [ -n "$hits" ]; then \
-        echo "$hits" >&2; \
-        echo "GitHub-hosted runner label survives in a schedulable surface (TIN-3914)" >&2; \
-        exit 1; \
-      fi
-    @echo "no GitHub-hosted runner labels in schedulable .github/ surfaces (TIN-3914)"
+    cd {{ root }} && ruby scripts/no-hosted-runners.rb --root {{ root }}
+
+# Prove the backstop's classifier on the exact cases that broke its predecessor:
+# mixed case, both third-party fleets, schema consts, and comment-only prose.
+no-hosted-runners-selftest:
+    cd {{ root }} && ruby scripts/no-hosted-runners.rb --self-test
+
+# TIN-3914 (semantic, not textual): prove no GitHub-hosted label is even
+# REPRESENTABLE as a lanes.json runnerClass. That value is consumer data which
+# lanes-load feeds into spoke-ci's `matrix.lane.runner_class`, i.e. straight
+# into runs-on, so a schema that sanctions one is a hosted path no
+# workflow-text linter can see. Executes every accept-arm against hostile and
+# legitimate label sets, so a future arm that re-opens the hole in a new
+# spelling fails even if it never writes a hosted label down.
+lanes-schema-runner-class-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py lanes-schema-runner-class
 
 # Parse all vendored JSON schemas.
 json-parse:
@@ -85,9 +92,11 @@ restricted-workflow-contract-check:
     cd {{ root }} && ruby scripts/restricted-workflow-contract.rb
 
 # Prove spoke-ci's optional runner_group input (TIN-3902) is default-off: with
-# it unset every rendered runs-on is byte-for-byte the pre-TIN-3902 value; with
-# it set the four self-hosted jobs render GitHub's {group, labels} mapping with
-# the same labels, and the ubuntu-latest jobs never do.
+# it unset every rendered runs-on is byte-for-byte the pinned label-only
+# baseline; with it set all seven jobs render GitHub's {group, labels} mapping
+# with the same labels they resolve today. TIN-3914 retired the hosted-job
+# class, so the never-group-routed literal class is now empty and its rule is
+# kept executable by a synthetic-baseline oracle in the self-test.
 runner-group-contract-check:
     cd {{ root }} && ruby scripts/runner-group-contract.rb
 

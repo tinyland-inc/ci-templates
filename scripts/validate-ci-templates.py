@@ -840,6 +840,134 @@ def check_rust_bazel_application_contract() -> int:
     return 0
 
 
+# TIN-3914. The lanes schema validates CONSUMER data, and `lanes-load` feeds
+# `runnerClass` into spoke-ci's `matrix.lane.runner_class`, i.e. straight into
+# `runs-on`. Until v3.0.0 the schema carried an explicit `{"const":
+# "ubuntu-latest"}` arm, so a consumer could route a build job onto GitHub's
+# fleet with this repo's own schema approving it — and none of the
+# workflow-facing gates could see it: `lint-runs-on.rb` reads workflow text,
+# and the textual backstop only reads files, not what a regex ADMITS.
+#
+# This check is semantic, not textual: it asserts no GitHub-hosted label is
+# REPRESENTABLE as a runnerClass, by executing every accept-arm against hostile
+# and legitimate label sets. A future arm that re-opens the hole in some new
+# spelling fails here even if it never writes a hosted label down.
+HOSTED_LABEL_RE = re.compile(r"^(ubuntu|macos|windows)-", re.IGNORECASE)
+
+HOSTILE_RUNNER_CLASSES = (
+    "ubuntu-latest",
+    "Ubuntu-Latest",
+    "ubuntu-24.04",
+    "ubuntu-latest-4-cores",
+    "ubuntu-22.04-arm",
+    "macos-15",
+    "MacOS-Latest",
+    "windows-2022",
+    "windows-11-arm",
+)
+
+LEGITIMATE_RUNNER_CLASSES = (
+    "tinyland-nix",
+    "tinyland-nix-heavy",
+    "tinyland-nix-kvm",
+    "tinyland-docker",
+    "tinyland-dind",
+    "great-falls-tool-bus-nix",
+)
+
+
+def _collect_accept_arms(node: object, literals: list, patterns: list, open_strings: list) -> None:
+    if not isinstance(node, dict):
+        return
+    if "const" in node:
+        literals.append(node["const"])
+    if "enum" in node:
+        literals.extend(node["enum"])
+    if "pattern" in node:
+        patterns.append(node["pattern"])
+    elif node.get("type") == "string" and "const" not in node and "enum" not in node:
+        # A bare string arm accepts anything, hosted labels included.
+        open_strings.append(node)
+    for combinator in ("anyOf", "oneOf", "allOf"):
+        for child in node.get(combinator, []):
+            _collect_accept_arms(child, literals, patterns, open_strings)
+
+
+def check_lanes_schema_runner_class() -> int:
+    schema_path = ROOT / "schemas/lanes.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    rel = schema_path.relative_to(ROOT)
+    node = schema.get("$defs", {}).get("runnerClass")
+    ok = True
+
+    if not isinstance(node, dict):
+        print(f"{rel}: $defs.runnerClass is missing", file=sys.stderr)
+        return 1
+
+    literals: list = []
+    patterns: list = []
+    open_strings: list = []
+    _collect_accept_arms(node, literals, patterns, open_strings)
+
+    if open_strings:
+        print(
+            f"{rel}: runnerClass has an unconstrained string arm; it would admit any runner label",
+            file=sys.stderr,
+        )
+        ok = False
+    if not literals and not patterns:
+        print(f"{rel}: runnerClass constrains nothing", file=sys.stderr)
+        ok = False
+
+    for literal in literals:
+        if HOSTED_LABEL_RE.match(str(literal)):
+            print(
+                f"{rel}: runnerClass sanctions GitHub-hosted label {literal!r}; "
+                "consumer lanes.json feeds this into spoke-ci's runs-on (TIN-3914)",
+                file=sys.stderr,
+            )
+            ok = False
+
+    compiled = []
+    for pattern in patterns:
+        try:
+            compiled.append((pattern, re.compile(pattern)))
+        except re.error as exc:
+            print(f"{rel}: runnerClass pattern {pattern!r} does not compile: {exc}", file=sys.stderr)
+            ok = False
+    for pattern, regex in compiled:
+        for label in HOSTILE_RUNNER_CLASSES:
+            if regex.search(label):
+                print(
+                    f"{rel}: runnerClass pattern {pattern!r} admits GitHub-hosted label {label!r} "
+                    "(TIN-3914)",
+                    file=sys.stderr,
+                )
+                ok = False
+
+    # Guard the other direction too: a pattern tightened until it rejects the
+    # capability classes would "pass" this check while breaking every consumer.
+    for label in LEGITIMATE_RUNNER_CLASSES:
+        admitted = label in [str(literal) for literal in literals] or any(
+            regex.search(label) for _pattern, regex in compiled
+        )
+        if not admitted:
+            print(
+                f"{rel}: runnerClass no longer admits capability class {label!r}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    if not ok:
+        return 1
+    print(
+        "lanes schema runnerClass admits capability classes only "
+        f"({len(HOSTILE_RUNNER_CLASSES)} hostile labels rejected, "
+        f"{len(LEGITIMATE_RUNNER_CLASSES)} capability classes accepted)"
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -851,6 +979,7 @@ def main() -> int:
             "flywheel-reapi-proof-contract",
             "cache-backed-optin-contract",
             "rust-bazel-application-contract",
+            "lanes-schema-runner-class",
         ],
     )
     args = parser.parse_args()
@@ -865,6 +994,8 @@ def main() -> int:
         return check_cache_backed_optin_contract()
     if args.check == "rust-bazel-application-contract":
         return check_rust_bazel_application_contract()
+    if args.check == "lanes-schema-runner-class":
+        return check_lanes_schema_runner_class()
     return check_internal_refs()
 
 

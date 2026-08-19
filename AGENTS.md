@@ -31,10 +31,15 @@ a fleet-wide change.
    for every consumer and took a MAJOR bump instead of a gate.
 3. **No GitHub-hosted runners, ever.** Operator ruling, 2026-08-19: the estate
    runs ONLY on GF cache-fronted self-hosted runners. Every `runs-on` names an
-   org capability class; `just lint-runs-on-check` FAILs a GitHub-hosted label
-   wherever it can be read statically and `just no-hosted-runners-check` is the
-   textual backstop. There is no opt-out input, and reintroducing one is not a
-   local decision. See `docs/migration-v2-to-v3.md`.
+   org capability class. Three gates, deliberately reading different things:
+   `just lint-runs-on-check` verdicts `runs-on` values structurally,
+   `just no-hosted-runners-check` scans every schedulable surface textually
+   (label-aware and case-insensitive), and
+   `just lanes-schema-runner-class-check` proves no hosted label is even
+   REPRESENTABLE as consumer `lanes.json` data. The third exists because the
+   first two both missed a schema that sanctioned one. There is no opt-out
+   input, and reintroducing one is not a local decision. See
+   `docs/migration-v2-to-v3.md`.
 4. **No baked endpoints, credentials, or upload authority** in `bazelrc/*.bazelrc`
    (enforced by `just endpoint-free-check` + `just ci-cached-endpoint-free-check`).
    Cache/executor endpoints are runtime authority, supplied as flags by the
@@ -54,10 +59,10 @@ nix develop --command just check # if tools are not on PATH
 `tinyland.repo.json`, asserts internal action refs resolve, traverses the
 restricted workflows' exact dependency closure, guards the js-bazel-package
 runner + cache-backed contracts, asserts the bazelrc fragments stay
-endpoint-free, dogfoods the `runs-on` linter at 0 FAIL, proves no
-GitHub-hosted runner label survives on a schedulable surface
-(`no-hosted-runners-check`, TIN-3914), and runs the gitleaks working-tree
-scan.
+endpoint-free, dogfoods the `runs-on` linter at 0 FAIL, proves no GitHub-hosted
+runner label survives on a schedulable surface or is representable as consumer
+lanes data (`no-hosted-runners-check` + `lanes-schema-runner-class-check`,
+TIN-3914), and runs the gitleaks working-tree scan.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 

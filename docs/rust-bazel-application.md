@@ -79,7 +79,7 @@ on:
 
 jobs:
   rust:
-    uses: tinyland-inc/ci-templates/.github/workflows/rust-bazel-application.yml@v2.14.0
+    uses: tinyland-inc/ci-templates/.github/workflows/rust-bazel-application.yml@v3.0.0
     with:
       enabled: true
       runner_group: tinyland-infra
@@ -96,8 +96,13 @@ jobs:
       package_targets_json: '["//packaging:release_archives"]'
 ```
 
-`v2.14.0` is the first planned immutable release containing this workflow and
-its internal actions. Do not replace that pin with `@v2` or `@main`.
+`v2.14.0` was the first immutable release containing this workflow and its
+internal actions; its `trust-gate` ran on a GitHub-hosted runner. `v3.0.0` is
+the first release in which every job — admission included — routes to a GF
+cache-fronted self-hosted runner (TIN-3914), so a consumer copying the example
+above should pin `@v3.0.0`, not `@v2.14.0`. The workflow's own internal
+composites stay pinned at their `@v2.14.0` exact refs, which is the immutability
+contract, not a consumer pin. Do not replace either with `@v2` or `@main`.
 
 Those two entries are an interface example, not a claim that the labels are
 currently served. The workflow proves only platforms that a caller explicitly

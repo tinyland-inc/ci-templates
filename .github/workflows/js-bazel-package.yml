@@ -280,6 +280,12 @@ jobs:
               '["tinyland-docker"]',
           )
 
+          # Check each list under its OWN name, before selection: in shared
+          # mode validate_runner_labels IS shared_runner_labels, so blaming
+          # "runner_labels_json" would name an input the caller never set.
+          reject_hosted(runner_labels, "runner_labels_json")
+          reject_hosted(shared_runner_labels, "shared_runner_labels_json")
+
           if runner_mode == "shared":
               validate_runner_labels = shared_runner_labels
           else:
@@ -288,7 +294,6 @@ jobs:
           if runner_mode == "repo_owned" and not (os.environ.get("RUNNER_LABELS_JSON") or "").strip():
               raise SystemExit("runner_mode=repo_owned requires explicit runner_labels_json")
 
-          reject_hosted(validate_runner_labels, "runner_labels_json")
           if runner_mode == "repo_owned":
               require_org_capability(validate_runner_labels, "runner_labels_json")
           elif runner_mode == "shared":
@@ -1008,7 +1013,12 @@ jobs:
             fi
           fi
           PUBLISH_ARGS=("$PACKAGE_PATH" --ignore-scripts --access "$NPM_ACCESS")
-          if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
+          # Fails closed: only an explicit `github-hosted` environment opts in.
+          # npm validates provenance server-side against the Runner Environment
+          # extension in the signing certificate, so requesting it anywhere else
+          # makes the publish FAIL, not merely lose a claim; an empty or
+          # unexpected value must therefore take the no-provenance path.
+          if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
             PUBLISH_ARGS+=(--provenance)
           elif [ "${{ inputs.npm_publish_provenance }}" = "true" ]; then
             # TIN-3914 retired the hosted publish exception, so this job always

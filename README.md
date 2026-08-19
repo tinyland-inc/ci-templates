@@ -291,14 +291,29 @@ scalar, any element of a label array, a literal arm of a `${{ … }}` ternary, a
 either arm of a static or runtime-composed `{group, labels}` mapping. The
 previously-blessed "graceful degradation to hosted when cluster labels are not
 reachable" fromJSON shape is now a failure — there is nothing left to degrade
-to. Third-party managed fleets (`blacksmith-*`, `depot-*`, …) are neither
-GitHub's infrastructure nor GF cache-fronted and were not named by the ruling:
-they WARN, so they surface for a deliberate decision instead of passing
-silently. `just lint-runs-on-selftest` pins the whole grammar to a 70-case
-oracle; `just lint-runs-on-check` dogfoods this repo at 0 FAIL; and
-`just no-hosted-runners-check` is the blunt textual backstop that also catches a
-hosted label hiding in an input default, a `fromJSON` fallback string, or an env
-value on any schedulable surface. All three are in `just check`.
+to. An expression that resolves only *some* of its arms — one good literal plus an
+opaque `vars.*` fallback — is floored at **WARN** rather than passing: the audit
+is incomplete, and that shape is the easy one to write. It is not a FAIL,
+because this guard's core promise is that it never fails a `runs-on` it cannot
+statically resolve.
+
+Third-party managed fleets (`blacksmith-*`, `depot-*`, `namespace-profile-*`, …)
+are neither GitHub's infrastructure nor GF cache-fronted, and the ruling named
+GitHub runners: they **WARN**, surfacing for a deliberate decision instead of
+passing silently. Both gates agree on that — `just no-hosted-runners-check` is
+label-aware and case-insensitive, so `blacksmith-4vcpu-ubuntu-2204` and
+`namespace-profile-default` get the same verdict. Its predecessor was a
+substring grep, which failed the first (it embeds `ubuntu-2`) and passed the
+second, and let `Ubuntu-Latest` through entirely — an effective policy decided
+by spelling.
+
+| Gate | Reads | Catches |
+|---|---|---|
+| `just lint-runs-on-check` | `runs-on` values, structurally | the routing itself; 75-case oracle, this repo dogfoods at 0 FAIL |
+| `just no-hosted-runners-check` | every schedulable surface, textually | a label hiding in an input default, a `fromJSON` fallback, an env value, or a JSON schema |
+| `just lanes-schema-runner-class-check` | what the lanes schema *admits*, semantically | a hosted label that is representable as consumer data even when never written down |
+
+All are in `just check`, each with its own self-test.
 
 `.github/actionlint.yaml` declares the six capability labels so actionlint stops
 reporting them as unknown. It is a declaration, not a suppression: a typo'd or
