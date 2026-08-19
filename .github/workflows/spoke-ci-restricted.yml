@@ -71,6 +71,37 @@ on:
       lanes_path:
         type: string
         default: .github/lanes.json
+      allowed_repo_roles:
+        type: string
+        default: static-spoke,static-spoke-scaffold
+        description: >-
+          Accepted `taxonomy.primary_role` values for the repo-manifest census,
+          as a comma-separated list or a JSON array. The JSON form is
+          normalized to the comma form IN THIS WORKFLOW, not in the composite
+          action: a `uses:` step resolves the action at its own ref (`@v3` here,
+          an exact pin in the restricted variant), so an action-side rule would
+          not ship with the version a consumer pins. The workflow file is what
+          they pin, so the rule lives here and holds at every action ref.
+          Threaded to BOTH census sites — the `repo-manifest` job and
+          the `cache_backed` lane's manifest gate in `flywheel-build` — which
+          were two independently hardcoded literals before TIN-3815, so a spoke
+          could satisfy one and fail the other.
+
+          Default is exactly the pre-TIN-3815 literal, so every consumer that
+          does not opt in renders byte-identically (AGENTS.md rule 2), proved by
+          `just repo-role-census-contract-check`.
+
+          `app-stateful-spoke` is deliberately NOT in the default. The role is
+          ratified in the vendored manifest schema's `$defs.repoRole`, but
+          ratification of a ROLE is not ratification of a TEMPLATE BINDING: the
+          schema's `allOf` block constrains `static-spoke`/`static-spoke-scaffold`
+          to `owns_runtime_backend/owns_auth/owns_payments/... == false` and
+          deliberately omits `app-stateful-spoke`, so the two families are not
+          interchangeable, and this census is the only place in ci-templates
+          where `primary_role` is enforced at all. An app-stateful spoke that
+          wants this lane says so in one line:
+
+            allowed_repo_roles: static-spoke,static-spoke-scaffold,app-stateful-spoke
       gitleaks_config:
         type: string
         default: .gitleaks.toml
@@ -187,7 +218,10 @@ jobs:
       - if: steps.manifest.outputs.exists == 'true'
         uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2.12.1
         with:
-          required_roles: static-spoke,static-spoke-scaffold
+          required_roles: >-
+            ${{ startsWith(inputs.allowed_repo_roles, '[')
+            && join(fromJSON(inputs.allowed_repo_roles), ',')
+            || inputs.allowed_repo_roles }}
 
   flywheel-build:
     needs: [trust-gate, secrets-scan, repo-manifest, lanes-load]
@@ -227,7 +261,10 @@ jobs:
         if: ${{ inputs.cache_backed }}
         uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2.12.1
         with:
-          required_roles: static-spoke,static-spoke-scaffold
+          required_roles: >-
+            ${{ startsWith(inputs.allowed_repo_roles, '[')
+            && join(fromJSON(inputs.allowed_repo_roles), ',')
+            || inputs.allowed_repo_roles }}
 
       # (b) Assert shared-cache attachment. Manifest-driven expected mode
       # (TIN-2109): authority order enrollment.substrateMode > substrate_mode

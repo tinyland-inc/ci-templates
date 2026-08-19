@@ -93,29 +93,91 @@ def validate_manifest() -> int:
     return 0
 
 
+# The floating major this repo currently ships. A workflow's or composite's
+# internal action refs must track it, or that file is frozen: `uses:` resolves
+# the action at ITS OWN ref, so a ref left on the previous major keeps serving
+# that major's actions forever, no matter what lands on main.
+#
+# This is not hypothetical. Every `@v2` ref froze at v2.14.0 when v3.0.0 was
+# cut, which meant `secrets-scan` kept installing gitleaks 8.21.2 — the version
+# that silently ignores a repo's `[[allowlists]]` table, the exact bug TIN-3900
+# fixed and v3.0.0 shipped. The fix reached nobody. The check below used to
+# discard the ref entirely (`for action, _ref in …`), so nothing said so.
+CURRENT_RELEASE_LINE = "v3"
+
+# Files still on the previous line, with the ticket that unfreezes them. This is
+# a debt ledger, not a permanent exemption: an entry means "known stale", and a
+# file NOT listed here that carries a stale ref fails. An entry that no longer
+# has a stale ref also fails, so the ledger cannot rot into a lie. Deleting
+# entries is the follow-up's job. Their v2->v3 action delta is currently
+# description-only (`nix-setup`), which is why they are sequenced separately
+# from spoke-ci, where the delta is the gitleaks fix above.
+STALE_INTERNAL_REF_FILES = {
+    ".github/workflows/js-bazel-package.yml": "TIN-3914",
+    ".github/workflows/spoke-deploy-cloudflare-pages.yml": "TIN-3914",
+    ".github/workflows/spoke-public-preview.yml": "TIN-3914",
+}
+
+
 def check_internal_refs() -> int:
     ok = True
     action_pattern = re.compile(
         r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@([^\s#]+)"
     )
     main_pattern = re.compile(r"tinyland-inc/ci-templates/.*@main")
+    exact_release = re.compile(r"\Av\d+\.\d+\.\d+\Z")
 
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
-        for action, _ref in action_pattern.findall(text):
+        for action, ref in action_pattern.findall(text):
             action_yml = ROOT / ".github/actions" / action / "action.yml"
             if not action_yml.exists():
                 print(f"{rel}: missing internal action {action_yml.relative_to(ROOT)}", file=sys.stderr)
                 ok = False
+            # An exact SemVer ref is the restricted workflows' immutability
+            # contract (restricted-workflow-contract.rb pins the exact release
+            # and rejects anything floating), so it is always admissible here.
+            if exact_release.match(ref) or ref == CURRENT_RELEASE_LINE:
+                continue
+            if str(rel) in STALE_INTERNAL_REF_FILES:
+                continue
+            print(
+                f"{rel}: internal action {action}@{ref} is not on the current release line "
+                f"@{CURRENT_RELEASE_LINE} and is not an exact release pin; a stale floating "
+                "major freezes this file's actions at the previous major",
+                file=sys.stderr,
+            )
+            ok = False
         for line_no, line in enumerate(text.splitlines(), start=1):
             if main_pattern.search(line):
                 print(f"{rel}:{line_no}: internal ci-templates ref uses @main", file=sys.stderr)
                 ok = False
 
+    for rel_path, ticket in sorted(STALE_INTERNAL_REF_FILES.items()):
+        target = ROOT / rel_path
+        if not target.exists():
+            print(f"{rel_path}: listed as stale but does not exist; prune the ledger", file=sys.stderr)
+            ok = False
+            continue
+        stale = [
+            f"{action}@{ref}"
+            for action, ref in action_pattern.findall(target.read_text(encoding="utf-8"))
+            if not exact_release.match(ref) and ref != CURRENT_RELEASE_LINE
+        ]
+        if not stale:
+            print(
+                f"{rel_path}: no longer has stale internal refs; remove it from "
+                f"STALE_INTERNAL_REF_FILES ({ticket})",
+                file=sys.stderr,
+            )
+            ok = False
+        else:
+            print(f"::notice::{rel_path}: {len(stale)} internal ref(s) still on the previous release line ({ticket})")
+
     if not ok:
         return 1
-    print("internal action refs resolve")
+    print(f"internal action refs resolve and track @{CURRENT_RELEASE_LINE} (or an exact release pin)")
     return 0
 
 
