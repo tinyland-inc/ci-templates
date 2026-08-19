@@ -18,6 +18,19 @@ Versioning: [SemVer 2.0](https://semver.org/).
   both normalize identically (surrounding brackets, quotes, and whitespace are
   stripped before the comma split, so there is no second code path).
 
+  **Where the normalization runs is part of the contract.** The JSON→comma
+  conversion is done by the *workflow* (`startsWith`/`fromJSON`/`join`), not by
+  the composite action. A `uses:` step resolves the action at its own ref, so an
+  action-side rule ships only when a release moves that ref — and never for the
+  restricted variant, whose closure is pinned to an exact release by contract.
+  Verified against the real tags before choosing: `git show
+  v2:.github/actions/repo-manifest-validate/action.yml` and its `v3` equivalent
+  both comma-split with no stripping, so an action-side normalization would have
+  been a JSON promise the shipped artifact did not keep. The workflow file is
+  what a consumer pins, so the rule lives there and holds at every action ref.
+  `repo-role-census-contract.rb` pins that expression byte-for-byte and refuses
+  to render any other shape.
+
   **The defect was two hardcoded sites, not one.** `spoke-ci.yml` pinned
   `required_roles: static-spoke,static-spoke-scaffold` at the `repo-manifest`
   job **and** again at the `cache_backed` lane's manifest gate inside
@@ -42,13 +55,49 @@ Versioning: [SemVer 2.0](https://semver.org/).
   is a fair share of why this looked like a template limitation rather than a
   one-line input.
 
+### Fixed
+
+- **`spoke-ci.yml`'s internal action refs were frozen on the v2 line, so a
+  shipped security fix reached nobody.** All 14 `uses:
+  tinyland-inc/ci-templates/.github/actions/…@v2` refs stopped advancing when
+  `v2` froze at v2.14.0 — and `@v2`'s `secrets-scan` still installs **gitleaks
+  8.21.2**, the version that silently ignores a repo's `[[allowlists]]` table.
+  That is exactly the bug TIN-3900 fixed and v3.0.0 shipped; because the
+  workflow pulled its action at `@v2`, every `spoke-ci.yml` consumer kept
+  running the broken scanner while believing they had the fix. Refs now track
+  `@v3`. Same for `spoke-lane-env.yml`'s 6 refs (provably inert — none of its
+  four actions changed between v2.14.0 and v3.0.0 — but it pairs with a
+  restricted variant, which requires both lanes on the same floating line), and
+  for two composite-to-composite `nix-setup@v2` refs in `greedy-cache` and
+  `nix-build` that the new check surfaced.
+
+  **The check could not have caught this: it discarded the ref.**
+  `internal-refs-check` iterated `for action, _ref in …` and only asserted the
+  action *existed*. It now asserts every internal ref is on the current release
+  line or is an exact release pin (the restricted variants' immutability
+  contract), and carries an explicit debt ledger for files still on the old
+  line — `js-bazel-package.yml`, `spoke-deploy-cloudflare-pages.yml`,
+  `spoke-public-preview.yml` (TIN-3816). The ledger fails closed in **both**
+  directions: an unlisted file with a stale ref fails, and a listed file that is
+  no longer stale also fails, so it cannot rot into a lie.
+
+- **`restricted-workflow-contract.rb`'s legacy↔restricted `uses:` mapping
+  hardcoded `@v2`.** It normalizes a restricted exact pin back to the legacy
+  floating ref for the structural comparison; the target major was a literal, so
+  it silently stopped matching the moment the legacy lane moved to v3. Now a
+  named `LEGACY_FLOATING_MAJOR` constant.
+
 ### Changed
 
 - **`SPECS["spoke-ci"][:legacy_sha256]` re-recorded** (`a312785b…` →
   `ac5018e8…`) for the input above, with the reason written at the pin. The two
   literals became `${{ inputs.allowed_repo_roles }}` whose declared default is
-  that same literal, so the default execution path is unchanged; the digest is a
-  tripwire on the legacy bytes, not a claim they never change deliberately.
+  that same literal, so the census default is unchanged; the digest is a
+  tripwire on the legacy bytes, not a claim they never change deliberately. It
+  also absorbs the `@v2`→`@v3` ref bump above, which *is* a deliberate
+  behaviour change: it delivers the gitleaks fix consumers already believe they
+  have. `SPECS["spoke-lane-env"][:legacy_sha256]` re-recorded for its own ref
+  bump (`c238ab59…` → new), reason written at the pin.
 
 ### Deliberately not changed
 

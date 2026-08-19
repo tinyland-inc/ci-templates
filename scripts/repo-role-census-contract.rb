@@ -29,6 +29,7 @@
 #       here would surface there too — but this states it directly, at the
 #       granularity a reader can check by eye.
 
+require "json"
 require "yaml"
 
 ROOT = File.expand_path("..", __dir__)
@@ -51,7 +52,26 @@ CENSUS_SITES = [
 ].freeze
 
 VALIDATE_ACTION = %r{\Atinyland-inc/ci-templates/\.github/actions/repo-manifest-validate@}.freeze
-EXPECTED_EXPRESSION = "${{ inputs.#{INPUT_NAME} }}"
+
+# The ONE canonical `required_roles` expression, pinned byte-for-byte after
+# whitespace folding. It normalizes a JSON array to the comma form the composite
+# action splits on, and passes a comma string through untouched.
+#
+# It lives in the WORKFLOW, not the action, and that placement is the fix for
+# the #142 review blocker rather than an implementation detail. A `uses:` step
+# resolves the action at ITS OWN ref: spoke-ci pulls `@v3` (the floating major)
+# and spoke-ci-restricted is pinned at the exact IMMUTABLE_RELEASE by the
+# restricted contract. Neither ref carries a change until a release moves it, so
+# normalization implemented action-side would have been a JSON promise the
+# shipped artifact did not keep — verified against the real tags: both
+# `git show v2:.github/actions/repo-manifest-validate/action.yml` and the v3
+# equivalent comma-split without stripping. The workflow file, by contrast, IS
+# what the consumer pins, so a rule written here ships with the version they
+# name and works even against the restricted variant's frozen closure.
+EXPECTED_EXPRESSION =
+  "${{ startsWith(inputs.#{INPUT_NAME}, '[') " \
+  "&& join(fromJSON(inputs.#{INPUT_NAME}), ',') " \
+  "|| inputs.#{INPUT_NAME} }}"
 
 def load_workflow(path)
   YAML.load_file(path, aliases: true)
@@ -84,14 +104,27 @@ def census_sites(document)
   sites
 end
 
-# The slice of the GitHub expression language a `with:` value uses here: a bare
-# `${{ inputs.<name> }}` reference, or a plain literal.
-def render(value, inputs)
-  text = value.to_s.strip
-  match = /\A\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}\z/.match(text)
-  return text unless match
+def fold(text)
+  text.to_s.gsub(/\s+/, " ").strip
+end
 
-  inputs[match[1]]
+# Evaluate the canonical expression the way GitHub does, and REFUSE anything
+# else. Recognizing only the pinned shape is deliberate: an unrecognized
+# expression is an unreviewed one, and silently rendering it would be how a
+# broken normalization passes this contract.
+def render(value, inputs)
+  text = fold(value)
+  if text == fold(EXPECTED_EXPRESSION)
+    raw = inputs.fetch(INPUT_NAME)
+    # `startsWith(x, '[') && join(fromJSON(x), ',') || x`, with GitHub's
+    # operand-returning short circuit: a non-JSON value never reaches fromJSON.
+    return raw.start_with?("[") ? JSON.parse(raw).join(",") : raw
+  end
+
+  match = /\A\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}\z/.match(text)
+  return inputs[match[1]] if match
+
+  raise ArgumentError, "unrecognized required_roles expression: #{text.inspect}"
 end
 
 def input_declaration_errors(document, name, require_default:)
@@ -130,9 +163,11 @@ def check_sites(document, label)
       errors << "#{where}: census site passes no required_roles"
       next
     end
-    unless value.to_s.strip == EXPECTED_EXPRESSION
-      errors << "#{where}: required_roles is #{value.inspect}, expected #{EXPECTED_EXPRESSION} " \
-                "(a hardcoded literal here is the TIN-3815 bug returning)"
+    unless fold(value) == fold(EXPECTED_EXPRESSION)
+      errors << "#{where}: required_roles is #{value.inspect}, expected the canonical " \
+                "workflow-side normalization #{EXPECTED_EXPRESSION.inspect} " \
+                "(a hardcoded literal here is the TIN-3815 bug returning; an action-side " \
+                "normalization would not ship with the ref the consumer pins)"
       next
     end
 
@@ -143,10 +178,20 @@ def check_sites(document, label)
                 "pre-TIN-3815 rendered #{LEGACY_ROLES.inspect}"
     end
 
-    # (b) opted path threads the caller's value verbatim.
+    # (b) opted path threads the caller's value verbatim, in BOTH spellings —
+    # the JSON array must reach the action already comma-joined, because the
+    # action it invokes resolves at a ref that predates this change.
     opted = "static-spoke,static-spoke-scaffold,app-stateful-spoke"
-    got = render(value, { INPUT_NAME => opted })
-    errors << "#{where}: with #{INPUT_NAME} set rendered #{got.inspect}, expected #{opted.inspect}" unless got == opted
+    {
+      opted => opted,
+      %(["static-spoke","static-spoke-scaffold","app-stateful-spoke"]) => opted,
+      %(["static-spoke"]) => "static-spoke",
+    }.each do |given, expected|
+      got = render(value, { INPUT_NAME => given })
+      unless got == expected
+        errors << "#{where}: with #{INPUT_NAME}=#{given.inspect} rendered #{got.inspect}, expected #{expected.inspect}"
+      end
+    end
   end
   errors
 end
@@ -205,6 +250,12 @@ def self_test
     "input undeclared while sites reference it" => lambda do
       mutant = deep_copy(legacy)
       workflow_call(mutant)["inputs"].delete(INPUT_NAME)
+      [mutant, restricted]
+    end,
+    "normalization removed, JSON spelling silently broken" => lambda do
+      mutant = deep_copy(legacy)
+      site_step(mutant, "repo-manifest", nil)["with"]["required_roles"] =
+        "${{ inputs.#{INPUT_NAME} }}"
       [mutant, restricted]
     end,
     "census site drops required_roles entirely" => lambda do

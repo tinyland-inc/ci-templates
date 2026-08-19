@@ -76,9 +76,13 @@ on:
         default: static-spoke,static-spoke-scaffold
         description: >-
           Accepted `taxonomy.primary_role` values for the repo-manifest census,
-          as a comma-separated list or a JSON array (both forms normalize
-          identically; surrounding brackets, quotes, and whitespace are
-          stripped). Threaded to BOTH census sites — the `repo-manifest` job and
+          as a comma-separated list or a JSON array. The JSON form is
+          normalized to the comma form IN THIS WORKFLOW, not in the composite
+          action: a `uses:` step resolves the action at its own ref (`@v3` here,
+          an exact pin in the restricted variant), so an action-side rule would
+          not ship with the version a consumer pins. The workflow file is what
+          they pin, so the rule lives here and holds at every action ref.
+          Threaded to BOTH census sites — the `repo-manifest` job and
           the `cache_backed` lane's manifest gate in `flywheel-build` — which
           were two independently hardcoded literals before TIN-3815, so a spoke
           could satisfy one and fail the other.
@@ -214,7 +218,10 @@ jobs:
       - if: steps.manifest.outputs.exists == 'true'
         uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2.12.1
         with:
-          required_roles: ${{ inputs.allowed_repo_roles }}
+          required_roles: >-
+            ${{ startsWith(inputs.allowed_repo_roles, '[')
+            && join(fromJSON(inputs.allowed_repo_roles), ',')
+            || inputs.allowed_repo_roles }}
 
   flywheel-build:
     needs: [trust-gate, secrets-scan, repo-manifest, lanes-load]
@@ -254,7 +261,10 @@ jobs:
         if: ${{ inputs.cache_backed }}
         uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2.12.1
         with:
-          required_roles: ${{ inputs.allowed_repo_roles }}
+          required_roles: >-
+            ${{ startsWith(inputs.allowed_repo_roles, '[')
+            && join(fromJSON(inputs.allowed_repo_roles), ',')
+            || inputs.allowed_repo_roles }}
 
       # (b) Assert shared-cache attachment. Manifest-driven expected mode
       # (TIN-2109): authority order enrollment.substrateMode > substrate_mode

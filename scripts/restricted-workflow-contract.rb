@@ -17,6 +17,13 @@ ROOT = File.expand_path("..", __dir__)
 GROUP_EXPR = "${{ inputs.runner_group }}"
 TRUST_JOB = "trust-gate"
 IMMUTABLE_RELEASE = "v2.12.1"
+# The floating major the LEGACY lanes track. The restricted variants pin exact
+# releases (that is their immutability contract); the legacy lanes deliberately
+# float, and the structural comparison below has to map one onto the other. This
+# was hardcoded to "v2" and silently stopped matching the moment the legacy lane
+# moved to the v3 line — a comparison that fails loudly, but only because every
+# ref moved at once. Naming it keeps the mapping reviewable.
+LEGACY_FLOATING_MAJOR = "v3"
 CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
 DETERMINATE_NIX_SHA = "61cbfe2efc2d4e7a8a6d56967c3c1058e846c858"
 EXPECTED_SCANNER_DOCUMENT_SHA256 = "82d33165acfe0864388cc4aba88b34f3b378002768f91bdf78680235fdf9f3e5"
@@ -86,17 +93,23 @@ SPECS = {
     # Re-recorded for TIN-3815 (optional `allowed_repo_roles` input).
     # Previously a312785b… (TIN-3914, no GitHub-hosted runners).
     #
-    # Why this one moved, and why it is not a default-behaviour change: the two
-    # hardcoded `required_roles: static-spoke,static-spoke-scaffold` literals in
-    # the legacy lane became `${{ inputs.allowed_repo_roles }}`, whose declared
-    # default is that same literal. Every consumer that does not opt in renders
+    # Two changes moved it. (1) The two hardcoded
+    # `required_roles: static-spoke,static-spoke-scaffold` literals in the legacy
+    # lane became one canonical workflow-side normalization expression whose
+    # unset render is that same literal. (2) The legacy lane's 14 internal action
+    # refs moved `@v2` -> `@v3`: `@v2` froze at v2.14.0 when v3.0.0 was cut, so
+    # this workflow was still serving gitleaks 8.21.2 — the version that silently
+    # ignores a repo's `[[allowlists]]`, which TIN-3900 fixed and v3.0.0 shipped
+    # to nobody. That is a behaviour change for consumers, and an intended one:
+    # it delivers the fix they already believe they have. The restricted variant
+    # keeps its exact `@v2.12.1` pins, which IS its immutability contract. Every consumer that does not opt in renders
     # byte-identically, proved site by site by
     # `just repo-role-census-contract-check` — which also pins the SITE COUNT,
     # because the defect TIN-3815 fixes was two independently hardcoded
     # allowlists, not a wrong value. The restricted variant declares the same
     # input and threads the same two sites, so it stays a strict subset and
     # `validate_restricted`'s structural comparison is unaffected.
-    legacy_sha256: "ac5018e895d55056867a8065ded9ed0484ff90da9a8f39378bb1fdc3734483f4",
+    legacy_sha256: "be823df49a2130b76ec867e5edd5e355d9b91cf1e7190ef624b8878561205e63",
     inputs: {
       "runner_group" => "tinyland-infra",
       "nix_runner_label" => "tinyland-nix",
@@ -122,13 +135,20 @@ SPECS = {
   "spoke-lane-env" => {
     legacy: ".github/workflows/spoke-lane-env.yml",
     restricted: ".github/workflows/spoke-lane-env-restricted.yml",
+    # Re-recorded again for TIN-3815: this lane's four internal action refs moved
+    # `@v2` -> `@v3` so it sits on the same floating line as spoke-ci, which the
+    # restricted structural mapping requires. Provably inert — none of
+    # setup-nix / lanes-load / lane-dispatch / lane-reap changed between v2.14.0
+    # and v3.0.0 (only nix-setup and secrets-scan did, and this lane uses
+    # neither), so no consumer behaviour changes; it only unfreezes the ref.
+    # Previously ac5018e8-era c238ab59… .
     # Re-recorded for TIN-3914. Previously 8e7e444f… . The deprecated legacy
     # lane's four GitHub-hosted jobs (check-blahaj-token, lanes-load,
     # dispatch-apply, destroy-lanes) move to the literal base capability class
     # `tinyland-nix`, matching the literal `tinyland-dind` / `tinyland-nix-kvm`
     # routing its other two jobs already used. No input surface changes, so the
     # restricted variant stays a strict subset unchanged.
-    legacy_sha256: "c238ab598b464d864c8e933ff951688833cd8107df3077b346db76b4d71ae470",
+    legacy_sha256: "b578c9c559ad1366e9fef4ea0a6c8cc9c8d9636a8dcf8dd4c243baadc1ed342c",
     inputs: {
       "runner_group" => "tinyland-infra",
       "nix_runner_label" => "tinyland-nix",
@@ -687,7 +707,7 @@ def validate_restricted(name, document, legacy, spec)
       if restricted_uses == "actions/checkout@#{CHECKOUT_SHA}" && legacy_uses == "actions/checkout@v6"
         restricted_step["uses"] = legacy_uses
       elsif restricted_uses.match?(%r{\Atinyland-inc/ci-templates/.+@#{Regexp.escape(IMMUTABLE_RELEASE)}\z}) &&
-            legacy_uses == restricted_uses.sub("@#{IMMUTABLE_RELEASE}", "@v2")
+            legacy_uses == restricted_uses.sub("@#{IMMUTABLE_RELEASE}", "@#{LEGACY_FLOATING_MAJOR}")
         restricted_step["uses"] = legacy_uses
       end
 

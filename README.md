@@ -336,6 +336,13 @@ looked complete. `allowed_repo_roles` replaces both, and the matching pair in
       allowed_repo_roles: static-spoke,static-spoke-scaffold,app-stateful-spoke
 ```
 
+- **Both spellings work at the ref you pin.** The JSON→comma normalization is
+  done by the workflow (`startsWith`/`fromJSON`/`join`), not by the composite
+  action. That placement is the point: a `uses:` step resolves the action at
+  *its own* ref, so a rule written action-side only reaches you once a release
+  moves that ref — and never, for the restricted variant, whose closure is
+  pinned to an exact release by contract. The workflow file is the thing you
+  pin, so the rule ships with the version you name.
 - **Default `"static-spoke,static-spoke-scaffold"` = today's exact literal.**
   Every consumer that does not opt in renders byte-identically (`AGENTS.md`
   rule 2), proved site by site — and the site *count* pinned — by
@@ -350,8 +357,11 @@ looked complete. `allowed_repo_roles` replaces both, and the matching pair in
   `primary_role` is enforced at all. Opting in is one line; widening the default
   for ~190 consumers would be a MAJOR to undo. Full argument in the `v3.1.0`
   CHANGELOG entry.
-- **A census failure now names its remedy** — the error prints the exact
-  `allowed_repo_roles:` line that would admit the rejected role.
+- **A census failure names its remedy** — the error prints the exact
+  `allowed_repo_roles:` line that would admit the rejected role. This one *is*
+  action-side, so it reaches `spoke-ci.yml` consumers from `v3.1.0` (its
+  internal action refs now track `@v3`); the restricted variant will show it
+  when its pinned closure is next advanced.
 
 **GFTB spokes: one edit covers all three.** A Great-Falls-Tool-Bus spoke moving
 to a private runner group, an org capability class, and a non-static role does
