@@ -5,6 +5,43 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **TIN-3900: `secrets-scan` gitleaks pin 8.21.2 → 8.30.1, so repo
+  `[[allowlists]]` actually apply.** Gitleaks added the plural `[[allowlists]]`
+  table in 8.25.0. `8.21.2` loads a config containing it without any error or
+  warning and then **silently ignores every entry** — proven with a positive
+  control: a `ghp_` literal in a path covered by an `[[allowlists]].paths` entry
+  is reported by 8.21.2 (1 leak) and suppressed by 8.30.1 (0 leaks), while the
+  same fixture with the allowlist removed is reported by both. Every Tinyland
+  `.gitleaks.toml` — this repo's, `site.scaffold`'s, and every spoke spawned
+  from it — uses `[[allowlists]]` exclusively, so no spoke allowlist has been in
+  force in CI. `gitleaks-version` now defaults to `8.30.1` and `gitleaks-sha256`
+  to `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb`
+  (`gitleaks_8.30.1_linux_x64.tar.gz`, from the release's
+  `gitleaks_8.30.1_checksums.txt`). The download/verify/extract sequence, the
+  reviewed step list, and the `detect --source . --report-format json` scan
+  invocation are unchanged; `scripts/restricted-workflow-contract.rb` carries
+  the matching `expected_scanner_defaults` and composite-document digest.
+
+  **Spoke migration note.** Nothing to do if your `.gitleaks.toml` already uses
+  only `[[allowlists]]` (the scaffold default) — your allowlists simply start
+  being honored. Two checks otherwise:
+
+  1. **Never mix singular and plural.** 8.30.x **fails closed** when a config
+     declares both `[allowlist]` and `[[allowlists]]`:
+     `Failed to load config error="[allowlist] is deprecated, it cannot be used
+     alongside [[allowlists]]"`. If your spoke still has a lone `[allowlist]`,
+     convert it to a single `[[allowlists]]` entry; do not keep both.
+  2. **Re-check `.gitleaksignore`.** Fingerprints added to work around an
+     allowlist that 8.21.2 was ignoring are now redundant. They stay harmless,
+     but prune the ones an allowlist now covers so the ignore file documents
+     only real, reviewed exceptions.
+
+  Scanned clean under 8.30.1 with the action's exact invocation: this repo,
+  `greatfallstoolbus.org`, `site.scaffold`, and the GFTB acceptance tree
+  carrying the runtime-assembled `ghp_` fixture plus its `.gitleaksignore`.
+
 ## [2.14.0] — 2026-08-18
 
 ### Fixed

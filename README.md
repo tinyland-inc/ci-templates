@@ -125,7 +125,7 @@ working-tree scan.
 | `nix-setup` | Configure Nix + cache hints. Does not invent Bazel endpoints. Opt-in `attic-public-read: true` degrades to a tokenless, read-only public Attic substituter — see below. |
 | `nix-build` | Run `nix build` with Attic binary cache. |
 | `greedy-cache` | Start Attic `watch-store` daemon for concurrent push. |
-| `secrets-scan` | TruffleHog + Gitleaks. |
+| `secrets-scan` | TruffleHog + Gitleaks, both installed from checksum-pinned release archives (no Docker, no `curl \| sh`). See **Secrets-scan scanner pins** below. |
 | **`inherit-scaffold-skills`** | Pull `plugins/scaffold-core` from `site.scaffold` at a pinned ref and materialize `.agents/skills` + `.claude/skills`. |
 | **`repo-manifest-validate`** | Validate `tinyland.repo.json` and optionally require repo roles such as `static-spoke`. |
 | **`cache-attachment-validate`** | Execute the release-vendored cache attachment contract without a network source fallback. |
@@ -142,6 +142,41 @@ working-tree scan.
 | **`rust-bazel-contract`** | Fail-closed lane validation for native platform identity, tracked Bazel 9 pin/Bzlmod lock, finite exact targets, and protected-ref cache-write admission. No build, endpoint, credential, or publication authority. |
 
 See per-action `action.yml` files for full input/output documentation.
+
+### Secrets-scan scanner pins
+
+`secrets-scan` downloads each scanner as an exact release archive and verifies a
+source-pinned SHA-256 before extraction. The restricted closure check
+(`just restricted-workflow-contract-check`) asserts these defaults, so a bump is
+a reviewed, two-file change.
+
+| Scanner | Version input | Default | Archive |
+|---|---|---|---|
+| TruffleHog | `trufflehog-version` / `trufflehog-sha256` | `3.95.3` | `trufflehog_<v>_linux_amd64.tar.gz` |
+| Gitleaks | `gitleaks-version` / `gitleaks-sha256` | `8.30.1` | `gitleaks_<v>_linux_x64.tar.gz` |
+
+#### Gitleaks `[[allowlists]]` — spoke migration note (TIN-3900)
+
+The pin was `8.21.2` through ci-templates `v2.14.0`. Gitleaks grew the plural
+`[[allowlists]]` table in **8.25.0**; `8.21.x` parses a config containing it
+without error and then **silently ignores every entry**. Every Tinyland
+`.gitleaks.toml` (ci-templates, `site.scaffold`, and the spokes spawned from it)
+uses `[[allowlists]]` exclusively, so none of those allowlists were in force in
+CI — spokes were passing on the default ruleset alone, and any finding an
+allowlist was meant to suppress had to be worked around with `.gitleaksignore`
+fingerprints instead.
+
+From `8.30.1` the allowlists apply. Two things spokes should check:
+
+- **Do not mix singular and plural.** `8.30.x` **fails closed** on a config that
+  declares both `[allowlist]` and `[[allowlists]]`:
+  `Failed to load config error="[allowlist] is deprecated, it cannot be used
+  alongside [[allowlists]]"`. Convert a lone `[allowlist]` to a single
+  `[[allowlists]]` entry; never keep both.
+- **Re-check `.gitleaksignore`.** Fingerprints added to work around allowlists
+  that 8.21.2 was ignoring are now redundant. They are harmless, but prune them
+  when the allowlist covers the same path so the ignore file keeps documenting
+  only real, reviewed exceptions.
 
 ### Attic tokenless read degrade (opt-in)
 

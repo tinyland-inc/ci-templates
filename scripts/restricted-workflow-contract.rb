@@ -19,7 +19,7 @@ TRUST_JOB = "trust-gate"
 IMMUTABLE_RELEASE = "v2.12.1"
 CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
 DETERMINATE_NIX_SHA = "61cbfe2efc2d4e7a8a6d56967c3c1058e846c858"
-EXPECTED_SCANNER_DOCUMENT_SHA256 = "0cfba9f3c0b22839ebc3488098c76a6f6cdcb6ae370a1d989591fa8486bb76a4"
+EXPECTED_SCANNER_DOCUMENT_SHA256 = "82d33165acfe0864388cc4aba88b34f3b378002768f91bdf78680235fdf9f3e5"
 EXPECTED_SCANNER_STEP_NAMES = [
   "Install TruffleHog",
   "TruffleHog scan",
@@ -754,8 +754,8 @@ def validate_restricted_dependency_closure
   expected_scanner_defaults = {
     "trufflehog-version" => "3.95.3",
     "trufflehog-sha256" => "5d836eae522540a32ca0f1a1e00efd4c3153a52462466a4b4008fac1e6c1a548",
-    "gitleaks-version" => "8.21.2",
-    "gitleaks-sha256" => "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba",
+    "gitleaks-version" => "8.30.1",
+    "gitleaks-sha256" => "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
   }
   expected_scanner_defaults.each do |input, expected|
     actual = scanner_inputs.dig(input, "default").to_s
