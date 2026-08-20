@@ -83,13 +83,17 @@ on:
           See README + the v1.1 release notes for an end-to-end caller example.
       heavy_runner_class:
         type: string
-        default: tinyland-nix-heavy
+        default: tinyland-nix
         description: >-
-          Runner-class label for the bazel-graph job. Org tenancies that only
-          publish the base `tinyland-nix` capability label (the TIN-2299
-          org-scope overlay shape, e.g. Great-Falls-Tool-Bus) pass their served
-          label here instead of the tinyland-inc pool's heavy class. Default
-          preserves pre-v2.8.1 behavior byte-identically.
+          Runner-class label for the bazel-graph job. Default moved from
+          tinyland-nix-heavy to the baseline class per the 2026-08-10 operator
+          ruling (TIN-3613): the heavy lane's 180Gi envelope is refused
+          admission under the shared ephemeral quota, so the old default
+          routed every spoke's bazel-graph job to a lane that cannot admit.
+          Spokes with a measured need for the heavy envelope opt in
+          explicitly; org tenancies publishing only the base `tinyland-nix`
+          label (the TIN-2299 org-scope overlay shape) now get the working
+          default for free.
       kvm_runner_class:
         type: string
         default: tinyland-nix-kvm
