@@ -20,6 +20,20 @@ on:
         description: "Workspace policy for validation: isolated or persistent_compat"
         type: string
         default: "persistent_compat"
+      persist_checkout_credentials:
+        description: >-
+          Whether actions/checkout persists its token in the validation
+          workspace. Defaults to the legacy behavior; trusted release-source
+          callers set false so package code cannot read the checkout token.
+        type: boolean
+        default: true
+      configure_registry_credentials:
+        description: >-
+          Whether validation installs the private GitHub/Bazel credential
+          helper. Defaults to the legacy behavior; credential-free release
+          source callers set false.
+        type: boolean
+        default: true
       publish_mode:
         description: "Publish policy: same_runner or hosted_exception"
         type: string
@@ -383,6 +397,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           clean: ${{ inputs.workspace_mode != 'persistent_compat' }}
+          persist-credentials: ${{ inputs.persist_checkout_credentials }}
 
       - name: Configure self-hosted cache contract
         if: ${{ runner.environment != 'github-hosted' }}
@@ -499,6 +514,7 @@ jobs:
           echo "BAZEL_FETCH_RETRY_HELPER=$helper_path" >> "$GITHUB_ENV"
 
       - name: Install Bazel GitHub credential helper
+        if: ${{ inputs.configure_registry_credentials }}
         shell: bash
         env:
           TINYLAND_REGISTRY_GITHUB_TOKEN: ${{ secrets.TINYLAND_REGISTRY_GITHUB_TOKEN || secrets.SYNC_PAT || secrets.GH_TOKEN || github.token }}

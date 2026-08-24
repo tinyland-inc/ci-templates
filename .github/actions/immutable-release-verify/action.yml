@@ -1,0 +1,129 @@
+name: immutable-release-verify
+description: >-
+  Verify a trusted workflow_run against protected main, a signed annotated tag,
+  an immutable attested Release, and a same-run sealed package artifact.
+
+inputs:
+  mode:
+    description: Verification mode, observer or artifact.
+    required: true
+  repository:
+    description: GitHub repository in owner/name form.
+    required: true
+  token:
+    description: Read-only token for Actions, Contents, Attestations, and Release API reads.
+    required: false
+  source-run-id:
+    description: Exact unprivileged source workflow run id.
+    required: false
+  source-run-attempt:
+    description: Exact unprivileged source workflow run attempt.
+    required: false
+  observer-sha:
+    description: Trusted workflow_run source SHA (github.sha).
+    required: false
+  source-workflow-path:
+    description: Exact source workflow path on protected main.
+    required: false
+  source-workflow-name:
+    description: Exact source workflow display name.
+    required: false
+  artifact-name:
+    description: Exact same-run artifact name.
+    required: false
+    default: immutable-release-package
+  artifact-dir:
+    description: Directory containing package.tgz and release-metadata.json.
+    required: false
+  release-tag:
+    description: Exact release tag expected in artifact mode.
+    required: false
+  package-name:
+    description: Exact GitHub Packages coordinate expected in artifact mode.
+    required: false
+
+outputs:
+  artifact-id:
+    description: GitHub artifact id bound to the verified source run.
+    value: ${{ steps.observer.outputs.artifact-id }}
+  artifact-digest:
+    description: GitHub artifact API SHA-256 digest.
+    value: ${{ steps.observer.outputs.artifact-digest }}
+  source-sha:
+    description: Verified protected-main release source commit.
+    value: ${{ steps.observer.outputs.source-sha || steps.artifact.outputs.source-sha }}
+  source-run-attempt:
+    description: Verified source workflow attempt.
+    value: ${{ steps.observer.outputs.source-run-attempt || steps.artifact.outputs.source-run-attempt }}
+  release-tag:
+    description: Verified exact SemVer release tag.
+    value: ${{ steps.observer.outputs.release-tag || steps.artifact.outputs.release-tag }}
+  package-name:
+    description: Verified GitHub Packages coordinate.
+    value: ${{ steps.artifact.outputs.package-name }}
+  package-version:
+    description: Verified package version.
+    value: ${{ steps.artifact.outputs.package-version }}
+  package-file:
+    description: Verified exact package.tgz path.
+    value: ${{ steps.artifact.outputs.package-file }}
+  package-sha256:
+    description: Verified package.tgz SHA-256.
+    value: ${{ steps.artifact.outputs.package-sha256 }}
+  package-integrity:
+    description: Verified package.tgz SHA-512 SRI.
+    value: ${{ steps.artifact.outputs.package-integrity }}
+
+runs:
+  using: composite
+  steps:
+    - name: Reject unsupported verification mode
+      if: ${{ inputs.mode != 'observer' && inputs.mode != 'artifact' }}
+      shell: bash
+      run: |
+        echo "::error::mode must be observer or artifact" >&2
+        exit 1
+
+    - name: Verify trusted immutable release observer boundary
+      id: observer
+      if: ${{ inputs.mode == 'observer' }}
+      shell: bash
+      env:
+        IMMUTABLE_RELEASE_REPOSITORY: ${{ inputs.repository }}
+        IMMUTABLE_RELEASE_SOURCE_RUN_ID: ${{ inputs.source-run-id }}
+        IMMUTABLE_RELEASE_OBSERVER_SHA: ${{ inputs.observer-sha }}
+        IMMUTABLE_RELEASE_SOURCE_WORKFLOW_PATH: ${{ inputs.source-workflow-path }}
+        IMMUTABLE_RELEASE_SOURCE_WORKFLOW_NAME: ${{ inputs.source-workflow-name }}
+        IMMUTABLE_RELEASE_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        IMMUTABLE_RELEASE_TOKEN: ${{ inputs.token }}
+      run: ${{ github.action_path }}/../../../scripts/immutable-release-verify.sh
+
+    - name: Verify sealed package artifact
+      id: artifact
+      if: ${{ inputs.mode == 'artifact' }}
+      shell: bash
+      env:
+        ARTIFACT_DIR: ${{ inputs.artifact-dir }}
+        REPOSITORY: ${{ inputs.repository }}
+        SOURCE_SHA: ${{ inputs.observer-sha }}
+        RELEASE_TAG: ${{ inputs.release-tag }}
+        SOURCE_RUN_ID: ${{ inputs.source-run-id }}
+        SOURCE_RUN_ATTEMPT: ${{ inputs.source-run-attempt }}
+        SOURCE_WORKFLOW_PATH: ${{ inputs.source-workflow-path }}
+        PACKAGE_NAME: ${{ inputs.package-name }}
+      run: |
+        set -euo pipefail
+        args=(
+          verify
+          --artifact-dir "$ARTIFACT_DIR"
+          --repository "$REPOSITORY"
+          --source-sha "$SOURCE_SHA"
+          --release-tag "$RELEASE_TAG"
+          --source-run-id "$SOURCE_RUN_ID"
+          --source-run-attempt "$SOURCE_RUN_ATTEMPT"
+          --source-workflow-path "$SOURCE_WORKFLOW_PATH"
+        )
+        if [ -n "$PACKAGE_NAME" ]; then
+          args+=(--package-name "$PACKAGE_NAME")
+        fi
+        python3 "${{ github.action_path }}/../../../scripts/immutable-release-metadata.py" "${args[@]}"

@@ -1,0 +1,265 @@
+name: JS Bazel Package Release Source
+
+on:
+  workflow_call:
+    inputs:
+      enabled:
+        description: Opt-in release authority switch. False skips every job.
+        type: boolean
+        default: false
+      release_tag:
+        description: Exact candidate tag, vMAJOR.MINOR.PATCH.
+        type: string
+        required: true
+      source_workflow_path:
+        description: Consumer workflow path that called this reusable source workflow.
+        type: string
+        default: .github/workflows/publish.yml
+      source_package_name:
+        description: Package name declared by the source package.json.
+        type: string
+        required: true
+      module_name:
+        description: Module name declared by MODULE.bazel.
+        type: string
+        required: true
+      github_package_name:
+        description: Final owner-scoped GitHub Packages coordinate.
+        type: string
+        required: true
+      package_json_path:
+        description: Repository-relative source package.json path.
+        type: string
+        default: package.json
+      module_bazel_path:
+        description: Repository-relative MODULE.bazel path.
+        type: string
+        default: MODULE.bazel
+      build_bazel_path:
+        description: Repository-relative BUILD.bazel path containing npm_package(name="pkg").
+        type: string
+        default: BUILD.bazel
+      package_dir:
+        description: Directory containing the Bazel-built publishable package.
+        type: string
+        default: ./bazel-bin/pkg
+      node_version:
+        description: Single Node.js version used for release-source validation.
+        type: string
+        default: "22"
+      pnpm_version:
+        description: Exact pnpm version used for release-source validation.
+        type: string
+        default: "10.13.1"
+      prepare_command:
+        description: Optional workspace preparation command.
+        type: string
+        default: ""
+      metadata_check_command:
+        description: Optional package-specific metadata parity command.
+        type: string
+        default: ""
+      lint_command:
+        description: Optional lint command.
+        type: string
+        default: ""
+      typecheck_command:
+        description: Optional typecheck command.
+        type: string
+        default: ""
+      unit_test_command:
+        description: Optional unit-test command.
+        type: string
+        default: ""
+      integration_test_command:
+        description: Optional integration-test command.
+        type: string
+        default: ""
+      build_command:
+        description: Build command for the workspace artifact.
+        type: string
+        default: pnpm build
+      package_check_command:
+        description: Optional package-surface validation command.
+        type: string
+        default: pnpm check:package
+      bazel_targets:
+        description: Space-delimited Bazel targets to build in the source run.
+        type: string
+        default: //:pkg //:test
+
+permissions: {}
+
+jobs:
+  validate:
+    if: ${{ inputs.enabled }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/js-bazel-package.yml
+    with:
+      runner_mode: hosted
+      workspace_mode: isolated
+      persist_checkout_credentials: false
+      configure_registry_credentials: false
+      publish_mode: hosted_exception
+      node_versions: ${{ format('["{0}"]', inputs.node_version) }}
+      publish_node_version: ${{ inputs.node_version }}
+      pnpm_version: ${{ inputs.pnpm_version }}
+      prepare_command: ${{ inputs.prepare_command }}
+      metadata_check_command: ${{ inputs.metadata_check_command }}
+      lint_command: ${{ inputs.lint_command }}
+      typecheck_command: ${{ inputs.typecheck_command }}
+      unit_test_command: ${{ inputs.unit_test_command }}
+      integration_test_command: ${{ inputs.integration_test_command }}
+      build_command: ${{ inputs.build_command }}
+      package_check_command: ${{ inputs.package_check_command }}
+      bazel_targets: ${{ inputs.bazel_targets }}
+      package_dir: ${{ inputs.package_dir }}
+      github_package_name: ${{ inputs.github_package_name }}
+      npm_publish_mode: disabled
+      dry_run: true
+      publish_on_tag: false
+
+  seal:
+    if: ${{ inputs.enabled }}
+    needs: validate
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require a release event or read-only diagnostic dispatch
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            release)
+              if [ "$EVENT_ACTION" != "published" ] || [ "$REF_TYPE" != "tag" ]; then
+                echo "::error::release source requires release:published at an exact tag" >&2
+                exit 1
+              fi
+              if [ -z "$EVENT_RELEASE_TAG" ] || [ "$REF_NAME" != "$EVENT_RELEASE_TAG" ] || [ "$REQUESTED_TAG" != "$EVENT_RELEASE_TAG" ]; then
+                echo "::error::release event tag/ref/input mismatch" >&2
+                exit 1
+              fi
+              ;;
+            workflow_dispatch)
+              echo "::notice::manual source run is diagnostic/read-only; the trusted observer rejects non-release runs"
+              ;;
+            *)
+              echo "::error::release source admits only release:published or diagnostic workflow_dispatch" >&2
+              exit 1
+              ;;
+          esac
+          if [[ ! "$REQUESTED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::release_tag must be canonical vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+
+      - name: Resolve exact ci-templates reusable source
+        id: template-source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EXPECTED_WORKFLOW: tinyland-inc/ci-templates/.github/workflows/js-bazel-package-release-source.yml
+        run: |
+          set -euo pipefail
+          run_json="$(gh api --method GET "repos/$RUN_REPOSITORY/actions/runs/$RUN_ID")"
+          template_sha="$(
+            jq -er --arg workflow "$EXPECTED_WORKFLOW" '
+              [
+                .referenced_workflows[]?
+                | select((.path // "") | startswith($workflow + "@"))
+                | .sha
+                | ascii_downcase
+              ]
+              | unique
+              | if length == 1 then .[0]
+                else error("exact reusable workflow source is absent or ambiguous")
+                end
+            ' <<<"$run_json"
+          )"
+          if [[ ! "$template_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::resolved ci-templates source is not a full commit SHA" >&2
+            exit 1
+          fi
+          echo "sha=$template_sha" >>"$GITHUB_OUTPUT"
+
+      - name: Checkout exact trusted ci-templates source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: tinyland-inc/ci-templates
+          ref: ${{ steps.template-source.outputs.sha }}
+          path: .ci-templates-release
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout release source metadata only
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: .release-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download unprivileged Bazel package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bazel-pkg
+          path: .raw-package
+
+      - name: Seal final GitHub Packages payload and canonical manifest
+        shell: bash
+        env:
+          PACKAGE_DIR: ${{ inputs.package_dir }}
+          PACKAGE_JSON_PATH: ${{ inputs.package_json_path }}
+          MODULE_BAZEL_PATH: ${{ inputs.module_bazel_path }}
+          BUILD_BAZEL_PATH: ${{ inputs.build_bazel_path }}
+          SOURCE_PACKAGE_NAME: ${{ inputs.source_package_name }}
+          MODULE_NAME: ${{ inputs.module_name }}
+          GITHUB_PACKAGE_NAME: ${{ inputs.github_package_name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_WORKFLOW_PATH: ${{ inputs.source_workflow_path }}
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/immutable-release-package"
+          rm -rf "$output_dir"
+          mkdir -p "$output_dir"
+          python3 .ci-templates-release/scripts/immutable-release-metadata.py seal \
+            --raw-archive .raw-package/bazel-pkg.tgz \
+            --package-dir "$PACKAGE_DIR" \
+            --package-json ".release-source/$PACKAGE_JSON_PATH" \
+            --module-bazel ".release-source/$MODULE_BAZEL_PATH" \
+            --build-bazel ".release-source/$BUILD_BAZEL_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-sha "$GITHUB_SHA" \
+            --release-tag "$RELEASE_TAG" \
+            --source-run-id "$GITHUB_RUN_ID" \
+            --source-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --source-workflow-path "$SOURCE_WORKFLOW_PATH" \
+            --source-package "$SOURCE_PACKAGE_NAME" \
+            --module-name "$MODULE_NAME" \
+            --github-package "$GITHUB_PACKAGE_NAME" \
+            --output-dir "$output_dir"
+          echo "output-dir=$output_dir" >>"$GITHUB_OUTPUT"
+        id: seal
+
+      - name: Upload immutable release package candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: immutable-release-package
+          path: |
+            ${{ steps.seal.outputs.output-dir }}/package.tgz
+            ${{ steps.seal.outputs.output-dir }}/release-metadata.json
+          if-no-files-found: error
+          retention-days: 7
