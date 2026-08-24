@@ -5,6 +5,19 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`tinyland.repo.json`: retired the stale gitops-receiver assertions**
+  (PATCH) — removed the `gitops-receiver` taxonomy layer and the
+  `authorities.gitops_receiver: tinyland-inc/blahaj` key. The blahaj
+  receiver path was evicted at blahaj #1255 (2026-08-05); lane lifecycle
+  belongs to each application's owner overlay (site.scaffold
+  `docs/patterns/owner-overlay-apply-plane.md`), which is per-application
+  and cannot be honestly named in a single-string authority field. This
+  repo only ever shipped the dispatch composites that talked to a
+  receiver; it never hosted one, and `boundaries.owns_gitops_apply` was
+  already `false`. Manifest-only; no consumer reads either value.
+
 ## [3.1.0] — 2026-08-19
 
 > **This section releases as `v3.1.0` (MINOR)** per `RELEASING.md`: a new
