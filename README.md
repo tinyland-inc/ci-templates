@@ -84,8 +84,9 @@ jobs:
 
 Your spoke needs `.github/lanes.json` validating against
 [`schemas/lanes.schema.json`](./schemas/lanes.schema.json). New spokes should
-also include `tinyland.repo.json` validating against
-[`schemas/tinyland-repo-manifest.schema.json`](./schemas/tinyland-repo-manifest.schema.json).
+also include `tinyland.repo.json`, which is validated against the schema its own
+`schema_version` names — `1` or `2`; see
+[Manifest `schema_version` routing](#manifest-schema_version-routing).
 
 To inherit the canonical scaffold agent skills into a spoke:
 
@@ -491,10 +492,58 @@ above assumes the first release that ships this lane.
 
 ## Schemas
 
-`schemas/tinyland-repo-manifest.schema.json` and `schemas/lanes.schema.json`
+`schemas/tinyland-repo-manifest.schema.json`,
+`schemas/tinyland-repo-manifest.v2.schema.json`, and `schemas/lanes.schema.json`
 are vendored from `tinyland-inc/site.scaffold/docs/schemas/`. The
 schema-doc repo is the source of truth; this repo vendors at known
 stable paths so composite actions can `jsonschema` against them.
+
+### Manifest `schema_version` routing
+
+`tinyland.repo.json` carries an integer `schema_version`, and each published
+value has its own vendored schema: `1` →
+[`schemas/tinyland-repo-manifest.schema.json`](./schemas/tinyland-repo-manifest.schema.json),
+`2` →
+[`schemas/tinyland-repo-manifest.v2.schema.json`](./schemas/tinyland-repo-manifest.v2.schema.json).
+
+`SCHEMA_BY_VERSION` in
+[`scripts/manifest-schema-validate.py`](./scripts/manifest-schema-validate.py) is
+the only place that mapping lives. The `repo-manifest-validate` composite passes
+`--schemas-dir schemas` and lets the validator route; it does not name a schema
+file. `validate-ci-templates.py cache-backed-optin-contract` fails if the action
+starts resolving one itself, or if a mapped version has no vendored schema.
+
+The mapping is **total**. A `schema_version` that is absent, of the wrong type,
+or an integer with no vendored schema exits `3` and names the value it saw; it
+is never routed to v1 as a fallback. Before this routing existed, the composite
+hardcoded the v1 path, so a consumer on the published `schema_version` 2 failed
+the gate with a wall of `Additional properties are not allowed` ending in `at
+/schema_version: 1 was expected` — the gate blaming the manifest for a branch
+the gate did not have. Exit `4` is separate again, for a version that routes to
+a schema absent from the ci-templates checkout: that means nothing validated the
+manifest, which is a broken release rather than a consumer problem.
+
+The dependency-free fallback validator (used when host `jsonschema` is
+unimportable, which is the normal case on nix cluster runners) enforces the
+JSON Schema subset listed in its `ENFORCED_KEYWORDS`, and **refuses to run**
+against a schema that asserts with anything outside it. That guard is not
+decorative: the v2 schema expresses every boundary rule with `not`, `anyOf`, and
+`contains`, so before those were implemented the fallback would have returned
+"valid" for manifests the authoritative validator rejects. A gate that reads as
+coverage while enforcing nothing is worse than no gate.
+`scripts/manifest-schema-validate-selftest.sh` (via `just
+manifest-validate-selftest`) runs every case down BOTH validator paths, with
+`jsonschema` forced unimportable for the second.
+
+**Known drift, not closed here:** the vendored
+`tinyland-repo-manifest.schema.json` (v1) and site.scaffold's copy have diverged
+in both directions — this repo carries an `authorities.artifact_registry`
+property site.scaffold lacks, site.scaffold carries an
+`authorities.not.required: [gitops_receiver]` constraint this copy lacks, plus
+description drift. Nothing compares them. The v2 schema vendored alongside it is
+byte-identical to site.scaffold's at the time of vendoring (blob `74c13a7a`,
+last changed there by `8659dcd`), and reconciling the v1 copies is a separate
+change to the vendored file, not to this router.
 
 `schemas/blahaj-dispatch.schema.json` and
 `schemas/public-preview-dispatch.schema.json` are retired-era historical

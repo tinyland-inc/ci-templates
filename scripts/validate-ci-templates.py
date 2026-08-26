@@ -405,6 +405,49 @@ def check_cache_backed_optin_contract() -> int:
                 file=sys.stderr,
             )
             ok = False
+        # The action must hand the validator the schema DIRECTORY and let it
+        # route by schema_version. Naming one schema file pins every consumer to
+        # that version: this action shipped `schemas/tinyland-repo-manifest.schema.json`
+        # hardcoded, so a repo on the published schema_version 2 failed the gate
+        # with `at /schema_version: 1 was expected` — the gate blaming the
+        # manifest for a branch the gate lacked.
+        if "--schemas-dir" not in action_text:
+            print(
+                f"{action_path.relative_to(ROOT)}: repo-manifest-validate must pass "
+                "--schemas-dir and let scripts/manifest-schema-validate.py route by "
+                "schema_version; naming a single schema file hardcodes one manifest version",
+                file=sys.stderr,
+            )
+            ok = False
+        if re.search(r"schema=.*tinyland-repo-manifest[^/\s]*\.schema\.json", action_text):
+            print(
+                f"{action_path.relative_to(ROOT)}: repo-manifest-validate resolves a specific "
+                "manifest schema itself; the version -> schema mapping belongs in "
+                "SCHEMA_BY_VERSION (scripts/manifest-schema-validate.py) only",
+                file=sys.stderr,
+            )
+            ok = False
+
+        # Every version the validator claims to support must actually be
+        # vendored here. A mapping entry with no file on disk is a version that
+        # is nominally supported and factually ungated.
+        validator_text = validator_path.read_text(encoding="utf-8")
+        mapped = re.findall(r"^\s*(\d+):\s*\"([^\"]+\.schema\.json)\",", validator_text, re.M)
+        if not mapped:
+            print(
+                f"{validator_path.relative_to(ROOT)}: SCHEMA_BY_VERSION parsed as empty; the "
+                "routing table is the whole gate and must not be silently unreadable",
+                file=sys.stderr,
+            )
+            ok = False
+        for version, schema_name in mapped:
+            if not (ROOT / "schemas" / schema_name).is_file():
+                print(
+                    f"{validator_path.relative_to(ROOT)}: schema_version {version} maps to "
+                    f"schemas/{schema_name}, which is not vendored in this repo",
+                    file=sys.stderr,
+                )
+                ok = False
 
     # TIN-2109: the contract script must DEFINE+ENFORCE the hardened gate behaviors.
     contract = contract_path.read_text(encoding="utf-8") if contract_path.exists() else ""

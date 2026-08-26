@@ -143,14 +143,14 @@ cache-backed-optin-contract-check:
 cache-contract-selftest:
     cd {{ root }} && bash scripts/cache-attachment-contract-selftest.sh
 
-# Prove the dependency-free manifest validator accepts the real manifest and
-# fails closed on an invalid one (no jsonschema/nix/network required). TIN-2109.
+# Prove the dependency-free manifest validator routes each schema_version to
+# ITS schema, fails an unpublished version loudly instead of falling back to v1,
+# fails closed on an invalid manifest, and — on the stdlib fallback path the nix
+# cluster runners actually take — enforces every keyword the vendored schemas
+# use rather than quietly ignoring the ones it never implemented.
+# TIN-2109; routing + fallback coverage added alongside schema_version 2.
 manifest-validate-selftest:
-    cd {{ root }} && python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json tinyland.repo.json
-    cd {{ root }} && bad=$(mktemp) && jq '.schema_version=2' tinyland.repo.json > "$bad" && \
-      if python3 scripts/manifest-schema-validate.py schemas/tinyland-repo-manifest.schema.json "$bad" 2>/dev/null; then \
-        echo "FAIL: validator did not reject an invalid manifest" >&2; rm -f "$bad"; exit 1; \
-      else echo "manifest validator fails closed on invalid manifest"; rm -f "$bad"; fi
+    cd {{ root }} && bash scripts/manifest-schema-validate-selftest.sh
 
 # Scan current files for secrets.
 secrets-scan-dir:

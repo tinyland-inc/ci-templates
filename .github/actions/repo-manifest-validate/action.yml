@@ -35,11 +35,11 @@ runs:
       run: |
         set -euo pipefail
         action_dir="${{ github.action_path }}"
-        schema="$action_dir/../../../schemas/tinyland-repo-manifest.schema.json"
+        schemas_dir="$action_dir/../../../schemas"
         validator="$action_dir/../../../scripts/manifest-schema-validate.py"
         manifest="${{ inputs.path }}"
-        if [[ ! -f "$schema" ]]; then
-          echo "::error::ci-templates schema missing at $schema"
+        if [[ ! -d "$schemas_dir" ]]; then
+          echo "::error::ci-templates schema directory missing at $schemas_dir"
           exit 1
         fi
         if [[ ! -f "$validator" ]]; then
@@ -60,7 +60,36 @@ runs:
         if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
           echo "::notice::host python lacks jsonschema; using bundled stdlib validator"
         fi
-        python3 "$validator" "$schema" "$manifest"
+
+        # Route by the manifest's own schema_version rather than hardcoding the
+        # v1 schema. This step used to pass schemas/tinyland-repo-manifest.schema.json
+        # unconditionally, so a consumer that had migrated to schema_version 2 —
+        # a published, supported version — failed the gate with a wall of
+        # `Additional properties are not allowed` and `at /schema_version: 1 was
+        # expected`, blaming the manifest for a branch the action did not have.
+        #
+        # --schemas-dir hands the whole vendored schema directory to the
+        # validator, which owns the version -> filename mapping (SCHEMA_BY_VERSION).
+        # Keeping the mapping in ONE place is the point: a second copy here in
+        # shell is how it would drift. The mapping is total — an absent,
+        # mistyped, or unpublished schema_version exits 3 naming the value it
+        # saw, and is never quietly routed to v1.
+        set +e
+        python3 "$validator" --schemas-dir "$schemas_dir" "$manifest"
+        rc=$?
+        set -e
+        case "$rc" in
+          0) ;;
+          3)
+            echo "::error file=$manifest::repo manifest declares a schema_version this ci-templates release publishes no schema for (see the error above). Supported versions ship under schemas/ — if this is a real new revision, vendor its schema and extend SCHEMA_BY_VERSION in scripts/manifest-schema-validate.py."
+            exit 1
+            ;;
+          4)
+            echo "::error file=$manifest::the schema this manifest routes to is missing from the ci-templates checkout, so NOTHING validated it. This is a broken release, not a manifest problem."
+            exit 1
+            ;;
+          *) exit "$rc" ;;
+        esac
 
     - name: Read manifest role
       id: read

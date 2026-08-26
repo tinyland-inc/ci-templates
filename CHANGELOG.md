@@ -7,6 +7,58 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Fixed
 
+- **`repo-manifest-validate` routes by `schema_version` instead of hardcoding
+  v1** (MINOR — a previously-failing consumer starts passing; no passing
+  consumer changes). The composite passed
+  `schemas/tinyland-repo-manifest.schema.json` unconditionally, so a spoke that
+  had migrated to the published `schema_version` 2 failed the gate with a wall
+  of `Additional properties are not allowed` ending in `at /schema_version: 1
+  was expected` — the gate blaming the manifest for declaring the version it
+  actually declares, when the real fact was that the action had no branch for
+  it. `schemas/tinyland-repo-manifest.v2.schema.json` is now vendored alongside
+  v1, and the action passes `--schemas-dir schemas` so
+  `scripts/manifest-schema-validate.py` owns the whole version → schema mapping
+  in one place (`SCHEMA_BY_VERSION`). Routing is total: an absent, mistyped, or
+  unpublished version exits 3 naming the value it saw, never silently routed to
+  v1; a version that routes to a schema missing from the ci-templates checkout
+  exits 4, because that means nothing validated the manifest at all.
+  `validate-ci-templates.py cache-backed-optin-contract` now fails if the action
+  resolves a schema file itself or if a mapped version is not vendored here.
+
+- **The dependency-free fallback validator no longer under-enforces the schema
+  it is pointed at.** Its JSON Schema subset implemented neither `not`, `anyOf`,
+  nor `contains` — which is how the v2 schema expresses every boundary rule
+  (17/4/13 occurrences: a spoke must NOT claim apply-plane authority, a layered
+  role MUST contain its layer). Routing v2 to the v2 schema without this would
+  have swapped a loud wrong answer for a silent one on precisely the nix cluster
+  runners the fallback exists for: measured, the old subset returns exit 0 for a
+  v2 manifest the authoritative validator rejects. The subset now implements
+  those keywords plus `oneOf`/`maxLength`/`maxItems` and boolean schemas, and
+  `assert_fallback_covers()` refuses to produce a verdict at all (exit 2) when a
+  schema asserts with a keyword outside `ENFORCED_KEYWORDS`. A future schema
+  keyword now stops the gate loudly rather than quietly draining it.
+
+- **`just manifest-validate-selftest` became a real harness**
+  (`scripts/manifest-schema-validate-selftest.sh`, 25 cases). It runs every case
+  down BOTH validator paths — as the host finds it, and again with `jsonschema`
+  forced unimportable — so the fallback is exercised on machines that have the
+  package; a harness that only tests the path the developer happens to have is
+  how the coverage gap survived. Its old negative fixture mutated
+  `schema_version` to `2` to produce an "invalid" manifest, which now asserts
+  that a supported version is invalid; it is replaced with mutations that are
+  wrong for exactly one reason each, including one that only a `contains`
+  assertion can catch.
+
+- **Known drift recorded, not silently reconciled** (README § Schemas): the
+  vendored v1 manifest schema and site.scaffold's copy have diverged in both
+  directions — this repo carries an `authorities.artifact_registry` property
+  site.scaffold lacks; site.scaffold carries an `authorities` `not`/`required`
+  constraint on `gitops_receiver` this copy lacks; plus description drift.
+  Nothing compares them. The v2 schema vendored here is byte-identical to
+  site.scaffold's at vendoring time (blob `74c13a7a`, last changed upstream by
+  `8659dcd`). Reconciling the v1 copies is a change to the vendored file, not to
+  this router.
+
 - **`tinyland.repo.json`: retired the stale gitops-receiver assertions**
   (PATCH) — removed the `gitops-receiver` taxonomy layer and the
   `authorities.gitops_receiver: tinyland-inc/blahaj` key. The blahaj

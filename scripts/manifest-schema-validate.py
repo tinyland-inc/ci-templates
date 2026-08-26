@@ -1,27 +1,60 @@
 #!/usr/bin/env python3
-"""Dependency-free JSON Schema validator for the Tinyland repo manifest.
+"""Dependency-free JSON Schema validator + schema router for the Tinyland repo manifest.
 
 Why this exists (TIN-2109): the cache-backed enrollment gate must validate the
-consumer's tinyland.repo.json against schemas/tinyland-repo-manifest.schema.json
-on ANY runner, with NO network and NO third-party package. The shared
+consumer's tinyland.repo.json against a vendored schema under `schemas/` on ANY
+runner, with NO network and NO third-party package. The shared
 `repo-manifest-validate` action previously required either host `jsonschema` or a
 working `nix develop` dev shell; on nix self-hosted cluster runners a cold
 `nix develop` can fail (e.g. nix-store lock permission), which would make the
 fail-closed gate fail for the WRONG reason. This validator uses only the Python
 standard library.
 
-Scope: it implements the JSON Schema 2020-12 subset actually used by the manifest
-schema: type, required, properties, additionalProperties, enum, const, pattern,
-minLength, minItems, uniqueItems, items, $ref (local #/$defs/...), allOf, and
-if/then. `format` is accepted but not enforced (jsonschema treats most formats as
-annotations by default too). It is intentionally strict: unknown schema keywords
-are ignored (annotation-safe), but every constraint it does understand is
-enforced. When the real `jsonschema` package is importable it is preferred (so
-behavior matches the authoritative validator); this stdlib path is the fallback.
+Two responsibilities, deliberately in one file
+----------------------------------------------
+
+**1. Routing.** The estate publishes two manifest schemas — `schema_version` 1
+and 2 — and the composite action used to hardcode the v1 path. A consumer that
+had migrated to v2 was therefore validated against v1 and failed with a list of
+`Additional properties are not allowed` plus `at /schema_version: 1 was
+expected`: a diagnostic that blames the manifest for declaring the version it
+actually declares, when the real fact is that the gate had no branch for it.
+`SCHEMA_BY_VERSION` below is the whole mapping and it is **total** — an absent,
+mistyped, or unpublished `schema_version` exits 3 naming the value it saw, and
+is never silently routed to v1. (This mirrors the routing site.scaffold added in
+`scripts/validate_repo_manifest.py`; the idiom is deliberately the same on both
+sides so a reader of one recognises the other.)
+
+**2. Honest fallback coverage.** The stdlib path implements a *subset* of JSON
+Schema 2020-12. A subset validator pointed at a schema that uses keywords it
+does not implement returns "valid" for manifests the authoritative validator
+would reject — a gate that reads as coverage while enforcing nothing, which is
+worse than no gate. The v2 schema uses `not`, `anyOf`, and `contains` heavily
+(17/4/13 occurrences), none of which the original subset understood. So the
+subset is widened to cover them, AND `assert_fallback_covers()` walks the schema
+and refuses to run at all (exit 2) if it meets an assertion keyword outside
+`ENFORCED_KEYWORDS`. A future schema keyword now stops the gate loudly instead
+of quietly draining it.
+
+When the real `jsonschema` package is importable it is preferred (so behavior
+matches the authoritative validator) and the coverage guard is skipped — it has
+nothing to guard.
 
 Usage:
   manifest-schema-validate.py <schema.json> <manifest.json>
-Exit codes: 0 valid, 1 invalid (errors printed), 2 usage/IO error.
+  manifest-schema-validate.py --schemas-dir <dir> <manifest.json>
+
+The second form routes by the manifest's own `schema_version`; it is what the
+composite action calls. The first form validates against exactly the schema
+named, and is how a caller pins one on purpose (the Justfile self-test uses it
+to prove a v2 manifest really is rejected by the v1 schema).
+
+Exit codes:
+  0  valid against the schema for its declared schema_version
+  1  invalid against that schema
+  2  usage / IO error, or the stdlib fallback cannot faithfully evaluate the schema
+  3  schema_version absent, mistyped, or naming no published schema
+  4  the schema the manifest routes to is not present in this checkout
 """
 
 from __future__ import annotations
@@ -29,6 +62,173 @@ from __future__ import annotations
 import json
 import re
 import sys
+
+EXIT_VALID = 0
+EXIT_INVALID = 1
+EXIT_USAGE = 2
+EXIT_UNSUPPORTED_VERSION = 3
+EXIT_MISSING_SCHEMA = 4
+
+#: The total published mapping, relative to the vendored `schemas/` directory.
+#: A version absent from this dict has no schema here, and saying so is the
+#: point — never fall back to v1.
+SCHEMA_BY_VERSION: dict[int, str] = {
+    1: "tinyland-repo-manifest.schema.json",
+    2: "tinyland-repo-manifest.v2.schema.json",
+}
+
+#: Dialects seen live in the estate that satisfy no published schema. Named in
+#: the failure text so an operator hitting one is told what they have.
+KNOWN_UNSUPPORTED_DIALECTS = (
+    'a semver string such as "1.0.0"',
+    'an apiVersion/kind envelope such as "tinyland.repo/v1"',
+)
+
+#: Assertion keywords the stdlib fallback actually enforces. The coverage guard
+#: below refuses any schema that asserts with something outside this set, so the
+#: subset can never silently under-validate.
+ENFORCED_KEYWORDS = frozenset(
+    {
+        "$ref",
+        "const",
+        "enum",
+        "type",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "items",
+        "contains",
+        "properties",
+        "required",
+        "additionalProperties",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "if",
+        "then",
+        "else",
+    }
+)
+
+#: Keywords that carry no assertion. Ignoring them is correct, not a gap.
+#: `format` is an annotation by default in 2020-12, which is also how the
+#: authoritative validator treats it unless a format checker is wired in.
+ANNOTATION_KEYWORDS = frozenset(
+    {
+        "$schema",
+        "$id",
+        "$anchor",
+        "$comment",
+        "$defs",
+        "definitions",
+        "title",
+        "description",
+        "default",
+        "examples",
+        "format",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+    }
+)
+
+#: Where subschemas live, so the coverage walk visits schema positions only and
+#: never mistakes a user-chosen property NAME (`owns_auth`, `apply_plane`) for a
+#: keyword.
+_SUBSCHEMA_KEYS = ("additionalProperties", "items", "contains", "not", "if", "then", "else")
+_SUBSCHEMA_LIST_KEYS = ("allOf", "anyOf", "oneOf", "prefixItems")
+_SUBSCHEMA_MAP_KEYS = ("properties", "$defs", "definitions", "patternProperties", "dependentSchemas")
+
+
+class UnsupportedSchemaVersion(Exception):
+    """Raised when no vendored schema covers the declared `schema_version`."""
+
+
+class FallbackCoverageGap(Exception):
+    """Raised when the stdlib subset cannot faithfully evaluate a schema."""
+
+
+def _supported() -> str:
+    return ", ".join(str(v) for v in sorted(SCHEMA_BY_VERSION))
+
+
+def resolve_schema_name(document: object) -> str:
+    """Return the vendored schema filename for `document`'s `schema_version`.
+
+    Raises `UnsupportedSchemaVersion` — never silently defaults to v1 — when the
+    document declares no version, one of a non-integer type, or an integer no
+    vendored schema accepts.
+    """
+    if not isinstance(document, dict):
+        raise UnsupportedSchemaVersion(
+            f"repo manifest is not a JSON object (got {type(document).__name__}); "
+            f"a Tinyland manifest is an object with schema_version {_supported()}"
+        )
+
+    if "schema_version" not in document:
+        raise UnsupportedSchemaVersion(
+            "manifest declares no schema_version. The gate does not assume 1: an "
+            f"unversioned manifest is indistinguishable from {KNOWN_UNSUPPORTED_DIALECTS[1]}. "
+            f"Declare schema_version as one of: {_supported()}."
+        )
+
+    version = document["schema_version"]
+
+    # bool is a subclass of int; `"schema_version": true` is not version 1.
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise UnsupportedSchemaVersion(
+            f"schema_version is {json.dumps(version)} ({type(version).__name__}), which no "
+            "vendored schema accepts. The published schemas pin schema_version to an integer "
+            f"const ({_supported()}); live non-conforming dialects include "
+            f"{' and '.join(KNOWN_UNSUPPORTED_DIALECTS)}."
+        )
+
+    try:
+        return SCHEMA_BY_VERSION[version]
+    except KeyError:
+        raise UnsupportedSchemaVersion(
+            f"schema_version {version} names no vendored schema. Supported versions: "
+            f"{_supported()}. If {version} is a real new manifest revision, vendor its schema "
+            "under schemas/ and add it to SCHEMA_BY_VERSION in this file — routing it to the "
+            "v1 schema would report a const mismatch instead of the truth."
+        ) from None
+
+
+def assert_fallback_covers(schema, root=None, path="#") -> None:
+    """Refuse to evaluate a schema whose assertions the subset does not implement.
+
+    Walks schema POSITIONS only. A validator that ignores `not`/`anyOf`/
+    `contains` reports a manifest valid that the authoritative validator
+    rejects, and the caller cannot tell the difference from a real pass.
+    """
+    if isinstance(schema, bool) or schema is None:
+        return
+    if not isinstance(schema, dict):
+        raise FallbackCoverageGap(f"{path}: schema node is not an object or boolean")
+
+    for key in schema:
+        if key in ENFORCED_KEYWORDS or key in ANNOTATION_KEYWORDS:
+            continue
+        raise FallbackCoverageGap(
+            f"{path}: schema uses '{key}', which the dependency-free fallback validator does "
+            f"not enforce. Refusing to report a verdict it cannot back: install `jsonschema` "
+            f"on this runner, or implement '{key}' in scripts/manifest-schema-validate.py and "
+            "add it to ENFORCED_KEYWORDS."
+        )
+
+    for key in _SUBSCHEMA_KEYS:
+        if key in schema:
+            assert_fallback_covers(schema[key], root, f"{path}/{key}")
+    for key in _SUBSCHEMA_LIST_KEYS:
+        for idx, sub in enumerate(schema.get(key, []) or []):
+            assert_fallback_covers(sub, root, f"{path}/{key}/{idx}")
+    for key in _SUBSCHEMA_MAP_KEYS:
+        for name, sub in (schema.get(key) or {}).items():
+            assert_fallback_covers(sub, root, f"{path}/{key}/{name}")
 
 
 def _type_ok(value, expected) -> bool:
@@ -61,7 +261,19 @@ def _resolve_ref(root: dict, ref: str):
     return node
 
 
+def _fails(instance, schema, root) -> bool:
+    """True when `instance` violates `schema`. Used by not/anyOf/oneOf/contains."""
+    probe: list[str] = []
+    validate(instance, schema, root, "", probe)
+    return bool(probe)
+
+
 def validate(instance, schema, root, path, errors) -> None:
+    if isinstance(schema, bool):
+        if not schema:
+            errors.append(f"{path or '/'}: schema is `false`; no value is valid here")
+        return
+
     if "$ref" in schema:
         validate(instance, _resolve_ref(root, schema["$ref"]), root, path, errors)
         # 2020-12 allows siblings to $ref; continue checking them too.
@@ -78,12 +290,16 @@ def validate(instance, schema, root, path, errors) -> None:
     if isinstance(instance, str):
         if "minLength" in schema and len(instance) < schema["minLength"]:
             errors.append(f"{path or '/'}: shorter than minLength {schema['minLength']}")
+        if "maxLength" in schema and len(instance) > schema["maxLength"]:
+            errors.append(f"{path or '/'}: longer than maxLength {schema['maxLength']}")
         if "pattern" in schema and re.search(schema["pattern"], instance) is None:
             errors.append(f"{path or '/'}: does not match pattern {schema['pattern']!r}")
 
     if isinstance(instance, list):
         if "minItems" in schema and len(instance) < schema["minItems"]:
             errors.append(f"{path or '/'}: fewer than minItems {schema['minItems']}")
+        if "maxItems" in schema and len(instance) > schema["maxItems"]:
+            errors.append(f"{path or '/'}: more than maxItems {schema['maxItems']}")
         if schema.get("uniqueItems") and len(
             {json.dumps(i, sort_keys=True) for i in instance}
         ) != len(instance):
@@ -91,6 +307,10 @@ def validate(instance, schema, root, path, errors) -> None:
         if "items" in schema:
             for idx, item in enumerate(instance):
                 validate(item, schema["items"], root, f"{path}/{idx}", errors)
+        if "contains" in schema and not any(
+            not _fails(item, schema["contains"], root) for item in instance
+        ):
+            errors.append(f"{path or '/'}: no item satisfies `contains`")
 
     if isinstance(instance, dict):
         props = schema.get("properties", {})
@@ -108,26 +328,85 @@ def validate(instance, schema, root, path, errors) -> None:
     for sub in schema.get("allOf", []):
         validate(instance, sub, root, path, errors)
 
+    if "anyOf" in schema and all(_fails(instance, sub, root) for sub in schema["anyOf"]):
+        errors.append(f"{path or '/'}: matches none of the {len(schema['anyOf'])} `anyOf` branches")
+
+    if "oneOf" in schema:
+        matched = sum(1 for sub in schema["oneOf"] if not _fails(instance, sub, root))
+        if matched != 1:
+            errors.append(f"{path or '/'}: matches {matched} `oneOf` branches, expected exactly 1")
+
+    if "not" in schema and not _fails(instance, schema["not"], root):
+        errors.append(f"{path or '/'}: must NOT match the `not` subschema, but does")
+
     if "if" in schema:
-        cond_errors: list[str] = []
-        validate(instance, schema["if"], root, path, cond_errors)
-        if not cond_errors and "then" in schema:
-            validate(instance, schema["then"], root, path, errors)
-        elif cond_errors and "else" in schema:
+        if not _fails(instance, schema["if"], root):
+            if "then" in schema:
+                validate(instance, schema["then"], root, path, errors)
+        elif "else" in schema:
             validate(instance, schema["else"], root, path, errors)
 
 
+def _read_json(path: str):
+    with open(path, encoding="utf-8") as handle:
+        return json.loads(handle.read())
+
+
+def _usage() -> int:
+    print(
+        "usage: manifest-schema-validate.py <schema.json> <manifest.json>\n"
+        "       manifest-schema-validate.py --schemas-dir <dir> <manifest.json>",
+        file=sys.stderr,
+    )
+    return EXIT_USAGE
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print("usage: manifest-schema-validate.py <schema.json> <manifest.json>", file=sys.stderr)
-        return 2
-    schema_path, manifest_path = argv[1], argv[2]
+    routed = False
+    if len(argv) == 4 and argv[1] == "--schemas-dir":
+        routed = True
+        schemas_dir, manifest_path = argv[2], argv[3]
+        schema_path = None
+    elif len(argv) == 3:
+        schema_path, manifest_path = argv[1], argv[2]
+    else:
+        return _usage()
+
     try:
-        schema = json.loads(open(schema_path, encoding="utf-8").read())
-        instance = json.loads(open(manifest_path, encoding="utf-8").read())
+        instance = _read_json(manifest_path)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"::error::cannot read schema/manifest: {exc}", file=sys.stderr)
-        return 2
+        print(f"::error::cannot read manifest: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    if routed:
+        try:
+            schema_name = resolve_schema_name(instance)
+        except UnsupportedSchemaVersion as exc:
+            print(f"::error file={manifest_path}::{exc}", file=sys.stderr)
+            return EXIT_UNSUPPORTED_VERSION
+        schema_path = f"{schemas_dir.rstrip('/')}/{schema_name}"
+        try:
+            schema = _read_json(schema_path)
+        except FileNotFoundError:
+            # Never "validator unavailable": the version is nominally supported
+            # but factually ungated, so nothing checked this manifest.
+            print(
+                f"::error file={manifest_path}::schema_version "
+                f"{instance['schema_version']} routes to {schema_name}, which is not present "
+                f"in {schemas_dir} — the manifest was not validated against anything",
+                file=sys.stderr,
+            )
+            return EXIT_MISSING_SCHEMA
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"::error::cannot read schema {schema_path}: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        print(f"::notice::repo manifest schema_version {instance['schema_version']} -> {schema_name}")
+    else:
+        try:
+            schema = _read_json(schema_path)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"::error::cannot read schema: {exc}", file=sys.stderr)
+            return EXIT_USAGE
 
     # Prefer the authoritative validator when available.
     try:
@@ -142,18 +421,24 @@ def main(argv: list[str]) -> int:
             for e in errs:
                 p = "/" + "/".join(str(x) for x in e.absolute_path)
                 print(f"::error file={manifest_path}::at {p}: {e.message}", file=sys.stderr)
-            return 1
-        return 0
+            return EXIT_INVALID
+        return EXIT_VALID
     except ImportError:
         pass
+
+    try:
+        assert_fallback_covers(schema)
+    except FallbackCoverageGap as exc:
+        print(f"::error file={schema_path}::{exc}", file=sys.stderr)
+        return EXIT_USAGE
 
     errors: list[str] = []
     validate(instance, schema, schema, "", errors)
     if errors:
         for msg in errors:
             print(f"::error file={manifest_path}::{msg}", file=sys.stderr)
-        return 1
-    return 0
+        return EXIT_INVALID
+    return EXIT_VALID
 
 
 if __name__ == "__main__":
