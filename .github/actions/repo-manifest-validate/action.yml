@@ -81,14 +81,28 @@ runs:
           echo "::error::ci-templates manifest validator missing at $validator"
           exit 1
         fi
-        # Dependency-free, network-free validation (TIN-2109). The validator
-        # prefers the authoritative `jsonschema` package when importable and
-        # otherwise uses a stdlib JSON-Schema-subset fallback, so the gate works
-        # on nix self-hosted cluster runners (where a cold `nix develop` can fail
-        # on a nix-store lock) as well as on hosted runners. Fail-closed: a
-        # non-zero exit (invalid manifest) fails the step.
+        # Real-jsonschema-or-refuse (TIN-4132, supersedes the TIN-2109
+        # fallback posture). The stdlib fallback silently ignored `not`,
+        # `contains` and `anyOf` -- it passed manifests carrying prohibited
+        # keys and made v2's overlay branches unsatisfiable, while looking
+        # like coverage. Its reason for existing is dead: the cold-`nix
+        # develop` store-lock failure belonged to the shared-store runner
+        # generation, and current ARC pods mount per-pod ephemeral stores
+        # (GF substrate confirmation, 2026-08-27).
+        #
+        # The dependency is provided by the runner environment -- on nix
+        # self-hosted runners the ci devshell closure carries jsonschema and
+        # substitutes cache-hot from the in-cluster Attic via the nix-setup
+        # composite. A host without it gets a VISIBLE red naming the
+        # dependency, never a silently weaker validation.
         if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
-          echo "::notice::host python lacks jsonschema; using bundled stdlib validator"
+          if command -v nix >/dev/null 2>&1; then
+            echo "::notice::host python lacks jsonschema; running the validator inside the pinned devshell"
+            nix develop --command python3 "$validator" "$schema" "$manifest"
+            exit $?
+          fi
+          echo "::error::python3 lacks 'jsonschema' and nix is unavailable; this gate refuses to validate with less (TIN-4132)"
+          exit 2
         fi
         python3 "$validator" "$schema" "$manifest"
 
