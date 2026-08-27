@@ -513,9 +513,16 @@ the only place that mapping lives. The `repo-manifest-validate` composite passes
 file. `validate-ci-templates.py cache-backed-optin-contract` fails if the action
 starts resolving one itself, or if a mapped version has no vendored schema.
 
-The mapping is **total**. A `schema_version` that is absent, of the wrong type,
-or an integer with no vendored schema exits `3` and names the value it saw; it
-is never routed to v1 as a fallback. Before this routing existed, the composite
+The mapping is **total**. A `schema_version` that is absent, denotes no integer,
+or is an integer with no vendored schema exits `3` and names the value it saw;
+it is never routed to v1 as a fallback. "Denotes an integer" is JSON's
+definition, not Python's: `2.0` routes to v2, because JSON Schema 2020-12 counts
+a number with zero fractional part as an `integer` and the v2 schema's
+`{"const": 2}` accepts it — a router that exited `3` there would be refusing to
+route a document the schema it would have routed to accepts. `true` does *not*
+route to v1, even though `bool` subclasses `int` in Python. Both rules live in
+`_as_schema_version()`, and the same rules govern `const`/`enum` inside the
+fallback validator via `_json_equal()`. Before this routing existed, the composite
 hardcoded the v1 path, so a consumer on the published `schema_version` 2 failed
 the gate with a wall of `Additional properties are not allowed` ending in `at
 /schema_version: 1 was expected` — the gate blaming the manifest for a branch
@@ -530,20 +537,48 @@ against a schema that asserts with anything outside it. That guard is not
 decorative: the v2 schema expresses every boundary rule with `not`, `anyOf`, and
 `contains`, so before those were implemented the fallback would have returned
 "valid" for manifests the authoritative validator rejects. A gate that reads as
-coverage while enforcing nothing is worse than no gate.
+coverage while enforcing nothing is worse than no gate. It also compares
+`const`/`enum` with JSON equality rather than Python's: `bool` subclasses `int`
+in Python, so a bare `==` accepted the document `{"schema_version": true}`
+against the v1 schema's `{"const": 1}` — a boolean satisfying a numeric const.
+Numbers still compare mathematically (`1.0` satisfies `{"const": 1}`), which is
+why the repair is a JSON-equality function and not a type check.
+
 `scripts/manifest-schema-validate-selftest.sh` (via `just
 manifest-validate-selftest`) runs every case down BOTH validator paths, with
-`jsonschema` forced unimportable for the second.
+`jsonschema` forced unimportable for the second, and carries a **positive
+control** for the authoritative path: a schema using `dependentRequired`, which
+`jsonschema` evaluates (exit `0`) and the stdlib subset refuses (exit `2`). The
+two lanes must therefore *disagree* on it. Without that control, a host with no
+`jsonschema` runs the fallback twice under two labels and every "both paths
+agree" assertion is a self-comparison; the control is the only case that fails
+when the lanes collapse. On such a host the authoritative lane is announced as
+SKIPPED and counted, never quietly relabelled.
 
 **Known drift, not closed here:** the vendored
 `tinyland-repo-manifest.schema.json` (v1) and site.scaffold's copy have diverged
-in both directions — this repo carries an `authorities.artifact_registry`
-property site.scaffold lacks, site.scaffold carries an
-`authorities.not.required: [gitops_receiver]` constraint this copy lacks, plus
-description drift. Nothing compares them. The v2 schema vendored alongside it is
-byte-identical to site.scaffold's at the time of vendoring (blob `74c13a7a`,
-last changed there by `8659dcd`), and reconciling the v1 copies is a separate
-change to the vendored file, not to this router.
+in both directions. Measured by normalising both documents before diffing, so
+indentation and key order cannot inflate the count (a raw `diff -u` of the two
+files reports 136 changed lines, almost all of it formatting):
+
+```console
+$ norm() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])),indent=2,sort_keys=True))' "$1"; }
+$ diff <(norm ../site.scaffold/docs/schemas/tinyland-repo-manifest.schema.json) \
+       <(norm schemas/tinyland-repo-manifest.schema.json) | grep -c '^[<>]'
+22
+```
+
+22 differing lines (13 only upstream, 9 only here), which resolve to **two
+constraint-bearing differences, one in each direction** — this repo carries an
+`authorities.artifact_registry` property site.scaffold lacks; site.scaffold
+carries an `authorities` `not`/`required: [gitops_receiver]` constraint this copy
+lacks — plus **five annotation-only differences** (four reworded `description`s
+and one `description` dropped from a `$ref`). Pinned to blobs so the figure stays
+checkable: this copy is `c724d1bf`, site.scaffold's is `981427d8` at
+`site.scaffold` `6c58bb6`. Nothing compares them automatically. The v2 schema
+vendored alongside is byte-identical to site.scaffold's (both blob
+`74c13a7a`, last changed there by `8659dcd`), and reconciling the v1 copies is a
+separate change to the vendored file, not to this router.
 
 `schemas/blahaj-dispatch.schema.json` and
 `schemas/public-preview-dispatch.schema.json` are retired-era historical

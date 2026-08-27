@@ -21,11 +21,25 @@
 #     wrong answer. The subset now covers those keywords, and refuses outright
 #     (exit 2) when a schema asserts with something it does not implement.
 #
-# Every case runs BOTH validator paths: once as the host finds it (authoritative
-# `jsonschema` when installed) and once with `jsonschema` forced unimportable,
-# so the stdlib fallback is exercised on this machine even where the package is
-# present. A harness that only ever tests the path the developer happens to have
-# is how defect 2 survived.
+#  3. That same subset compared `const`/`enum` with Python `==`/`in`. `bool`
+#     subclasses `int` in Python, so `True == 1`: a manifest declaring
+#     `"schema_version": true` satisfied the v1 schema's `{"const": 1}` and the
+#     fallback returned 0 where the authoritative validator returns 1. The
+#     comparison is now `_json_equal`, and BOTH directions are pinned below —
+#     `true` must be rejected, and `1.0` must still be ACCEPTED, because JSON
+#     Schema compares numbers mathematically and a repair that merely demanded
+#     identical Python types would disagree with the authoritative validator the
+#     other way. `_as_schema_version` applies the same rules to routing, so
+#     `2.0` reaches the v2 schema instead of exiting 3 on a document that schema
+#     accepts.
+#
+# Every case runs BOTH validator paths: once with the authoritative `jsonschema`
+# package and once with `jsonschema` forced unimportable, so the stdlib fallback
+# is exercised on this machine even where the package is present. A harness that
+# only ever tests the path the developer happens to have is how defect 2
+# survived. The authoritative lane carries its own POSITIVE CONTROL (below): on
+# a host without `jsonschema` that lane would otherwise be a second, silent run
+# of the fallback, and every "both paths agree" claim here would be vacuous.
 #
 # Run: scripts/manifest-schema-validate-selftest.sh
 # Wired into `just check` via `manifest-validate-selftest`.
@@ -67,6 +81,20 @@ fi
 
 pass=0
 fail=0
+skip=0
+
+# Which paths are real on this host. The authoritative lane is only
+# authoritative if `jsonschema` actually imports; running it anyway would just
+# be the fallback wearing the other lane's label, and every differential
+# assertion in this file would silently become a self-comparison.
+paths=(authoritative fallback)
+if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
+  paths=(fallback)
+  echo "NOTE: host python3 cannot import jsonschema."
+  echo "      The AUTHORITATIVE lane is SKIPPED, not silently re-run as the fallback."
+  echo "      Run inside \`nix develop\` to exercise both paths."
+  echo
+fi
 
 # run_case <expected_exit> <path-label> <description> -- <args to validator...>
 run_case() {
@@ -129,6 +157,31 @@ jq '.schema_version = "1.0.0"' "${v1}" >"${work}/version-semver.json"
 jq 'del(.schema_version)' "${v1}" >"${work}/version-absent.json"
 jq '.schema_version = true' "${v1}" >"${work}/version-true.json"
 
+# JSON equality, both directions (defect 3). These bypass the router with the
+# explicit-schema form on purpose: routing rejects `true` before any schema is
+# consulted, so only the direct form reaches the `const` comparison that was
+# wrong. The v1 schema pins `"schema_version": {"const": 1}`.
+jq '.schema_version = true' "${v1}" >"${work}/const-bool.json"   # true != 1 in JSON
+jq '.schema_version = 1.0' "${v1}" >"${work}/const-float.json"   # 1.0 == 1 in JSON
+
+# Routing must agree with the schema it routes to: 2.0 is an `integer` with a
+# zero fractional part, which the v2 schema's `{"const": 2}` accepts.
+jq '.schema_version = 2.0' "${v2}" >"${work}/version-2-float.json"
+
+# Positive control for the authoritative lane. `dependentRequired` is a real
+# 2020-12 assertion that `jsonschema` evaluates and the stdlib subset refuses
+# outright, so the two lanes MUST return different codes on it: 0 from the
+# authoritative validator, 2 (coverage gap) from the fallback. If the
+# authoritative lane were quietly running the fallback — the failure mode on any
+# host without the package — this case is what fails.
+cat >"${work}/engine-probe.schema.json" <<'JSON'
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "dependentRequired": { "schema_version": ["repo"] }
+}
+JSON
+
 # Genuinely invalid v1: wrong type on a required field. (The old fixture here
 # mutated schema_version to 2, which is now a PUBLISHED version — it would be
 # asserting that a supported manifest is invalid.)
@@ -152,7 +205,7 @@ cp "${schemas}/tinyland-repo-manifest.schema.json" "${partial}/"
 
 # --- cases ----------------------------------------------------------------
 
-for path in authoritative fallback; do
+for path in "${paths[@]}"; do
   run_case 0 "${path}" "v1 manifest routes to the v1 schema and validates" -- \
     --schemas-dir "${schemas}" "${v1}"
   run_case_saying 0 "${path}" "tinyland-repo-manifest.v2.schema.json" \
@@ -170,6 +223,16 @@ for path in authoritative fallback; do
     --schemas-dir "${schemas}" "${work}/version-absent.json"
   run_case 3 "${path}" "schema_version true is not version 1 (bool subclasses int)" -- \
     --schemas-dir "${schemas}" "${work}/version-true.json"
+  run_case_saying 0 "${path}" "tinyland-repo-manifest.v2.schema.json" \
+    "schema_version 2.0 routes to v2, as the v2 schema's own const 2 accepts it" -- \
+    --schemas-dir "${schemas}" "${work}/version-2-float.json"
+
+  # JSON equality vs Python equality, pinned in both directions against the
+  # SCHEMA directly. Under `==`, the first of these passed: `True == 1`.
+  run_case 1 "${path}" "a JSON boolean does NOT satisfy the v1 const 1 (True == 1 in Python)" -- \
+    "${schemas}/tinyland-repo-manifest.schema.json" "${work}/const-bool.json"
+  run_case 0 "${path}" "an integral float DOES satisfy the v1 const 1 (JSON numbers compare mathematically)" -- \
+    "${schemas}/tinyland-repo-manifest.schema.json" "${work}/const-float.json"
 
   run_case 1 "${path}" "invalid v1 manifest fails closed" -- \
     --schemas-dir "${schemas}" "${work}/invalid-v1.json"
@@ -187,6 +250,27 @@ for path in authoritative fallback; do
   run_case 1 "${path}" "v2 manifest really is rejected BY the v1 schema" -- \
     "${schemas}/tinyland-repo-manifest.schema.json" "${v2}"
 done
+
+# --- positive control: the two lanes are two ENGINES -----------------------
+#
+# Everything above asserts the lanes AGREE. Agreement is worthless if both lanes
+# are the same code, which is exactly what happens on a host without
+# `jsonschema`: `authoritative` silently becomes a second `fallback` run and 26
+# cases go green having proved nothing about the authoritative validator. This
+# control forces them to DISAGREE on a schema only one of them can evaluate, so
+# a collapsed lane is a failure here rather than a silence everywhere.
+if [[ ${#paths[@]} -eq 2 ]]; then
+  run_case 0 "authoritative" \
+    "control: jsonschema evaluates dependentRequired (proves this lane is NOT the fallback)" -- \
+    "${work}/engine-probe.schema.json" "${v1}"
+  run_case_saying 2 "fallback" "dependentRequired" \
+    "control: the stdlib subset refuses dependentRequired (proves the lanes are two engines)" -- \
+    "${work}/engine-probe.schema.json" "${v1}"
+else
+  skip=$((skip + 2))
+  printf 'SKIP [%-13s ] control: no jsonschema on this host, so there is no second engine\n' \
+    "authoritative"
+fi
 
 # The fallback must never report a verdict it cannot back. Every vendored
 # schema has to be inside the subset it implements; if one grows a keyword the
@@ -241,5 +325,6 @@ else
   printf 'FAIL [%-13s ] coverage guard accepted a schema it cannot enforce\n' "coverage"
 fi
 
-printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
+printf '\n%d passed, %d failed, %d skipped (lanes exercised: %s)\n' \
+  "${pass}" "${fail}" "${skip}" "${paths[*]}"
 [[ ${fail} -eq 0 ]]

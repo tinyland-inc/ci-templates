@@ -49,6 +49,16 @@ composite action calls. The first form validates against exactly the schema
 named, and is how a caller pins one on purpose (the Justfile self-test uses it
 to prove a v2 manifest really is rejected by the v1 schema).
 
+**3. JSON equality, not Python equality.** The subset compares `const`/`enum`
+with `_json_equal()`, not `==`/`in`. Python's `==` is the wrong relation for
+JSON values in two directions at once: `True == 1` is true in Python and false
+in JSON (a boolean and a number are different types and never equal), while
+`1 == 1.0` is true in both — JSON Schema compares numbers mathematically. Using
+`==` therefore let a JSON `true` satisfy `{"const": 1}`, which is exactly the
+`schema_version` const the v1 schema pins. `_as_schema_version()` applies the
+same rules to the router, so `2.0` routes to v2 rather than being rejected by a
+gate whose own schema would have accepted it.
+
 Exit codes:
   0  valid against the schema for its declared schema_version
   1  invalid against that schema
@@ -156,6 +166,67 @@ def _supported() -> str:
     return ", ".join(str(v) for v in sorted(SCHEMA_BY_VERSION))
 
 
+def _json_equal(left, right) -> bool:
+    """JSON Schema value equality (2020-12 §4.2.2), which Python `==` is not.
+
+    Two divergences matter here, and they point in opposite directions:
+
+    * `bool` subclasses `int` in Python, so `True == 1` and `False == 0`. In
+      JSON a boolean and a number are values of different types and are never
+      equal. With bare `==`, `{"const": 1}` — the `schema_version` const the v1
+      manifest schema pins — accepts the document `{"schema_version": true}`.
+    * Numbers, on the other hand, *do* compare mathematically: `1` and `1.0`
+      are the same JSON value, so an integral float must satisfy an integer
+      `const`/`enum`. A naive "the types must match exactly" repair would break
+      that and disagree with the authoritative validator the other way.
+
+    Everything else is structural: same type, and for arrays/objects the same
+    shape compared elementwise with these same rules.
+    """
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left is right
+    if left is None or right is None:
+        return left is None and right is None
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return left == right
+    if isinstance(left, str) and isinstance(right, str):
+        return left == right
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            _json_equal(a, b) for a, b in zip(left, right)
+        )
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            _json_equal(value, right[key]) for key, value in left.items()
+        )
+    return False
+
+
+def _as_schema_version(value: object) -> int | None:
+    """Return the integer `schema_version` `value` denotes, or None.
+
+    The same JSON equality rules `_json_equal` applies, applied to routing, so
+    the router and the schema it routes to cannot disagree:
+
+    * `true` is not version 1, even though `bool` subclasses `int` in Python.
+    * `2.0` *is* version 2. JSON Schema 2020-12 counts a number with zero
+      fractional part as an `integer`, and compares numbers mathematically, so
+      the v2 schema's `{"const": 2}` accepts `2.0`. A router that exited 3 on
+      `2.0` would be refusing to route a document the schema it would have
+      routed to accepts — the gate contradicting itself, and the operator told
+      to fix a manifest that is in fact conformant.
+    * `2.5`, `NaN`, and `inf` denote no version: `is_integer()` is false for
+      all three.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
 def resolve_schema_name(document: object) -> str:
     """Return the vendored schema filename for `document`'s `schema_version`.
 
@@ -176,15 +247,16 @@ def resolve_schema_name(document: object) -> str:
             f"Declare schema_version as one of: {_supported()}."
         )
 
-    version = document["schema_version"]
+    declared = document["schema_version"]
+    version = _as_schema_version(declared)
 
-    # bool is a subclass of int; `"schema_version": true` is not version 1.
-    if isinstance(version, bool) or not isinstance(version, int):
+    if version is None:
         raise UnsupportedSchemaVersion(
-            f"schema_version is {json.dumps(version)} ({type(version).__name__}), which no "
-            "vendored schema accepts. The published schemas pin schema_version to an integer "
-            f"const ({_supported()}); live non-conforming dialects include "
-            f"{' and '.join(KNOWN_UNSUPPORTED_DIALECTS)}."
+            f"schema_version is {json.dumps(declared)} ({type(declared).__name__}), which "
+            "denotes no integer version and so no vendored schema accepts it. The published "
+            f"schemas pin schema_version to an integer const ({_supported()}) — a JSON number "
+            "with zero fractional part such as 2.0 counts, a boolean and a string do not; "
+            f"live non-conforming dialects include {' and '.join(KNOWN_UNSUPPORTED_DIALECTS)}."
         )
 
     try:
@@ -278,11 +350,21 @@ def validate(instance, schema, root, path, errors) -> None:
         validate(instance, _resolve_ref(root, schema["$ref"]), root, path, errors)
         # 2020-12 allows siblings to $ref; continue checking them too.
 
-    if "const" in schema and instance != schema["const"]:
-        errors.append(f"{path or '/'}: must equal const {schema['const']!r}")
+    # `_json_equal`, never `!=`/`not in`: Python would accept `true` for
+    # `{"const": 1}` (bool subclasses int) while still needing 1.0 to satisfy 1.
+    if "const" in schema and not _json_equal(instance, schema["const"]):
+        errors.append(
+            f"{path or '/'}: must equal const {json.dumps(schema['const'])}, "
+            f"got {json.dumps(instance)}"
+        )
 
-    if "enum" in schema and instance not in schema["enum"]:
-        errors.append(f"{path or '/'}: {instance!r} is not one of {schema['enum']}")
+    if "enum" in schema and not any(
+        _json_equal(instance, option) for option in schema["enum"]
+    ):
+        errors.append(
+            f"{path or '/'}: {json.dumps(instance)} is not one of "
+            f"{json.dumps(schema['enum'])}"
+        )
 
     if "type" in schema and not _type_ok(instance, schema["type"]):
         errors.append(f"{path or '/'}: is not of type {schema['type']!r}")
