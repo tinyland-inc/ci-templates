@@ -106,6 +106,23 @@ on:
         description: "Comma-separated GitHub owners whose github.com/raw.githubusercontent.com fetch URIs receive the registry token via the Bazel credential helper. Org-parameterized (TIN-2353): a tenant org lists itself to fetch its own private Bazel modules; tinyland-inc remains the default."
         type: string
         default: "tinyland-inc"
+      verify_bzlmod_lock:
+        description: >-
+          Opt-in (default false) committed MODULE.bazel.lock verification. On a
+          GF self-hosted capability runner, preserve the tracked lock from
+          cleanup, run `bazelisk mod deps --lockfile_mode=update`, fail on
+          drift, and validate Bazel targets with `--lockfile_mode=error`.
+        type: boolean
+        default: false
+      emit_bzlmod_lock_artifact:
+        description: >-
+          Opt-in (default false) remote MODULE.bazel.lock refresh. On a GF
+          self-hosted capability runner, preserve any existing lock, run
+          `bazelisk mod deps --lockfile_mode=update`, validate Bazel targets
+          with `--lockfile_mode=error`, and upload the resulting lock from the
+          publish-node matrix lane as the bzlmod-lock artifact.
+        type: boolean
+        default: false
       cache_backed:
         description: >-
           Opt-in (default false) shared-cache-backed Bazel validation. When true,
@@ -461,6 +478,8 @@ jobs:
       - name: Clean stale workspace artifacts
         if: ${{ inputs.workspace_mode == 'persistent_compat' && inputs.cleanup_paths != '' }}
         shell: bash
+        env:
+          PRESERVE_BZLMOD_LOCK: ${{ inputs.verify_bzlmod_lock || inputs.emit_bzlmod_lock_artifact }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
@@ -471,6 +490,11 @@ jobs:
                 exit 1
                 ;;
             esac
+            if [ "$PRESERVE_BZLMOD_LOCK" = "true" ] \
+              && { [ "$path" = "MODULE.bazel.lock" ] || [ "$path" = "./MODULE.bazel.lock" ]; }; then
+              echo "::notice::Preserving MODULE.bazel.lock for the opted-in Bzlmod lock contract."
+              continue
+            fi
             chmod -R u+w -- "$path" 2>/dev/null || true
             rm -rf -- "$path"
           done
@@ -641,6 +665,54 @@ jobs:
           source "$BAZEL_FETCH_RETRY_HELPER"
           run_with_bazel_fetch_retry "Prepare workspace" "$COMMAND"
 
+      - name: Refresh or verify Bzlmod lock (GF only)
+        if: ${{ inputs.verify_bzlmod_lock || inputs.emit_bzlmod_lock_artifact }}
+        shell: bash
+        env:
+          VERIFY_BZLMOD_LOCK: ${{ inputs.verify_bzlmod_lock }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          RUNNER_LABELS: ${{ join(runner.labels, ',') }}
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+
+          if [ "$RUNNER_ENVIRONMENT" != "self-hosted" ] \
+            || [[ ! ",$RUNNER_LABELS," =~ ,[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind), ]]; then
+            echo "::error::Bzlmod lock refresh/verification requires a GF self-hosted capability runner."
+            exit 1
+          fi
+          if [ ! -f MODULE.bazel ]; then
+            echo "::error::Bzlmod lock refresh/verification requires MODULE.bazel at the workspace root."
+            exit 1
+          fi
+
+          if [ "$VERIFY_BZLMOD_LOCK" = "true" ]; then
+            if ! git ls-files --error-unmatch -- MODULE.bazel.lock >/dev/null 2>&1; then
+              echo "::error::verify_bzlmod_lock=true requires a tracked MODULE.bazel.lock."
+              exit 1
+            fi
+            if [ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]; then
+              echo "::error::MODULE.bazel.lock was dirty before committed-lock verification."
+              exit 1
+            fi
+          fi
+
+          # shellcheck source=/dev/null
+          source "$BAZEL_FETCH_RETRY_HELPER"
+          run_with_bazel_fetch_retry "Refresh Bzlmod lock" \
+            "npx --yes @bazel/bazelisk mod deps --lockfile_mode=update"
+
+          if [ ! -f MODULE.bazel.lock ]; then
+            echo "::error::Bazel did not produce MODULE.bazel.lock."
+            exit 1
+          fi
+          if [ "$VERIFY_BZLMOD_LOCK" = "true" ] \
+            && [ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]; then
+            git --no-pager diff -- MODULE.bazel.lock
+            echo "::error::Bzlmod lock drift detected; download a remote refresh artifact and commit it."
+            exit 1
+          fi
+
       - name: Verify release metadata
         if: ${{ inputs.metadata_check_command != '' }}
         shell: bash
@@ -731,6 +803,7 @@ jobs:
         shell: bash
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
+          ENFORCE_BZLMOD_LOCK: ${{ inputs.verify_bzlmod_lock || inputs.emit_bzlmod_lock_artifact }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
@@ -740,7 +813,11 @@ jobs:
           # shellcheck source=/dev/null
           source "$BAZEL_FETCH_RETRY_HELPER"
           targets_quoted="$(printf '%q ' "${bazel_targets[@]}")"
-          run_with_bazel_fetch_retry "Validate Bazel targets" "npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"
+          if [ "$ENFORCE_BZLMOD_LOCK" = "true" ]; then
+            run_with_bazel_fetch_retry "Validate Bazel targets" "npx --yes @bazel/bazelisk build ${targets_quoted}--lockfile_mode=error --verbose_failures"
+          else
+            run_with_bazel_fetch_retry "Validate Bazel targets" "npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"
+          fi
 
       # Opt-in (cache_backed=true) manifest validation. This is a NEW conditional
       # path; the default path above is untouched (byte-identical for non-opted
@@ -813,6 +890,7 @@ jobs:
         shell: bash
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
+          ENFORCE_BZLMOD_LOCK: ${{ inputs.verify_bzlmod_lock || inputs.emit_bzlmod_lock_artifact }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
@@ -829,8 +907,33 @@ jobs:
           # CACHE-FIRST: ci-cached config + injected remote cache, read-only
           # (no upload), and no remote executor is wired. The remote cache
           # hit/transfer lines in this step's log are the real-attach proof.
-          run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
-            "npx --yes @bazel/bazelisk build ${targets_quoted}--config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
+          if [ "$ENFORCE_BZLMOD_LOCK" = "true" ]; then
+            run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
+              "npx --yes @bazel/bazelisk build ${targets_quoted}--lockfile_mode=error --config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
+          else
+            run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
+              "npx --yes @bazel/bazelisk build ${targets_quoted}--config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
+          fi
+
+      - name: Confirm committed Bzlmod lock stayed unchanged
+        if: ${{ inputs.verify_bzlmod_lock }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORKSPACE_DIR"
+          if [ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]; then
+            git --no-pager diff -- MODULE.bazel.lock
+            echo "::error::MODULE.bazel.lock changed after committed-lock verification."
+            exit 1
+          fi
+
+      - name: Upload refreshed Bzlmod lock
+        if: ${{ inputs.emit_bzlmod_lock_artifact && matrix.node-version == (inputs.publish_node_version || '22') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bzlmod-lock
+          path: ${{ env.WORKSPACE_DIR }}/MODULE.bazel.lock
+          if-no-files-found: error
 
       - name: Validate npm tarball from Bazel artifact
         shell: bash

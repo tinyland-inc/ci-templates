@@ -21,6 +21,8 @@ It is meant for packages like:
 - optionally keeps legacy cleanup-based workspace behavior for migration
 - optionally stages validation work in an isolated scratch workspace
 - runs optional metadata, lint, typecheck, unit, and integration commands
+- optionally verifies a committed Bzlmod lock or emits a remotely refreshed
+  `MODULE.bazel.lock` artifact
 - builds the workspace artifact
 - validates the Bazel-built package via `npm pack --dry-run`
 - validates npm publish dry-runs against the Bazel artifact unless npmjs is
@@ -129,6 +131,35 @@ Meaning:
   - skip npmjs dry-run validation and npmjs publication
   - use this for Bazel-first packages whose release authority is GitHub
     tag/release, GitHub Packages, and the Tinyland Bazel registry
+
+### Bzlmod lock controls
+
+`verify_bzlmod_lock` and `emit_bzlmod_lock_artifact` are independent, opt-in
+boolean inputs. Both default to `false`; with both unset, the legacy cleanup
+and Bazel target command run unchanged.
+
+- `verify_bzlmod_lock: true`
+  - requires a clean, tracked root `MODULE.bazel.lock`
+  - preserves that file even when the legacy `cleanup_paths` default includes it
+  - runs `bazelisk mod deps --lockfile_mode=update` and fails if the committed
+    lock changes
+  - runs the subsequent Bazel target validation with
+    `--lockfile_mode=error`, then checks the lock again
+- `emit_bzlmod_lock_artifact: true`
+  - preserves an existing root lock, but may also generate the first lock for a
+    new package
+  - refreshes the lock with `--lockfile_mode=update`, then validates targets
+    with `--lockfile_mode=error`
+  - uploads the result as the `bzlmod-lock` Actions artifact from the matrix lane
+    matching `publish_node_version`
+
+When both inputs are true, committed-lock verification remains fail-closed and
+the unchanged lock is also uploaded. The refresh/verification step checks that
+it is actually running on a GF self-hosted capability runner; there is no local
+or GitHub-hosted fallback. The artifact is evidence for a reviewed follow-up
+commit—the workflow never commits or pushes a consumer lock itself. Ensure
+`publish_node_version` is present in `node_versions` when requesting the
+artifact.
 
 ### `cache_backed`
 

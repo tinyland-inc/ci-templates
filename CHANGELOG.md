@@ -5,6 +5,19 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **TIN-3092: opt-in Bzlmod lock verification and remote refresh artifacts**
+  (MINOR) — `js-bazel-package.yml` now accepts two default-off inputs.
+  `verify_bzlmod_lock` preserves a clean tracked `MODULE.bazel.lock`, proves
+  `bazelisk mod deps --lockfile_mode=update` leaves it unchanged, enforces
+  `--lockfile_mode=error` for target validation, and checks it again afterward.
+  `emit_bzlmod_lock_artifact` performs the same GF-only refresh but uploads the
+  resulting lock as `bzlmod-lock`, allowing a new package or dependency bump to
+  carry remote-generated lock bytes into review without mutating or pushing the
+  caller checkout. Both inputs unset preserves the existing cleanup and Bazel
+  command path.
+
 ### Fixed
 
 - **`tinyland.repo.json`: retired the stale gitops-receiver assertions**
