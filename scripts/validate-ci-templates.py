@@ -7,6 +7,7 @@ import argparse
 import json
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 
@@ -295,6 +296,113 @@ def check_flywheel_reapi_proof_contract() -> int:
     return 0
 
 
+#: The step of `.github/actions/repo-manifest-validate/action.yml` that runs the
+#: bundled manifest validator. Guards below read THIS step's shell, not the file.
+MANIFEST_VALIDATE_STEP = "Validate repo manifest schema"
+MANIFEST_VALIDATOR_BASENAME = "manifest-schema-validate.py"
+
+_SHELL_ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
+_SHELL_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _expand_shell_vars(text: str, env: dict[str, str]) -> str:
+    """Substitute `$name`/`${name}` from `env` until it stops changing.
+
+    Enough to follow `validator="$action_dir/../../scripts/foo.py"` to a path
+    the guard can recognise. Unknown names are left verbatim (`${{ github.* }}`
+    is deliberately not an identifier, so it survives untouched).
+    """
+    for _ in range(8):
+        expanded = _SHELL_VAR.sub(
+            lambda m: env.get(m.group(1) or m.group(2), m.group(0)), text
+        )
+        if expanded == text:
+            return text
+        text = expanded
+    return text
+
+
+def _composite_step_run_body(action_text: str, step_name: str) -> str | None:
+    """Return the `run:` shell of the named composite step, or None if absent."""
+    lines = action_text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if re.match(rf"^(\s*)- name:\s*{re.escape(step_name)}\s*$", line):
+            start = index
+            indent = len(line) - len(line.lstrip())
+            break
+    if start is None:
+        return None
+
+    body: list[str] = []
+    run_indent = None
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped.startswith("- name:") and (len(line) - len(line.lstrip())) <= indent:
+            break  # next step at the same list level
+        if run_indent is None:
+            if re.match(r"^\s*run:\s*[|>]", line):
+                run_indent = len(line) - len(line.lstrip())
+            continue
+        if stripped and (len(line) - len(line.lstrip())) <= run_indent:
+            break  # dedented back out of the block scalar
+        body.append(line)
+    return None if run_indent is None else "\n".join(body)
+
+
+def manifest_validator_invocations(
+    action_text: str,
+) -> tuple[list[list[str]] | None, list[str]]:
+    """Every argv in the manifest-validation step that RUNS the bundled validator.
+
+    Why parse instead of `"--schemas-dir" in action_text`: a whole-file
+    substring test is satisfied by any occurrence anywhere, including the
+    comment in this very step that explains why `--schemas-dir` is passed. A
+    guard its own documentation satisfies proves nothing about the code — delete
+    the flag from the command, keep the paragraph above it, and the substring
+    test still passes while every consumer is silently re-pinned to v1. So:
+    take the step's `run:` block, drop comments (`shlex(comments=True)` knows a
+    `#` inside quotes is not one), resolve shell variables, and look at the
+    argument vectors that actually execute.
+
+    Returns `(invocations, unlexable_lines)`; `invocations` is None when the
+    step itself is missing. A line the lexer cannot read is reported rather than
+    skipped: a guard that quietly ignores what it cannot parse is the same
+    failure in a new place.
+    """
+    body = _composite_step_run_body(action_text, MANIFEST_VALIDATE_STEP)
+    if body is None:
+        return None, []
+
+    env: dict[str, str] = {}
+    invocations: list[list[str]] = []
+    unlexable: list[str] = []
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            tokens = shlex.split(line, comments=True)
+        except ValueError:
+            unlexable.append(line)
+            continue
+        if not tokens:
+            continue
+        assignment = _SHELL_ASSIGN.match(tokens[0]) if len(tokens) == 1 else None
+        if assignment:
+            env[assignment.group(1)] = _expand_shell_vars(assignment.group(2), env)
+            continue
+        argv = [_expand_shell_vars(token, env) for token in tokens]
+        interpreter = pathlib.PurePosixPath(argv[0]).name
+        runs_validator = argv[0].endswith(MANIFEST_VALIDATOR_BASENAME) or (
+            interpreter in {"python", "python3"}
+            and any(a.endswith(MANIFEST_VALIDATOR_BASENAME) for a in argv[1:])
+        )
+        if runs_validator:
+            invocations.append(argv)
+    return invocations, unlexable
+
+
 def check_cache_backed_optin_contract() -> int:
     """Guard the TIN-2110 opt-in cache-backed lane: default-off and cache-first.
 
@@ -391,13 +499,6 @@ def check_cache_backed_optin_contract() -> int:
         ok = False
     if action_path.exists():
         action_text = action_path.read_text(encoding="utf-8")
-        if "manifest-schema-validate.py" not in action_text:
-            print(
-                f"{action_path.relative_to(ROOT)}: repo-manifest-validate must use the "
-                "bundled stdlib validator (manifest-schema-validate.py)",
-                file=sys.stderr,
-            )
-            ok = False
         if "nix develop --command python3" in action_text:
             print(
                 f"{action_path.relative_to(ROOT)}: repo-manifest-validate must not depend on "
@@ -405,6 +506,84 @@ def check_cache_backed_optin_contract() -> int:
                 file=sys.stderr,
             )
             ok = False
+
+        # Everything below reads the ARGUMENT VECTORS of the validation step,
+        # never the file text. The action must hand the validator the schema
+        # DIRECTORY and let it route by schema_version: naming one schema file
+        # pins every consumer to that version, which is the shipped defect —
+        # `schemas/tinyland-repo-manifest.schema.json` hardcoded, so a repo on
+        # the published schema_version 2 failed with `at /schema_version: 1 was
+        # expected`, the gate blaming the manifest for a branch it lacked.
+        invocations, unlexable = manifest_validator_invocations(action_text)
+        rel_action = action_path.relative_to(ROOT)
+        if invocations is None:
+            print(
+                f"{rel_action}: no `{MANIFEST_VALIDATE_STEP}` step with a run: block; the "
+                "manifest gate's guards have nothing to read",
+                file=sys.stderr,
+            )
+            ok = False
+        elif unlexable:
+            print(
+                f"{rel_action}: cannot lex {len(unlexable)} line(s) of the "
+                f"`{MANIFEST_VALIDATE_STEP}` step ({unlexable[0]!r}); refusing to report a "
+                "verdict on shell this guard cannot read",
+                file=sys.stderr,
+            )
+            ok = False
+        elif not invocations:
+            print(
+                f"{rel_action}: the `{MANIFEST_VALIDATE_STEP}` step never executes "
+                f"scripts/{MANIFEST_VALIDATOR_BASENAME}; a comment naming it is not a gate",
+                file=sys.stderr,
+            )
+            ok = False
+        else:
+            for argv in invocations:
+                if "--schemas-dir" not in argv:
+                    print(
+                        f"{rel_action}: `{MANIFEST_VALIDATE_STEP}` runs the validator as "
+                        f"{shlex.join(argv)} — it must pass --schemas-dir and let "
+                        f"scripts/{MANIFEST_VALIDATOR_BASENAME} route by schema_version; "
+                        "naming a single schema file hardcodes one manifest version",
+                        file=sys.stderr,
+                    )
+                    ok = False
+                named = [
+                    a
+                    for a in argv
+                    if re.search(r"tinyland-repo-manifest[^/\s]*\.schema\.json", a)
+                ]
+                if named:
+                    print(
+                        f"{rel_action}: `{MANIFEST_VALIDATE_STEP}` passes {named[0]} to the "
+                        "validator, resolving a specific manifest schema itself; the "
+                        "version -> schema mapping belongs in SCHEMA_BY_VERSION "
+                        f"(scripts/{MANIFEST_VALIDATOR_BASENAME}) only",
+                        file=sys.stderr,
+                    )
+                    ok = False
+
+        # Every version the validator claims to support must actually be
+        # vendored here. A mapping entry with no file on disk is a version that
+        # is nominally supported and factually ungated.
+        validator_text = validator_path.read_text(encoding="utf-8")
+        mapped = re.findall(r"^\s*(\d+):\s*\"([^\"]+\.schema\.json)\",", validator_text, re.M)
+        if not mapped:
+            print(
+                f"{validator_path.relative_to(ROOT)}: SCHEMA_BY_VERSION parsed as empty; the "
+                "routing table is the whole gate and must not be silently unreadable",
+                file=sys.stderr,
+            )
+            ok = False
+        for version, schema_name in mapped:
+            if not (ROOT / "schemas" / schema_name).is_file():
+                print(
+                    f"{validator_path.relative_to(ROOT)}: schema_version {version} maps to "
+                    f"schemas/{schema_name}, which is not vendored in this repo",
+                    file=sys.stderr,
+                )
+                ok = False
 
     # TIN-2109: the contract script must DEFINE+ENFORCE the hardened gate behaviors.
     contract = contract_path.read_text(encoding="utf-8") if contract_path.exists() else ""
