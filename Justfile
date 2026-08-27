@@ -67,6 +67,14 @@ repo-manifest-validate:
     fi; \
     "${validator[@]}" scripts/validate-ci-templates.py manifest
 
+# Assert every vendored schema still matches schemas/VENDORED.json. Hermetic by
+# design: it compares recorded digests, and does NOT reach site.scaffold -- a
+# network call here would make every consumer's CI depend on another repo being
+# reachable. It catches a hand-edited copy, which is what a lock can catch
+# offline; upstream freshness is a separate, non-blocking question.
+vendored-schema-provenance-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py vendored-schema-provenance
+
 # Ensure internal ci-templates action refs resolve to checked-in sibling actions.
 internal-refs-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py internal-refs

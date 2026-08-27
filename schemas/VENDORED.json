@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "Provenance for schemas vendored from tinyland-inc/site.scaffold, which the",
+    "$id of both manifest schemas already names as the authority. Recording the",
+    "source revision and per-file digests is what makes the vendoring auditable:",
+    "before this file, ci-templates carried a COPY of the v1 schema with no lock",
+    "and no drift gate, and it had silently diverged from its source in BOTH",
+    "directions (ci-templates gained authorities.artifact_registry; site.scaffold",
+    "gained a gitops_receiver prohibition). Nothing compared them.",
+    "",
+    "v1 is recorded as DRIFTED on purpose. This change does not silently adopt",
+    "upstream's v1 bytes -- that would change what every consumer is validated",
+    "against, which is a separate decision with its own review. It records the",
+    "divergence so the drift gate can report it instead of nobody noticing."
+  ],
+  "source_repository": "tinyland-inc/site.scaffold",
+  "source_revision": "6c58bb630de1b474881532d60d801e2e5cbf09bf",
+  "files": [
+    {
+      "vendored": "schemas/tinyland-repo-manifest.v2.schema.json",
+      "source": "docs/schemas/tinyland-repo-manifest.v2.schema.json",
+      "sha256": "c7049f33e6098822c79736d9232a97609d3a052dda4d56e213f9fba4f12ad64b",
+      "state": "identical"
+    },
+    {
+      "vendored": "schemas/tinyland-repo-manifest.schema.json",
+      "source": "docs/schemas/tinyland-repo-manifest.schema.json",
+      "sha256": "4b8155126349ef226ead7e079e0917b3b8e91c2ecb3bc4f8de4ca1baad3887ec",
+      "upstream_sha256": "15965f1864c8d853805cf0596d5d1d76da536e09be46d05fd1cf8137f7122a4a",
+      "state": "drifted",
+      "state_note": "Known divergence, reported not reconciled. De-forking v1 is its own change."
+    }
+  ]
+}

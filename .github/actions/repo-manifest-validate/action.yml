@@ -35,9 +35,44 @@ runs:
       run: |
         set -euo pipefail
         action_dir="${{ github.action_path }}"
-        schema="$action_dir/../../../schemas/tinyland-repo-manifest.schema.json"
+        schema_dir="$action_dir/../../../schemas"
         validator="$action_dir/../../../scripts/manifest-schema-validate.py"
         manifest="${{ inputs.path }}"
+
+        if [[ ! -f "$manifest" ]]; then
+          echo "::error::repo manifest not found at $manifest"
+          exit 1
+        fi
+
+        # Dispatch on the manifest's OWN declared schema_version instead of
+        # hardcoding v1.
+        #
+        # Hardcoding v1 was worse than having no gate: it looked like coverage.
+        # A v2 manifest could not pass it -- MassageIthaca's real one fails with
+        # 19 errors, starting `additional property 'runtime_network' is not
+        # allowed` and `/schema_version: must equal const 1` -- so v2 adopters
+        # forked around the action with hand-rolled jq checks and ended up with
+        # LESS validation than before. Three repos are on v2 today
+        # (MassageIthaca, bulkload, medical-massage-specialists-infra).
+        #
+        # Unknown versions fail closed. A manifest declaring schema_version 3
+        # must not silently fall through to v2's rules.
+        declared="$(python3 -c "
+        import json, sys
+        with open(sys.argv[1], encoding='utf-8') as handle:
+            print(json.load(handle).get('schema_version', ''))
+        " "$manifest" 2>/dev/null || true)"
+
+        case "$declared" in
+          1)  schema="$schema_dir/tinyland-repo-manifest.schema.json" ;;
+          2)  schema="$schema_dir/tinyland-repo-manifest.v2.schema.json" ;;
+          "") echo "::error file=$manifest::manifest declares no schema_version; expected 1 or 2"
+              exit 1 ;;
+          *)  echo "::error file=$manifest::unsupported schema_version '$declared'; this action validates 1 and 2. Vendor the new schema into ci-templates/schemas and extend this dispatch rather than widening an existing schema."
+              exit 1 ;;
+        esac
+        echo "::notice::validating $manifest against schema_version $declared"
+
         if [[ ! -f "$schema" ]]; then
           echo "::error::ci-templates schema missing at $schema"
           exit 1
@@ -46,11 +81,6 @@ runs:
           echo "::error::ci-templates manifest validator missing at $validator"
           exit 1
         fi
-        if [[ ! -f "$manifest" ]]; then
-          echo "::error::repo manifest not found at $manifest"
-          exit 1
-        fi
-
         # Dependency-free, network-free validation (TIN-2109). The validator
         # prefers the authoritative `jsonschema` package when importable and
         # otherwise uses a stdlib JSON-Schema-subset fallback, so the gate works
