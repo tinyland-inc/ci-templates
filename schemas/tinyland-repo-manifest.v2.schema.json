@@ -1,0 +1,1062 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/schemas/tinyland-repo-manifest.v2.schema.json",
+	"title": "Tinyland repo manifest",
+	"description": "Declarative repo-shape manifest for Tinyland repos. This distinguishes org-wide rules from static-spoke, mothership, app/stateful spoke, application-owner-overlay, organization-execution-overlay, CI-template, bounded receiver, and infra-substrate contracts.",
+	"type": "object",
+	"required": [
+		"$schema",
+		"schema_version",
+		"repo",
+		"taxonomy",
+		"enrollment",
+		"runtime_network",
+		"contracts",
+		"boundaries",
+		"authorities",
+		"supply_chain"
+	],
+	"additionalProperties": false,
+	"properties": {
+		"$schema": {
+			"enum": [
+				"./docs/schemas/tinyland-repo-manifest.v2.schema.json",
+				"../../docs/schemas/tinyland-repo-manifest.v2.schema.json"
+			]
+		},
+		"schema_version": {
+			"const": 2
+		},
+		"scaffold_tag": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Release label carried by the scaffold repository itself. Spawned repositories use scaffold_origin with an exact commit instead of guessing ancestry from a tag."
+		},
+		"scaffold_origin": {
+			"type": "object",
+			"description": "Optional creation provenance for repositories actually spawned from tinyland-inc/site.scaffold. Repo role alone never implies scaffold ancestry.",
+			"required": ["repository", "commit_sha"],
+			"additionalProperties": false,
+			"properties": {
+				"repository": { "const": "tinyland-inc/site.scaffold" },
+				"commit_sha": {
+					"type": "string",
+					"pattern": "^(?!0{40}$)[0-9a-f]{40}$"
+				}
+			}
+		},
+		"repo": {
+			"type": "object",
+			"required": ["name", "github", "defaultBranch", "description"],
+			"additionalProperties": false,
+			"properties": {
+				"name": {
+					"type": "string",
+					"pattern": "^[A-Za-z0-9_.-]+$"
+				},
+				"github": {
+					"type": "string",
+					"pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+				},
+				"defaultBranch": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 128,
+					"pattern": "^(?!.*\\.\\.)(?!.*@\\{)[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$"
+				},
+				"domain": {
+					"type": "string",
+					"format": "hostname",
+					"maxLength": 253,
+					"pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
+				},
+				"description": {
+					"type": "string",
+					"minLength": 12
+				},
+				"linear": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"initiative": {
+							"type": "string",
+							"pattern": "^[A-Z]+-[0-9]+$"
+						},
+						"issue": {
+							"type": "string",
+							"pattern": "^[A-Z]+-[0-9]+$"
+						}
+					}
+				}
+			}
+		},
+		"taxonomy": {
+			"type": "object",
+			"required": ["primary_role", "layers"],
+			"additionalProperties": false,
+			"properties": {
+				"primary_role": {
+					"$ref": "#/$defs/repoRole"
+				},
+				"spawned_repo_role": {
+					"$ref": "#/$defs/repoRole",
+					"description": "For scaffold/template repos, the role created repos should declare."
+				},
+				"layers": {
+					"type": "array",
+					"minItems": 1,
+					"uniqueItems": true,
+					"items": {
+						"$ref": "#/$defs/taxonomyLayer"
+					}
+				}
+			}
+		},
+		"enrollment": {
+			"type": "object",
+			"description": "First-class declaration of forge/org execution enrollment. This is distinct from the application owner-overlay apply plane. bindingStatus=declared is source intent only; installed additionally requires an immutable receipt.",
+			"required": [
+				"forgeScope",
+				"organizationOverlay",
+				"organizationOverlayRole",
+				"organizationOverlayComposition",
+				"executionPool",
+				"substrateMode",
+				"bindingStatus"
+			],
+			"additionalProperties": false,
+			"properties": {
+				"forgeScope": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Forge account / org that owns the repo."
+				},
+				"organizationOverlay": {
+					"$ref": "#/$defs/repoReference",
+					"description": "Forge/org implementation overlay that owns GitHub App installation, ARC registration, grants, and runner enrollment. It does not imply application apply ownership."
+				},
+				"organizationOverlayRole": {
+					"enum": ["organization-execution-overlay", "application-owner-overlay"],
+					"description": "Declared role of the repository named by organizationOverlay. Co-located application overlays compose this authority; shared substrate/tooling repositories cannot stand in for it."
+				},
+				"organizationOverlayComposition": {
+					"enum": ["distinct", "co-located-application-overlay"],
+					"description": "Whether the forge/org execution plane is a distinct repo or intentionally co-located with an application-owner-overlay. Co-location composes two authorities; it does not collapse them."
+				},
+				"executionPool": {
+					"enum": [
+						"tinyland-nix",
+						"tinyland-nix-heavy",
+						"tinyland-nix-kvm",
+						"tinyland-nix-gpu",
+						"tinyland-docker",
+						"tinyland-dind"
+					],
+					"description": "Org-scoped capability pool used for the repository's ordinary source lane."
+				},
+				"substrateMode": {
+					"$ref": "#/$defs/substrateMode",
+					"description": "Authoritative Bazel substrate mode. compatibility-local-only = no shared cache; shared-cache-backed = cache-first (TIN-1997 Option D); executor-backed = REAPI executor (DEFINED but not selected here)."
+				},
+				"bindingStatus": { "enum": ["declared", "installed"] },
+				"bindingReceipt": { "$ref": "#/$defs/overlayBindingReceipt" }
+			},
+			"allOf": [
+				{
+					"if": { "properties": { "bindingStatus": { "const": "declared" } } },
+					"then": { "properties": { "bindingReceipt": false } },
+					"else": { "required": ["bindingReceipt"] }
+				}
+			]
+		},
+		"runtime_network": {
+			"type": "object",
+			"description": "Finite purpose-bound runtime egress declarations. They generate the browser Content Security Policy; the source scanner is defense in depth. A static role can never declare Tinyland broker access.",
+			"required": ["declarations"],
+			"additionalProperties": false,
+			"properties": {
+				"declarations": {
+					"type": "array",
+					"maxItems": 8,
+					"uniqueItems": true,
+					"items": { "$ref": "#/$defs/runtimeNetworkDeclaration" }
+				}
+			}
+		},
+		"contracts": {
+			"type": "object",
+			"required": ["agent_contract", "just", "nix", "github_actions", "secrets_scan", "conformance"],
+			"additionalProperties": false,
+			"properties": {
+				"agent_contract": {
+					"type": "string"
+				},
+				"just": {
+					"type": "string"
+				},
+				"nix": {
+					"type": "string"
+				},
+				"github_actions": {
+					"type": "string"
+				},
+				"secrets_scan": {
+					"enum": ["gitleaks", "none"]
+				},
+				"conformance": {
+					"type": "string"
+				}
+			}
+		},
+		"boundaries": {
+			"type": "object",
+			"required": [
+				"owns_runtime_backend",
+				"owns_auth",
+				"owns_payments",
+				"owns_activitypub_delivery",
+				"owns_live_broker_fetch",
+				"owns_static_projection_ingest",
+				"owns_gitops_apply",
+				"owns_cloudflare_mutation",
+				"owns_bazel_module_authority",
+				"owns_application_pins",
+				"owns_application_state",
+				"owns_secret_declarations",
+				"owns_application_workloads",
+				"owns_application_zone_dns",
+				"owns_application_mail_policy",
+				"owns_application_database",
+				"owns_forge_app_installations",
+				"owns_runner_enrollment",
+				"owns_org_grants"
+			],
+			"additionalProperties": false,
+			"properties": {
+				"owns_runtime_backend": { "type": "boolean" },
+				"owns_auth": { "type": "boolean" },
+				"owns_payments": { "type": "boolean" },
+				"owns_activitypub_delivery": { "type": "boolean" },
+				"owns_live_broker_fetch": { "type": "boolean" },
+				"owns_static_projection_ingest": { "type": "boolean" },
+				"owns_gitops_apply": { "type": "boolean" },
+				"owns_cloudflare_mutation": { "type": "boolean" },
+				"owns_bazel_module_authority": { "type": "boolean" },
+				"owns_application_pins": { "type": "boolean" },
+				"owns_application_state": { "type": "boolean" },
+				"owns_secret_declarations": { "type": "boolean" },
+				"owns_application_workloads": { "type": "boolean" },
+				"owns_application_zone_dns": { "type": "boolean" },
+				"owns_application_mail_policy": { "type": "boolean" },
+				"owns_application_database": { "type": "boolean" },
+				"owns_forge_app_installations": { "type": "boolean" },
+				"owns_runner_enrollment": { "type": "boolean" },
+				"owns_org_grants": { "type": "boolean" }
+			}
+		},
+		"authorities": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"content_authority": { "type": "string" },
+				"application_source_authority": { "$ref": "#/$defs/repoReference" },
+				"application_binding": { "$ref": "#/$defs/applicationOwnerBinding" },
+				"cluster_substrate_authority": { "$ref": "#/$defs/repoReference" },
+				"mail_substrate_authority": { "$ref": "#/$defs/repoReference" },
+				"host_policy_authority": { "$ref": "#/$defs/repoReference" },
+				"apply_plane": { "$ref": "#/$defs/applyPlaneAuthority" },
+				"ci_templates": { "type": "string" },
+				"flywheel_product_authority": {
+					"const": "tinyland-inc/GloriousFlywheel",
+					"description": "Authority for reusable GloriousFlywheel execution products: ARC and runner classes, Nix, Attic, Bazel cache and RBE, and remote test. This does not grant tenant apply authority."
+				},
+				"cache_rbe_authority": { "const": "tinyland-inc/GloriousFlywheel" },
+				"tofu_module_authority": {
+					"const": "tinyland-inc/site.scaffold"
+				},
+				"package_registry": { "type": "string" }
+			}
+		},
+		"supply_chain": {
+			"type": "object",
+			"required": ["sbom"],
+			"additionalProperties": false,
+			"properties": {
+				"sbom": {
+					"type": "object",
+					"required": ["status", "formats"],
+					"additionalProperties": false,
+					"properties": {
+						"status": {
+							"enum": ["not-required", "planned", "recipe-available", "generated"]
+						},
+						"formats": {
+							"type": "array",
+							"uniqueItems": true,
+							"items": {
+								"enum": ["CycloneDX JSON", "SPDX JSON"]
+							}
+						},
+						"notes": {
+							"type": "string"
+						}
+					}
+				}
+			}
+		}
+	},
+	"allOf": [
+		{
+			"if": {
+				"required": ["taxonomy"],
+				"properties": {
+					"taxonomy": {
+						"required": ["layers"],
+						"properties": {
+							"layers": { "contains": { "const": "bazel-package-cache-rbe" } }
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"authorities": { "required": ["flywheel_product_authority"] }
+				}
+			}
+		},
+		{
+			"if": {
+				"required": ["enrollment"],
+				"properties": {
+					"enrollment": {
+						"required": ["substrateMode"],
+						"properties": {
+							"substrateMode": {
+								"enum": ["shared-cache-backed", "executor-backed"]
+							}
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"authorities": { "required": ["cache_rbe_authority"] }
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": {
+								"enum": ["static-spoke-scaffold", "static-spoke", "app-stateful-spoke"]
+							}
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": { "repo": { "required": ["domain"] } }
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": { "not": { "const": "application-owner-overlay" } }
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"boundaries": {
+						"properties": {
+							"owns_application_pins": { "const": false },
+							"owns_application_state": { "const": false },
+							"owns_secret_declarations": { "const": false },
+							"owns_application_workloads": { "const": false },
+							"owns_application_zone_dns": { "const": false },
+							"owns_application_mail_policy": { "const": false },
+							"owns_application_database": { "const": false }
+						}
+					},
+					"authorities": {
+						"not": {
+							"anyOf": [
+								{ "required": ["application_source_authority"] },
+								{ "required": ["application_binding"] },
+								{ "required": ["mail_substrate_authority"] }
+							]
+						}
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": {
+								"not": { "enum": ["application-owner-overlay", "organization-execution-overlay"] }
+							}
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"authorities": {
+						"not": {
+							"anyOf": [{ "required": ["cluster_substrate_authority"] }, { "required": ["host_policy_authority"] }]
+						}
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": {
+								"not": {
+									"enum": [
+										"application-owner-overlay",
+										"organization-execution-overlay",
+										"gitops-receiver",
+										"infra-substrate"
+									]
+								}
+							}
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"boundaries": {
+						"properties": {
+							"owns_gitops_apply": { "const": false },
+							"owns_cloudflare_mutation": { "const": false }
+						}
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": {
+								"not": { "enum": ["application-owner-overlay", "organization-execution-overlay"] }
+							}
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"boundaries": {
+						"properties": {
+							"owns_forge_app_installations": { "const": false },
+							"owns_runner_enrollment": { "const": false },
+							"owns_org_grants": { "const": false }
+						}
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": {
+								"not": { "enum": ["static-spoke-scaffold", "static-spoke", "app-stateful-spoke"] }
+							}
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"authorities": {
+						"not": { "required": ["apply_plane"] }
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": { "const": "app-stateful-spoke" }
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"taxonomy": {
+						"not": { "required": ["spawned_repo_role"] },
+						"properties": {
+							"layers": {
+								"allOf": [
+									{ "contains": { "const": "org-wide-repo-contract" } },
+									{ "contains": { "const": "app-stateful-spoke" } }
+								],
+								"items": {
+									"enum": ["org-wide-repo-contract", "bazel-package-cache-rbe", "app-stateful-spoke"]
+								}
+							}
+						}
+					},
+					"boundaries": {
+						"properties": {
+							"owns_runtime_backend": { "const": true },
+							"owns_gitops_apply": { "const": false },
+							"owns_cloudflare_mutation": { "const": false },
+							"owns_bazel_module_authority": { "const": false },
+							"owns_application_pins": { "const": false },
+							"owns_application_state": { "const": false },
+							"owns_secret_declarations": { "const": false },
+							"owns_application_workloads": { "const": false },
+							"owns_application_zone_dns": { "const": false },
+							"owns_application_mail_policy": { "const": false },
+							"owns_application_database": { "const": false }
+						}
+					},
+					"authorities": {
+						"required": ["apply_plane"],
+						"not": { "required": ["gitops_receiver"] }
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": { "const": "static-spoke" }
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"taxonomy": {
+						"not": { "required": ["spawned_repo_role"] },
+						"properties": {
+							"layers": {
+								"allOf": [
+									{ "contains": { "const": "org-wide-repo-contract" } },
+									{ "contains": { "const": "static-spoke" } }
+								],
+								"items": {
+									"enum": ["org-wide-repo-contract", "bazel-package-cache-rbe", "static-spoke"]
+								}
+							}
+						}
+					},
+					"boundaries": {
+						"properties": {
+							"owns_runtime_backend": { "const": false },
+							"owns_auth": { "const": false },
+							"owns_payments": { "const": false },
+							"owns_activitypub_delivery": { "const": false },
+							"owns_live_broker_fetch": { "const": false },
+							"owns_gitops_apply": { "const": false },
+							"owns_cloudflare_mutation": { "const": false },
+							"owns_bazel_module_authority": { "const": false },
+							"owns_application_pins": { "const": false },
+							"owns_application_state": { "const": false },
+							"owns_secret_declarations": { "const": false },
+							"owns_application_workloads": { "const": false },
+							"owns_application_zone_dns": { "const": false },
+							"owns_application_mail_policy": { "const": false },
+							"owns_application_database": { "const": false }
+						}
+					},
+					"authorities": {
+						"required": ["apply_plane"],
+						"not": { "required": ["gitops_receiver"] }
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": { "const": "static-spoke-scaffold" }
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"taxonomy": {
+						"required": ["spawned_repo_role"],
+						"properties": {
+							"spawned_repo_role": { "const": "static-spoke" },
+							"layers": {
+								"allOf": [
+									{ "contains": { "const": "org-wide-repo-contract" } },
+									{ "contains": { "const": "static-spoke" } }
+								],
+								"items": {
+									"enum": ["org-wide-repo-contract", "bazel-package-cache-rbe", "static-spoke"]
+								}
+							}
+						}
+					},
+					"boundaries": {
+						"properties": {
+							"owns_runtime_backend": { "const": false },
+							"owns_auth": { "const": false },
+							"owns_payments": { "const": false },
+							"owns_activitypub_delivery": { "const": false },
+							"owns_live_broker_fetch": { "const": false },
+							"owns_gitops_apply": { "const": false },
+							"owns_cloudflare_mutation": { "const": false },
+							"owns_bazel_module_authority": { "const": false },
+							"owns_application_pins": { "const": false },
+							"owns_application_state": { "const": false },
+							"owns_secret_declarations": { "const": false },
+							"owns_application_workloads": { "const": false },
+							"owns_application_zone_dns": { "const": false },
+							"owns_application_mail_policy": { "const": false },
+							"owns_application_database": { "const": false }
+						}
+					},
+					"authorities": {
+						"required": ["apply_plane"],
+						"not": { "required": ["gitops_receiver"] }
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": {
+						"properties": {
+							"primary_role": { "const": "application-owner-overlay" }
+						}
+					}
+				}
+			},
+			"then": {
+				"properties": {
+					"taxonomy": {
+						"not": { "required": ["spawned_repo_role"] },
+						"properties": {
+							"layers": {
+								"allOf": [
+									{ "contains": { "const": "org-wide-repo-contract" } },
+									{ "contains": { "const": "bazel-package-cache-rbe" } },
+									{ "contains": { "const": "application-owner-overlay" } }
+								],
+								"items": {
+									"enum": [
+										"org-wide-repo-contract",
+										"bazel-package-cache-rbe",
+										"application-owner-overlay",
+										"organization-execution-overlay"
+									]
+								}
+							}
+						}
+					},
+					"boundaries": {
+						"required": [
+							"owns_application_pins",
+							"owns_application_state",
+							"owns_secret_declarations",
+							"owns_application_workloads",
+							"owns_application_zone_dns",
+							"owns_application_mail_policy",
+							"owns_application_database"
+						],
+						"properties": {
+							"owns_runtime_backend": { "const": false },
+							"owns_auth": { "const": false },
+							"owns_payments": { "const": false },
+							"owns_activitypub_delivery": { "const": false },
+							"owns_live_broker_fetch": { "const": false },
+							"owns_static_projection_ingest": { "const": false },
+							"owns_gitops_apply": { "const": true },
+							"owns_cloudflare_mutation": { "type": "boolean" },
+							"owns_bazel_module_authority": { "const": false },
+							"owns_application_pins": { "const": true },
+							"owns_application_state": { "const": true },
+							"owns_secret_declarations": { "const": true },
+							"owns_application_workloads": { "const": true },
+							"owns_application_zone_dns": { "type": "boolean" },
+							"owns_application_mail_policy": { "const": true },
+							"owns_application_database": { "type": "boolean" }
+						}
+					},
+					"authorities": {
+						"not": {
+							"anyOf": [{ "required": ["gitops_receiver"] }, { "required": ["apply_plane"] }]
+						},
+						"required": [
+							"application_source_authority",
+							"application_binding",
+							"cluster_substrate_authority",
+							"mail_substrate_authority",
+							"host_policy_authority",
+							"flywheel_product_authority",
+							"cache_rbe_authority",
+							"tofu_module_authority"
+						],
+						"properties": {
+							"cluster_substrate_authority": { "const": "tinyland-inc/blahaj" },
+							"mail_substrate_authority": { "const": "tinyland-inc/blahaj" },
+							"host_policy_authority": { "const": "tinyland-inc/lab" },
+							"flywheel_product_authority": { "const": "tinyland-inc/GloriousFlywheel" },
+							"cache_rbe_authority": { "const": "tinyland-inc/GloriousFlywheel" },
+							"tofu_module_authority": {
+								"const": "tinyland-inc/site.scaffold"
+							}
+						}
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"taxonomy": { "properties": { "primary_role": { "const": "organization-execution-overlay" } } }
+				}
+			},
+			"then": {
+				"properties": {
+					"taxonomy": {
+						"not": { "required": ["spawned_repo_role"] },
+						"properties": {
+							"layers": {
+								"allOf": [
+									{ "contains": { "const": "org-wide-repo-contract" } },
+									{ "contains": { "const": "bazel-package-cache-rbe" } },
+									{ "contains": { "const": "organization-execution-overlay" } }
+								],
+								"items": {
+									"enum": ["org-wide-repo-contract", "bazel-package-cache-rbe", "organization-execution-overlay"]
+								}
+							}
+						}
+					},
+					"boundaries": {
+						"properties": {
+							"owns_runtime_backend": { "const": false },
+							"owns_auth": { "const": false },
+							"owns_payments": { "const": false },
+							"owns_activitypub_delivery": { "const": false },
+							"owns_live_broker_fetch": { "const": false },
+							"owns_static_projection_ingest": { "const": false },
+							"owns_gitops_apply": { "const": true },
+							"owns_cloudflare_mutation": { "const": false },
+							"owns_bazel_module_authority": { "const": false },
+							"owns_application_pins": { "const": false },
+							"owns_application_state": { "const": false },
+							"owns_secret_declarations": { "const": false },
+							"owns_application_workloads": { "const": false },
+							"owns_application_zone_dns": { "const": false },
+							"owns_application_mail_policy": { "const": false },
+							"owns_application_database": { "const": false },
+							"owns_forge_app_installations": { "const": true },
+							"owns_runner_enrollment": { "const": true },
+							"owns_org_grants": { "const": true }
+						}
+					},
+					"authorities": {
+						"not": {
+							"anyOf": [
+								{ "required": ["application_source_authority"] },
+								{ "required": ["application_binding"] },
+								{ "required": ["apply_plane"] }
+							]
+						},
+						"required": [
+							"cluster_substrate_authority",
+							"host_policy_authority",
+							"flywheel_product_authority",
+							"cache_rbe_authority",
+							"tofu_module_authority"
+						],
+						"properties": {
+							"cluster_substrate_authority": { "const": "tinyland-inc/blahaj" },
+							"host_policy_authority": { "const": "tinyland-inc/lab" },
+							"flywheel_product_authority": { "const": "tinyland-inc/GloriousFlywheel" },
+							"cache_rbe_authority": { "const": "tinyland-inc/GloriousFlywheel" },
+							"tofu_module_authority": {
+								"const": "tinyland-inc/site.scaffold"
+							}
+						}
+					}
+				}
+			}
+		}
+	],
+	"$defs": {
+		"repoReference": {
+			"type": "string",
+			"pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+		},
+		"runtimeNetworkDeclaration": {
+			"type": "object",
+			"required": ["purpose", "module", "url", "method"],
+			"additionalProperties": false,
+			"properties": {
+				"purpose": { "const": "contact-submit" },
+				"module": {
+					"type": "string",
+					"pattern": "^src/(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+\\.(?:js|jsx|mjs|mts|svelte|ts|tsx)$"
+				},
+				"url": {
+					"type": "string",
+					"format": "uri",
+					"pattern": "^https://(?![^/?#]*\\./)[^/?#]+/[^/?#]+(?:/[^/?#]+)*$"
+				},
+				"method": { "const": "POST" }
+			}
+		},
+		"applyPlaneAuthority": {
+			"type": "object",
+			"required": ["target"],
+			"additionalProperties": false,
+			"properties": {
+				"installed": {
+					"type": "object",
+					"description": "Inventory of the inherited compatibility receiver. status=not-installed means source may remain for migration history but no receiver is bound in this repository.",
+					"required": ["receiver", "status", "exception_register", "receipts"],
+					"additionalProperties": false,
+					"properties": {
+						"receiver": { "const": "tinyland-inc/blahaj" },
+						"status": {
+							"enum": ["not-installed", "transitional-nonconformance", "adopted-live-exception", "retired"]
+						},
+						"exception_register": { "type": "string", "minLength": 1 },
+						"receipts": { "$ref": "#/$defs/evidenceReceipts" },
+						"evidence_ref": { "$ref": "#/$defs/overlayBindingReceipt" }
+					},
+					"allOf": [
+						{
+							"if": {
+								"properties": { "status": { "const": "adopted-live-exception" } }
+							},
+							"then": {
+								"required": ["evidence_ref"],
+								"properties": {
+									"receipts": { "$ref": "#/$defs/observedEvidenceReceipts" }
+								}
+							},
+							"else": {
+								"properties": {
+									"receipts": { "$ref": "#/$defs/unobservedEvidenceReceipts" }
+								}
+							}
+						}
+					]
+				},
+				"target": {
+					"type": "object",
+					"description": "Binding from application source to its dedicated owner overlay. Runtime PINNED/RUNNING/SERVED evidence remains overlay-owned; an installed app binding stores only an immutable pointer to the overlay's binding receipt.",
+					"required": ["authority_class", "binding_status"],
+					"additionalProperties": false,
+					"properties": {
+						"authority_class": { "const": "dedicated-owner-overlay" },
+						"repository": { "$ref": "#/$defs/repoReference" },
+						"binding_status": {
+							"enum": ["not-installed", "source-present", "installed"]
+						},
+						"binding_receipt": {
+							"allOf": [
+								{ "$ref": "#/$defs/overlayBindingReceipt" },
+								{ "properties": { "path": { "const": "tinyland.repo.json" } } }
+							]
+						}
+					},
+					"allOf": [
+						{
+							"if": {
+								"properties": { "binding_status": { "const": "not-installed" } }
+							},
+							"then": {
+								"properties": { "repository": false, "binding_receipt": false }
+							}
+						},
+						{
+							"if": {
+								"properties": { "binding_status": { "const": "source-present" } }
+							},
+							"then": {
+								"required": ["repository"],
+								"properties": { "binding_receipt": false }
+							}
+						},
+						{
+							"if": {
+								"properties": { "binding_status": { "const": "installed" } }
+							},
+							"then": { "required": ["repository", "binding_receipt"] }
+						}
+					]
+				}
+			}
+		},
+		"overlayBindingReceipt": {
+			"type": "object",
+			"required": ["repository", "commit_sha", "path"],
+			"additionalProperties": false,
+			"properties": {
+				"repository": { "$ref": "#/$defs/repoReference" },
+				"commit_sha": {
+					"type": "string",
+					"pattern": "^(?!0{40}$)[0-9a-f]{40}$"
+				},
+				"path": {
+					"type": "string",
+					"pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$",
+					"minLength": 1
+				}
+			}
+		},
+		"applicationOwnerBinding": {
+			"type": "object",
+			"description": "Overlay-local admission binding for exactly one application source, approved PR-intent zone, role, artifact repository, and approved source workflow. The zone may bind the source's distinct preview_domain; incoming intent is checked against this object and never treated as its own trust root.",
+			"required": [
+				"source_repository",
+				"source_role",
+				"application",
+				"zone",
+				"default_branch",
+				"artifact_repository",
+				"artifact_workflow"
+			],
+			"additionalProperties": false,
+			"properties": {
+				"source_repository": { "$ref": "#/$defs/repoReference" },
+				"source_role": { "enum": ["static-spoke", "app-stateful-spoke"] },
+				"application": {
+					"type": "string",
+					"pattern": "^[a-z][a-z0-9-]{1,62}$"
+				},
+				"zone": {
+					"type": "string",
+					"format": "hostname",
+					"maxLength": 253,
+					"pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+					"description": "Independently reviewed PR-intent zone. Binding it does not itself authorize DNS, route, Access, workload, or exposure."
+				},
+				"default_branch": {
+					"type": "string",
+					"pattern": "^(?!/)(?!.*\\.\\.)(?!.*//)[A-Za-z0-9._/-]+$"
+				},
+				"artifact_repository": {
+					"type": "string",
+					"pattern": "^ghcr\\.io/[a-z0-9](?:[a-z0-9._-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$"
+				},
+				"artifact_workflow": {
+					"type": "string",
+					"pattern": "^\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$"
+				}
+			}
+		},
+		"evidenceReceipts": {
+			"type": "object",
+			"required": ["pinned", "running", "served"],
+			"additionalProperties": false,
+			"properties": {
+				"pinned": { "enum": ["not-observed", "observed"] },
+				"running": { "enum": ["not-observed", "observed"] },
+				"served": { "enum": ["not-observed", "observed"] }
+			},
+			"allOf": [
+				{
+					"if": { "properties": { "served": { "const": "observed" } } },
+					"then": {
+						"properties": {
+							"pinned": { "const": "observed" },
+							"running": { "const": "observed" }
+						}
+					}
+				},
+				{
+					"if": { "properties": { "running": { "const": "observed" } } },
+					"then": {
+						"properties": { "pinned": { "const": "observed" } }
+					}
+				}
+			]
+		},
+		"unobservedEvidenceReceipts": {
+			"allOf": [
+				{ "$ref": "#/$defs/evidenceReceipts" },
+				{
+					"properties": {
+						"pinned": { "const": "not-observed" },
+						"running": { "const": "not-observed" },
+						"served": { "const": "not-observed" }
+					}
+				}
+			]
+		},
+		"observedEvidenceReceipts": {
+			"allOf": [
+				{ "$ref": "#/$defs/evidenceReceipts" },
+				{
+					"properties": {
+						"pinned": { "const": "observed" },
+						"running": { "const": "observed" },
+						"served": { "const": "observed" }
+					}
+				}
+			]
+		},
+		"substrateMode": {
+			"enum": ["compatibility-local-only", "shared-cache-backed", "executor-backed"]
+		},
+		"repoRole": {
+			"enum": [
+				"static-spoke-scaffold",
+				"static-spoke",
+				"mothership",
+				"app-stateful-spoke",
+				"application-owner-overlay",
+				"organization-execution-overlay",
+				"package-producer",
+				"package-consumer",
+				"package-authority",
+				"ci-template-library",
+				"gitops-receiver",
+				"infra-substrate",
+				"org-utility"
+			]
+		},
+		"taxonomyLayer": {
+			"enum": [
+				"org-wide-repo-contract",
+				"bazel-package-cache-rbe",
+				"static-spoke",
+				"mothership",
+				"app-stateful-spoke",
+				"application-owner-overlay",
+				"organization-execution-overlay",
+				"gitops-receiver",
+				"ci-template-library",
+				"infra-substrate"
+			]
+		}
+	}
+}

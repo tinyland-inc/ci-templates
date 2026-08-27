@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import re
@@ -1030,6 +1031,69 @@ def check_lanes_schema_runner_class() -> int:
     return 0
 
 
+def check_vendored_schema_provenance() -> int:
+    """Assert every vendored schema still matches its recorded digest.
+
+    ci-templates carries COPIES of schemas whose own `$id` names
+    tinyland-inc/site.scaffold as the authority. Before schemas/VENDORED.json
+    existed there was no lock and no gate, and the v1 copy had silently
+    diverged from its source in BOTH directions -- ci-templates gained
+    `authorities.artifact_registry`, site.scaffold gained a `gitops_receiver`
+    prohibition -- with nothing comparing them.
+
+    This gate is deliberately HERMETIC: it compares the vendored bytes to the
+    digests recorded in VENDORED.json, and does NOT reach out to site.scaffold.
+    A network call would make every consumer's CI depend on another repository
+    being reachable. What it catches is the thing a lock can catch offline: a
+    hand-edit to a vendored copy that never went through a re-vendor.
+
+    Upstream freshness is a different question and needs a different, non-
+    blocking mechanism -- the same split lab uses for its repo-contract source
+    locks.
+    """
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    record_path = root / "schemas" / "VENDORED.json"
+    if not record_path.is_file():
+        print(f"::error::missing vendoring record at {record_path}")
+        return 1
+
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    failures = 0
+    for entry in record.get("files", []):
+        vendored = root / entry["vendored"]
+        if not vendored.is_file():
+            print(f"::error::vendored schema missing: {entry['vendored']}")
+            failures += 1
+            continue
+        actual = hashlib.sha256(vendored.read_bytes()).hexdigest()
+        expected = entry["sha256"]
+        if actual != expected:
+            print(
+                f"::error file={entry['vendored']}::vendored schema does not match "
+                f"schemas/VENDORED.json (recorded {expected[:16]}, found {actual[:16]}). "
+                "Re-vendor from the recorded source revision instead of hand-editing "
+                "the copy, and update the digest in the same change."
+            )
+            failures += 1
+            continue
+        state = entry.get("state", "identical")
+        print(f"vendored ok: {entry['vendored']} ({state})")
+        if state == "drifted":
+            # Reported, not failed. The divergence is known and de-forking it
+            # is a separate decision; what must not happen is it going unnoticed.
+            print(
+                f"::notice file={entry['vendored']}::known divergence from "
+                f"{record['source_repository']}: {entry.get('state_note', '')}"
+            )
+
+    if failures:
+        return 1
+    print(f"all vendored schemas match schemas/VENDORED.json "
+          f"(source {record['source_repository']} @ {record['source_revision'][:12]})")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1042,12 +1106,15 @@ def main() -> int:
             "cache-backed-optin-contract",
             "rust-bazel-application-contract",
             "lanes-schema-runner-class",
+            "vendored-schema-provenance",
         ],
     )
     args = parser.parse_args()
 
     if args.check == "manifest":
         return validate_manifest()
+    if args.check == "vendored-schema-provenance":
+        return check_vendored_schema_provenance()
     if args.check == "js-bazel-runner-contract":
         return check_js_bazel_package_runner_contract()
     if args.check == "flywheel-reapi-proof-contract":
