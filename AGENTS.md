@@ -1,5 +1,9 @@
 # AGENTS.md — tinyland-inc/ci-templates
 
+> **REALITY — 2026-08-28:** Neo is a teletype/control machine. Agents never run
+> tests, builds, Bazel/Bazelisk, Nix, containers, or development servers here.
+> Repository validation is remote, exact-head, and GF-only.
+
 Operator/agent guide for the shared Tinyland CI surface. This repo is a
 **reusable** GitHub Actions library consumed by ~190 repos. Treat every change as
 a fleet-wide change.
@@ -46,14 +50,14 @@ a fleet-wide change.
    composite/workflow from validated env.
 5. **Amend `CHANGELOG.md` `## [Unreleased]`** in every feature/fix PR. Release
    PRs move that content into the dated version section.
-6. **Run `just check` before pushing** (or `nix develop --command just check`).
+6. **GF-only validation.** Never execute `just check`, Nix, Bazel/Bazelisk,
+   a build, a test, a container, or a development server locally on Neo.
+   Dispatch the repo-managed workflow and cite its exact-head GF receipt.
 
-## Local validation
+## GF-only validation
 
-```bash
-just check                       # full suite
-nix develop --command just check # if tools are not on PATH
-```
+The repository workflow executes `just check` on the admitted GF capability
+runner. An open PR, a local syntax read, or a local command is not proof.
 
 `just check` parses all workflow/action YAML + JSON schemas, validates
 `tinyland.repo.json`, asserts internal action refs resolve, traverses the
@@ -75,8 +79,8 @@ enrollment out to spokes.
   the `flywheel-bazel` composite + `flywheel-reapi-proof` cover executor lanes
   separately.
 - **Enroll** by setting `cache_backed: true` on the `js-bazel-package.yml`
-  consumer call. When unset, the existing plain
-  `bazelisk build … --verbose_failures` path runs byte-identically.
+  consumer call. Both modes use the exact runner-custodied
+  `CI_BAZELISK_BIN`; the cache-backed mode adds only the verified cache flags.
 - **Endpoints are never baked.** `bazelrc/ci-cached.bazelrc` defines endpoint-free
   `:ci-cached` behavior; the workflow injects `--remote_cache=$BAZEL_REMOTE_CACHE`
   after the fail-closed `scripts/cache-attachment-contract.sh --strict` gate.
@@ -88,10 +92,10 @@ enrollment out to spokes.
 - **Real attach, not nominal.** Enrollment counts only when the build log shows
   remote cache hit/transfer lines. A green build on a `tinyland-nix` runner with
   only `--disk_cache` is NOT enrollment and must be reported as such.
-- **Self-verify** locally with `scripts/cache-attachment-contract.sh --strict`
-  (classifies `compatibility-local-only` / `shared-cache-backed` /
-  `executor-backed`; rejects unexpanded `${…}` placeholders, non-`grpc`/`http`
-  endpoints, and localhost without `GF_BAZEL_ALLOW_LOCALHOST_PROOF=true`).
+- **Verify only on GF** through the pinned `cache-attachment-validate`
+  composite. It classifies `compatibility-local-only` /
+  `shared-cache-backed` / `executor-backed` and rejects placeholder,
+  non-routable, or unauthorised endpoint shapes.
 
 See `docs/js-bazel-package.md` (`cache_backed`) for the consumer-facing details.
 
@@ -121,7 +125,7 @@ call (runner_mode must resolve to an org capability-class runner — never
 ```yaml
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v2.5.1
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v3.1.0
     with:
       runner_mode: repo_owned
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
@@ -141,7 +145,7 @@ What you get, deterministically:
   **rejected** — a missing substrate is a deterministic failure, never a degrade
   to a GitHub-hosted build;
 - the fetch fallback for the contract script is pinned to the immutable releasing
-  tag (`v2.5.1`), so a pure-consumer spoke gets a reproducible fetch.
+  tag (`v3.1.0`), so a pure-consumer spoke gets a reproducible fetch.
 
 **Executor-backed is defined but not selected.** If a repo ever declares
 `enrollment.substrateMode: executor-backed`, the SAME gate requires the full

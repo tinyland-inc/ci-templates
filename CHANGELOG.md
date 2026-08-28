@@ -136,9 +136,12 @@ Versioning: [SemVer 2.0](https://semver.org/).
   unused standalone `npm-publish.yml` workflow and its live operator guide are
   removed. The reusable surface also drops Node/pnpm setup and arbitrary
   prepare/lint/typecheck/test/build/package command inputs: `bazel_targets` is
-  the execution authority. Bazel validation now requires the GF/Nix-provided
-  `bazelisk` binary
-  and fails closed instead of installing Bazelisk through `npx`. Bazel-internal
+  the execution authority. Bazel validation now uses only the exact,
+  root-custodied `TINYLAND_CI_BAZELISK_BIN` path and fails closed instead of
+  selecting PATH or installing Bazelisk through `npx`. Fork PRs are rejected
+  before GF scheduling; permissions are clamped read-only; checkout is exact and
+  credential-free; cache proof comes from an immutable template action; and
+  private owner-scoped API archives receive the read helper. Bazel-internal
   pnpm toolchains, consumer `npm_translate_lock`, and Bazel-built package targets
   remain valid build mechanics; publication authority is the immutable source
   tag/archive followed by a reviewed append-only BCR entry. Exact v3 tags and

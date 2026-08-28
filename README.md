@@ -227,7 +227,7 @@ Set `attic-public-read: "true"` on any of the three to opt in. What flips:
 
 | Workflow | Purpose |
 |---|---|
-| `js-bazel-package.yml` | Next-major JS/TS package validation: Bzlmod/BCR-only release authority, GF/Nix-provided Bazelisk, optional committed-lock verification/remote lock artifact, and an opt-in `cache_backed` lane. Consumer `npm_translate_lock` and package-manager toolchains remain inside `MODULE.bazel`/`BUILD.bazel`; the workflow exposes no arbitrary npm/pnpm command lane and no npmjs or GitHub Packages publication path. |
+| `js-bazel-package.yml` | Next-major JS/TS package validation: Bzlmod/BCR-only release authority, runner-custodied exact Bazelisk, optional committed-lock verification/remote lock artifact, and an opt-in `cache_backed` lane. Consumer `npm_translate_lock` and package-manager toolchains remain inside `MODULE.bazel`/`BUILD.bazel`; the workflow exposes no arbitrary npm/pnpm command lane and no npmjs or GitHub Packages publication path. |
 | **`rust-bazel-application.yml`** | Opt-in/default-off native Darwin/Linux Rust application validation with Bazel-only rustfmt, clippy, build, unit, integration, and package targets; cache reads are runtime-attached and writes require an explicitly enabled protected push ref. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
 | **`spoke-lane-env.yml`** *(deprecated)* | Retired-era Blahaj-dispatch PR-env workflow, kept callable only. The PR-env producer is the product's owner-overlay repository — see site.scaffold `docs/patterns/owner-overlay-apply-plane.md` and the merged scaffold #119 recut. Do not point a new spoke at it. |

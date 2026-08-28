@@ -34,14 +34,14 @@ on:
         type: string
         default: "3"
       trusted_module_owners:
-        description: "Comma-separated GitHub owners whose github.com/raw.githubusercontent.com fetch URIs receive the registry token via the Bazel credential helper. Org-parameterized (TIN-2353): a tenant org lists itself to fetch its own private Bazel modules; tinyland-inc remains the default."
+        description: "Comma-separated GitHub owners whose github.com, raw.githubusercontent.com, and api.github.com/repos/<owner> source URIs receive the read token via the Bazel credential helper. Org-parameterized (TIN-2353); tinyland-inc remains the default."
         type: string
         default: "tinyland-inc"
       verify_bzlmod_lock:
         description: >-
           Opt-in (default false) committed MODULE.bazel.lock verification. On a
           GF self-hosted capability runner, require the tracked lock, run
-          `bazelisk mod deps --lockfile_mode=update`, fail on
+          `$CI_BAZELISK_BIN mod deps --lockfile_mode=update`, fail on
           drift, and validate Bazel targets with `--lockfile_mode=error`.
         type: boolean
         default: false
@@ -49,7 +49,7 @@ on:
         description: >-
           Opt-in (default false) remote MODULE.bazel.lock refresh. On a GF
           self-hosted capability runner, preserve any existing lock, run
-          `bazelisk mod deps --lockfile_mode=update`, validate Bazel targets
+          `$CI_BAZELISK_BIN mod deps --lockfile_mode=update`, validate Bazel targets
           with `--lockfile_mode=error`, and upload the resulting lock once as
           the bzlmod-lock artifact.
         type: boolean
@@ -80,8 +80,13 @@ on:
         description: "GitHub token with read access to private tinyland-inc Bazel module tarballs"
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   resolve-runner:
+    # Fork PR code never reaches a GF self-hosted runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # TIN-3914: the label-resolution job itself runs on the estate base
     # capability class. It is the job every other job reads its runs-on from,
     # so leaving it hosted would have kept a GitHub-hosted runner on the
@@ -210,6 +215,7 @@ jobs:
           RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
           SHARED_RUNNER_LABELS_JSON: ${{ inputs.shared_runner_labels_json }}
           BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
+          BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
         run: |
           set -euo pipefail
           case "$RUNNER_MODE" in
@@ -237,6 +243,18 @@ jobs:
             echo "bazel_fetch_retry_attempts must be between 1 and 5" >&2
             exit 1
           fi
+          read -r -a bazel_targets <<< "$BAZEL_TARGETS"
+          if [ "${#bazel_targets[@]}" -eq 0 ]; then
+            echo "bazel_targets must contain at least one Bazel target" >&2
+            exit 1
+          fi
+          for target in "${bazel_targets[@]}"; do
+            case "$target" in
+              -*) echo "bazel_targets accepts targets, not Bazel flags: $target" >&2; exit 1 ;;
+              //*|@*//*) ;;
+              *) echo "bazel_targets contains an invalid target pattern: $target" >&2; exit 1 ;;
+            esac
+          done
           if [ "$RUNNER_MODE" = "repo_owned" ] && [ -z "${RUNNER_LABELS_JSON//[[:space:]]/}" ]; then
             echo "runner_mode=repo_owned requires explicit runner_labels_json" >&2
             exit 1
@@ -284,20 +302,36 @@ jobs:
           PY
           fi
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          clean: true
-
       - name: Configure self-hosted cache contract
-        if: ${{ runner.environment != 'github-hosted' }}
-        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v3.1.0
 
-      - name: Require GF/Nix Bazelisk front door
+      - name: Resolve runner-custodied Bazelisk
+        id: bazelisk-custody
+        uses: tinyland-inc/ci-templates/.github/actions/rust-bazel-binary-custody@v3.1.0
+
+      - name: Bind exact Bazelisk path
         shell: bash
+        env:
+          CI_BAZELISK_BIN: ${{ steps.bazelisk-custody.outputs.path }}
         run: |
           set -euo pipefail
-          if ! command -v bazelisk >/dev/null 2>&1; then
-            echo "::error::bazelisk is required from the GF/Nix toolchain; v4 has no npx/npm package fallback."
+          printf 'CI_BAZELISK_BIN=%s\n' "$CI_BAZELISK_BIN" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Assert exact source checkout
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$EXPECTED_SOURCE_SHA" ]; then
+            echo "::error::checkout $actual != expected source $EXPECTED_SOURCE_SHA"
             exit 1
           fi
 
@@ -355,7 +389,7 @@ jobs:
               fi
 
               echo "::warning::$label hit a transient Bazel external fetch/download failure on attempt $attempt/$attempts; retrying."
-              bazelisk shutdown >/dev/null 2>&1 || true
+              "$CI_BAZELISK_BIN" shutdown >/dev/null 2>&1 || true
               sleep 10
               attempt=$((attempt + 1))
             done
@@ -406,6 +440,7 @@ jobs:
               for prefix in (
                   f"https://github.com/{owner}/",
                   f"https://raw.githubusercontent.com/{owner}/",
+                  f"https://api.github.com/repos/{owner}/",
               )
           )
 
@@ -420,6 +455,7 @@ jobs:
           {
             echo "common --credential_helper=github.com=$helper_path"
             echo "common --credential_helper=raw.githubusercontent.com=$helper_path"
+            echo "common --credential_helper=api.github.com=$helper_path"
           } >> user.bazelrc
 
           if [ -n "${TINYLAND_REGISTRY_GITHUB_TOKEN:-}" ]; then
@@ -467,7 +503,7 @@ jobs:
           # shellcheck source=/dev/null
           source "$BAZEL_FETCH_RETRY_HELPER"
           run_with_bazel_fetch_retry "Refresh Bzlmod lock" \
-            "bazelisk mod deps --lockfile_mode=update"
+            "\"$CI_BAZELISK_BIN\" mod deps --lockfile_mode=update"
 
           if [ ! -f MODULE.bazel.lock ]; then
             echo "::error::Bazel did not produce MODULE.bazel.lock."
@@ -496,69 +532,27 @@ jobs:
           source "$BAZEL_FETCH_RETRY_HELPER"
           targets_quoted="$(printf '%q ' "${bazel_targets[@]}")"
           if [ "$ENFORCE_BZLMOD_LOCK" = "true" ]; then
-            run_with_bazel_fetch_retry "Validate Bazel targets" "bazelisk build ${targets_quoted}--lockfile_mode=error --verbose_failures"
+            run_with_bazel_fetch_retry "Validate Bazel targets" "\"$CI_BAZELISK_BIN\" build ${targets_quoted}--lockfile_mode=error --verbose_failures"
           else
-            run_with_bazel_fetch_retry "Validate Bazel targets" "bazelisk build ${targets_quoted}--verbose_failures"
+            run_with_bazel_fetch_retry "Validate Bazel targets" "\"$CI_BAZELISK_BIN\" build ${targets_quoted}--verbose_failures"
           fi
 
       # Optional cache-backed manifest gate; v4 remains cache-first and GF-only.
       # The vendored schema validates tinyland.repo.json without network access.
       - name: Validate repo manifest (cache-backed lane)
         if: ${{ inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@5959c1230caab03fa324fc45e4829d7122a0e107
         with:
           path: ${{ env.WORKSPACE_DIR }}/tinyland.repo.json
 
-      # Optional shared-cache validation is cache-first: it never wires a remote
-      # executor. The expected substrate comes from tinyland.repo.json, and runner
-      # labels are passed so hosted or non-cluster fallback fails closed.
+      # Optional shared-cache validation executes only the immutable template
+      # contract. Caller scripts and network-fetched shell never become authority.
       - name: Assert shared-cache attachment (cache-backed lane)
         if: ${{ inputs.cache_backed }}
-        shell: bash
-        env:
-          CI_TEMPLATES_REF: v2.5.1
-          SUBSTRATE_MODE_INPUT: ${{ inputs.substrate_mode }}
-          RUNNER_LABELS: ${{ join(runner.labels, ',') }}
-        run: |
-          set -euo pipefail
-          # The contract script ships in this ci-templates repo; locate it from
-          # the checked-out caller workspace fallback, else fetch the immutable
-          # pinned copy (CI_TEMPLATES_REF is the releasing tag, not floating v2).
-          script="$RUNNER_TEMP/cache-attachment-contract.sh"
-          if [ -f "$WORKSPACE_DIR/scripts/cache-attachment-contract.sh" ]; then
-            script="$WORKSPACE_DIR/scripts/cache-attachment-contract.sh"
-          else
-            curl -fsSL \
-              "https://raw.githubusercontent.com/tinyland-inc/ci-templates/${CI_TEMPLATES_REF}/scripts/cache-attachment-contract.sh" \
-              -o "$script"
-            chmod +x "$script"
-          fi
-
-          # Manifest-driven expected mode (TIN-2109). Authority order:
-          #   1. enrollment.substrateMode in the consumer's tinyland.repo.json
-          #   2. the substrate_mode workflow input (operator override)
-          #   3. existing default (shared-cache-backed) for back-compat
-          # When the manifest declares a mode that disagrees with the actual
-          # endpoint attachment, the contract script fails closed.
-          declared_mode=""
-          manifest="$WORKSPACE_DIR/tinyland.repo.json"
-          if [ -f "$manifest" ]; then
-            declared_mode="$(jq -r '.enrollment.substrateMode // empty' "$manifest")"
-          fi
-          if [ -z "$declared_mode" ]; then
-            declared_mode="$SUBSTRATE_MODE_INPUT"
-          fi
-          export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"
-          export GF_FLYWHEEL_PROFILE_STATE="$GF_BAZEL_SUBSTRATE_MODE"
-          echo "GF_FLYWHEEL_PROFILE_STATE=$GF_FLYWHEEL_PROFILE_STATE" >> "$GITHUB_ENV"
-          echo "::notice::cache-backed lane expected mode (manifest-driven): $GF_BAZEL_SUBSTRATE_MODE"
-          echo "::notice::Flywheel profile state: $GF_FLYWHEEL_PROFILE_STATE"
-
-          # Feed runner labels so the contract rejects hosted / non-cluster
-          # runner fallback. A missing substrate is a deterministic failure,
-          # never a silent degrade to a GitHub-hosted build.
-          export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"
-          bash "$script" --strict
+        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v3.1.0
+        with:
+          substrate_mode: ${{ inputs.substrate_mode }}
+          runner_labels: ${{ join(runner.labels, ',') }}
 
       - name: Validate Bazel targets (cache-backed)
         if: ${{ inputs.cache_backed }}
@@ -584,10 +578,10 @@ jobs:
           # hit/transfer lines in this step's log are the real-attach proof.
           if [ "$ENFORCE_BZLMOD_LOCK" = "true" ]; then
             run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
-              "bazelisk build ${targets_quoted}--lockfile_mode=error --config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
+              "\"$CI_BAZELISK_BIN\" build ${targets_quoted}--lockfile_mode=error --config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
           else
             run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
-              "bazelisk build ${targets_quoted}--config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
+              "\"$CI_BAZELISK_BIN\" build ${targets_quoted}--config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
           fi
 
       - name: Confirm committed Bzlmod lock stayed unchanged

@@ -11,8 +11,11 @@ Its release authority is Bzlmod plus the append-only Bazel Central Registry.
 ## Execution contract
 
 The workflow has one execution input: `bazel_targets` (default `//:pkg`).
-GF/Nix must provide `bazelisk` on `PATH`; `command -v bazelisk` fails
-closed before graph work. There is no `npx` fallback.
+It accepts target patterns only and rejects Bazel flags. Before caller checkout,
+the immutable v3.1.0 custody action validates the runner-owned
+`TINYLAND_CI_BAZELISK_BIN` Nix-store path and exposes it as
+`CI_BAZELISK_BIN`; every graph command uses that exact path. There is no PATH,
+`npx`, or package-manager fallback.
 
 The workflow does not install Node or pnpm and does not accept arbitrary
 prepare, lint, typecheck, test, build, or package commands. Consumer
@@ -31,17 +34,21 @@ still stay org capability classes; isolation belongs in ARC registration,
 runner groups, GitHub App installation, and the implementation overlay. It must
 not resolve to a known repo-label fossil.
 
-Pull-request validation remains safe for forks because this workflow has no
-registry publication job or publish credential. Source-tag and BCR transactions
-remain separate attended operations.
+Fork pull requests are skipped before any GF job is scheduled; untrusted fork
+code never executes on the self-hosted substrate. Same-repository PRs check out
+the exact head with persisted checkout credentials disabled and assert HEAD
+before staging. Source-tag and BCR transactions remain separate attended
+operations.
 
 ## Workspace and credentials
 
-Validation always copies the clean checkout into one isolated
-`$RUNNER_TEMP` workspace. The workflow accepts only
+Validation copies the exact, credential-free checkout into one isolated
+`$RUNNER_TEMP` workspace. Workflow permissions are clamped to
+`contents: read`. The only optional secret is
 `TINYLAND_REGISTRY_GITHUB_TOKEN`, a read credential for private module source
-archives; absent that secret it uses `github.token`. No registry write token is
-declared.
+archives; absent that secret it uses `github.token`. The helper admits only
+owner-scoped `github.com`, `raw.githubusercontent.com`, and
+`api.github.com/repos/<owner>/` URLs. No registry write token is declared.
 
 ## Bzlmod lock controls
 
@@ -49,7 +56,7 @@ declared.
 default-off inputs.
 
 - verification requires a clean tracked root lock, refreshes with
-  `bazelisk mod deps --lockfile_mode=update`, fails on drift, and validates
+  `$CI_BAZELISK_BIN mod deps --lockfile_mode=update`, fails on drift, and validates
   targets with `--lockfile_mode=error`
 - emission may create or refresh the lock and uploads it once as
   `bzlmod-lock`
@@ -59,9 +66,10 @@ The artifact is review evidence only; the workflow never commits caller bytes.
 ## Cache-backed validation
 
 `cache_backed` is default-off. When enabled, the workflow validates
-`tinyland.repo.json`, resolves expected mode from
-`enrollment.substrateMode`, runs
-`scripts/cache-attachment-contract.sh --strict`, and reads
+`tinyland.repo.json` and invokes the immutable v3.1.0
+`cache-attachment-validate` composite. That release-vendored action resolves
+`enrollment.substrateMode` and runs its own contract; caller-controlled scripts
+and network-fetched shell are never proof authority. The Bazel lane reads
 `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
 --remote_upload_local_results=false`. This is cache-first only; no remote
 executor is wired.
@@ -72,6 +80,9 @@ The v4 tag does not exist until the attended immutable release completes. After
 that release, pin the exact version:
 
 ```yaml
+permissions:
+  contents: read
+
 jobs:
   package:
     uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v4.0.0

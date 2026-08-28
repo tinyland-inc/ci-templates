@@ -29,7 +29,9 @@ remains.
 
 At the caller, remove provider write secrets and `packages: write`; retain only
 `contents: read` plus `TINYLAND_REGISTRY_GITHUB_TOKEN` when private module
-source archives require it.
+source archives require it. The called workflow clamps its own permissions to
+`contents: read`, skips fork PRs before GF scheduling, and checks out the exact
+same-repository head without persisted credentials.
 
 The standalone `npm-publish.yml` is removed. The authenticated 2026-08-27
 census found no callers in `tinyland-inc` or `Jesssullivan`; its own guide
@@ -42,8 +44,10 @@ This is not a ban on JS dependency resolution inside Bazel. A consumer may keep
 trees in `MODULE.bazel` / `BUILD.bazel`. Bazel evaluates that graph; the
 shared workflow no longer runs arbitrary pnpm commands around it.
 
-The `npx --yes @bazel/bazelisk` fallback is removed. GF/Nix must provide
-`bazelisk` on `PATH`; absence fails closed.
+The `npx --yes @bazel/bazelisk` fallback is removed. GF must project the
+runner-owned `TINYLAND_CI_BAZELISK_BIN` fact; the immutable custody action
+validates that exact root-owned Nix-store binary before checkout, and absence
+fails closed. No PATH-selected binary is accepted.
 
 ## Release sequence
 
