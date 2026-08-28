@@ -74,8 +74,8 @@ The `js-bazel-package.yml` workflow has an **opt-in, default-off** cache-backed
 Bazel validation lane. It is the canonical template for fanning shared-cache
 enrollment out to spokes.
 
-- **Doctrine: cache-first only.** This lane reads/writes the shared Bazel cache.
-  It does NOT wire a remote executor / REAPI. Remote execution is out of scope;
+- **Doctrine: cache-first only.** This lane reads the shared Bazel cache and
+  never uploads results. It does NOT wire a remote executor / REAPI. Remote execution is out of scope;
   the `flywheel-bazel` composite + `flywheel-reapi-proof` cover executor lanes
   separately.
 - **Enroll** by setting `cache_backed: true` on the `js-bazel-package.yml`
@@ -83,7 +83,8 @@ enrollment out to spokes.
   `CI_BAZELISK_BIN`; the cache-backed mode adds only the verified cache flags.
 - **Endpoints are never baked.** `bazelrc/ci-cached.bazelrc` defines endpoint-free
   `:ci-cached` behavior; the workflow injects `--remote_cache=$BAZEL_REMOTE_CACHE`
-  after the fail-closed `scripts/cache-attachment-contract.sh --strict` gate.
+  only after the pinned composite runs its release-vendored
+  `scripts/cache-attachment-contract.sh --strict` gate.
   On self-hosted Tinyland cluster runners, `nix-setup` exports
   `BAZEL_REMOTE_CACHE` from cluster DNS — no new secret or infra required.
 - **Do NOT** create per-repo runners, bespoke cache instances, localhost/
@@ -99,11 +100,13 @@ enrollment out to spokes.
 
 See `docs/js-bazel-package.md` (`cache_backed`) for the consumer-facing details.
 
-## Lace-up: the one copyable enrollment pattern (TIN-2109)
+## Lace-up: the release-gated enrollment pattern (TIN-2109)
 
-A consumer enrolls in deterministic, fail-closed shared-cache validation by
-copying ONE pattern. Two edits, then a green build only happens when the
-substrate actually attaches on a shared cluster runner.
+The v4 tag does not exist until the attended immutable release completes. Do
+not copy a v3 pin and treat it as this Bzlmod-only contract. Before release,
+only a bounded, non-merge consumer canary may pin the exact reviewed PR head;
+never pin a branch name. After v4.0.0 is released, a consumer enrolls in
+deterministic, fail-closed shared-cache validation with the pattern below.
 
 **1. Declare the enrollment dimensions as first-class manifest fields** in
 `tinyland.repo.json`. `enrollment.substrateMode` is the AUTHORITATIVE expected
@@ -125,7 +128,7 @@ call (runner_mode must resolve to an org capability-class runner — never
 ```yaml
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v3.1.0
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v4.0.0
     with:
       runner_mode: repo_owned
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
@@ -144,8 +147,8 @@ What you get, deterministically:
 - a hosted (`ubuntu-*`), bare `self-hosted`, or known repo-label fossil is
   **rejected** — a missing substrate is a deterministic failure, never a degrade
   to a GitHub-hosted build;
-- the fetch fallback for the contract script is pinned to the immutable releasing
-  tag (`v3.1.0`), so a pure-consumer spoke gets a reproducible fetch.
+- the pinned `v3.1.0` composite carries the release-vendored contract; there
+  is no caller-controlled or network fetch fallback.
 
 **Executor-backed is defined but not selected.** If a repo ever declares
 `enrollment.substrateMode: executor-backed`, the SAME gate requires the full

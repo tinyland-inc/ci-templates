@@ -616,8 +616,9 @@ endpoints, and localhost without explicit proof).
 ## Cache-backed enrollment (cache-first, TIN-2110)
 
 `js-bazel-package.yml` exposes an **opt-in, default-off** `cache_backed` input.
-The next-major lane requires `bazelisk` from the GF/Nix toolchain and fails
-closed when it is absent; there is no `npx` package fallback. When
+The next-major lane requires the exact runner-custodied Bazelisk path on a GF
+Nix capability class and fails closed when it is absent; Docker/DinD classes
+and the former `npx` package fallback are rejected. When
 `cache_backed: true`, the workflow runs the fail-closed
 cache-attachment contract and then validates with
 `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
@@ -630,8 +631,9 @@ The cache-backed lane is **hardened for deterministic, fail-closed enrollment**
 (TIN-2109): it validates the consumer's `tinyland.repo.json` against the schema,
 reads `enrollment.substrateMode` as the authoritative expected mode (a
 declared-vs-actual mismatch fails closed), rejects hosted / non-cluster runner
-fallback (no silent degrade to a GitHub-hosted build), and pins the contract-script
-fetch fallback to an immutable releasing tag. It also exports
+fallback (no silent degrade to a GitHub-hosted build). The pinned composite
+carries the release-vendored contract; no caller or network fetch fallback
+exists. It also exports
 `GF_FLYWHEEL_PROFILE_STATE` from the resolved substrate mode so consumer
 `flywheel-doctor` / `flywheel-verify` tooling sees the same machine-readable
 attachment state as CI. Copy the single **lace-up** pattern in
