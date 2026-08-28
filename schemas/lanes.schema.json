@@ -98,7 +98,7 @@
 				"docs-site-static-build",
 				"web-playwright-chromium-static-smoke"
 			],
-			"description": "Mirrors tinyland-inc/GloriousFlywheel/config/rbe-target-eligibility.json at the tag this schema was cut against. `web-playwright-chromium-static-smoke` is candidate-status and will be rejected at runtime until promoted in a future schema bump."
+			"description": "Mirrors tinyland-inc/GloriousFlywheel/config/rbe-target-eligibility.json at the tag this schema was cut against. `web-playwright-chromium-static-smoke` is listed PROVED in that manifest (39 proved static-smoke classes as of 2026-08-28); the earlier candidate-status wording was stale drift against the GF manifest."
 		},
 		"lane": {
 			"type": "object",
