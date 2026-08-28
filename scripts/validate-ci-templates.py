@@ -1309,6 +1309,33 @@ def check_gf_i09_publisher_contract() -> int:
     if "Refuse a forge-hosted execution class" not in source:
         fail("the execution class must be verdicted at run time")
 
+    # The shape states no instance fact. A namespace, a registry coordinate, or
+    # a media type written here is a second authority for something the caller
+    # already declares once, and it disagrees the moment one of them moves.
+    for marker in ("oci://", "ghcr.io", "application/vnd.tinyland"):
+        if marker in executable:
+            fail(f"the shape declares no instance fact: {marker}")
+    if re.search(r"(?m)^\s*namespace:", executable):
+        fail("the namespace is the caller's declaration, never the shape's")
+
+    # One call, one publication, derived in one pass. A shape that fans out has
+    # a window in which its targets disagree.
+    if re.search(r"(?m)^\s*(strategy|matrix):", executable):
+        fail("the publisher fans out over nothing")
+
+    # Enrollment is earned elsewhere; a shape that read or wrote it would grant
+    # authority as a side effect of publishing.
+    for marker in ("enrolled", "enrollment"):
+        if marker in executable:
+            fail(f"the publisher derives nothing from {marker}")
+    if re.search(r">\s*[\"\']?\$\{\{ inputs.workflow_state_path", executable):
+        fail("the shape reads the caller's activation state and never writes it")
+
+    # A pull seam is a Secret name by another spelling.
+    for marker in ("imagePullSecrets", "secretName", "secretKeyRef", "dockerconfigjson"):
+        if marker in executable:
+            fail(f"credentials cross this seam as opaque keys, never as {marker}")
+
     if ok:
         print("gf-i09 publisher shape contract holds")
     return 0 if ok else 1

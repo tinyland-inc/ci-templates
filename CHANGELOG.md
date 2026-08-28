@@ -48,7 +48,13 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
   `just gf-i09-publisher-contract-check` (new, in `just check`) holds the file
   to each of those rulings, so they cannot drift out of the YAML while the
-  header comment still claims them.
+  header comment still claims them. It also holds the shape to the estate's
+  projection-domain rules even though the shape does not project: it states no
+  instance fact (no namespace, registry coordinate, or media type — those are
+  the caller's single declaration and restating one here makes two authorities
+  that disagree the moment one moves), fans out over nothing, derives nothing
+  from an enrollment flag and never writes the caller's activation state, and
+  carries no pull-secret seam. Each of those is mutation-tested.
 
 ### Fixed
 
