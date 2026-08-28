@@ -196,7 +196,7 @@ def check_js_bazel_package_runner_contract() -> int:
         '"tinyland-docker"',
         "runner_mode=shared requires shared_runner_labels_json",
         "permissions:\n  contents: read",
-        "if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository",
+        "if: github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository",
         "rust-bazel-binary-custody@v3.1.0",
         "CI_BAZELISK_BIN: ${{ steps.bazelisk-custody.outputs.path }}",
         "ref: ${{ github.event.pull_request.head.sha || github.sha }}",

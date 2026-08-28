@@ -86,7 +86,7 @@ permissions:
 jobs:
   resolve-runner:
     # Fork PR code never reaches a GF self-hosted runner.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository
     # TIN-3914: the label-resolution job itself runs on the estate base
     # capability class. It is the job every other job reads its runs-on from,
     # so leaving it hosted would have kept a GitHub-hosted runner on the
