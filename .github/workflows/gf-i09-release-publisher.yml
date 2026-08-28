@@ -25,11 +25,18 @@ name: gf-i09-release-publisher
 #    is never a fact source here -- the caller's branch is reread from the
 #    forge and compared to the checked-out commit before anything else runs.
 #
-# 3. Fail-closed by conjunction. Publication requires the caller's reviewed
-#    activation state AND every named activation prerequisite AND a fully
-#    resolved payload. Any unmet term skips publication; no term has a
-#    fallback, a default-on, or an override input. There is deliberately no
-#    force input: a shape with an escape hatch is not a fail-closed shape.
+# 3. Fail-closed by conjunction, with every refusal named. Publication requires
+#    the caller's reviewed activation state AND every named activation
+#    prerequisite AND a fully resolved payload. No term has a fallback, a
+#    default-on, or an override input; there is deliberately no force input,
+#    because a shape with an escape hatch is not a fail-closed shape. An unmet
+#    term is written into the run's summary by name, so an inert run reads as a
+#    refusal rather than as a step that quietly did not happen.
+#
+# 4. The publisher declares; it never observes. Evidence kinds are DECLARED
+#    here so the caller can state what the decision will demand. Recording what
+#    was seen belongs to independent verifiers, and a shape that let the
+#    publisher do it would make the producer of a claim its own verifier.
 on:
   workflow_call:
     inputs:
@@ -75,13 +82,14 @@ on:
           is a refusal, not a warning.
         type: string
         required: true
-      observation_legs_json:
+      declared_evidence_kinds_json:
         description: >-
-          JSON array naming the observation legs the publisher must record for
-          this operand class. Publication refuses unless every named leg is
-          recorded. An empty array is admissible and means the operand class
-          carries no publisher-side observation -- it does not mean the legs
-          were satisfied.
+          JSON array naming the evidence KINDS this operand demands. Each kind
+          binds one verification per request, same-named as the request, and
+          the decision requires the conjunction of all of them. This is a
+          declaration of what must exist, not a record of what was seen: the
+          publisher authors no observation, and a shape that let it do so would
+          make the producer of a claim its own verifier.
         type: string
         default: "[]"
       check_recipe:
@@ -98,8 +106,13 @@ on:
         description: >-
           Just recipe signing the payload CONTENT with the run's workload
           identity. Signing the fact of a run rather than the content of a
-          request lets a replayed publication verify; the caller's statement
-          must bind the payload digest and a publisher-generated nonce.
+          request would leave a replay indistinguishable from a publication, so
+          the caller's statement binds the payload digest and a
+          publisher-generated nonce. The publisher owns exactly one property
+          here -- nonce generation freshness. Refusing a nonce the cluster has
+          already accepted is the controller's typed refusal, backed by a
+          tenant-and-nonce-digest uniqueness index; a publisher cannot know
+          what was accepted before it ran.
         type: string
         default: release-publisher-sign
       publish_recipe:
@@ -164,7 +177,7 @@ jobs:
           WORKFLOW_STATE_PATH: ${{ inputs.workflow_state_path }}
           REGISTRATION_SOURCE_PATH: ${{ inputs.registration_source_path }}
           EXPECTED_WORKFLOW_PATH: ${{ inputs.expected_workflow_path }}
-          OBSERVATION_LEGS_JSON: ${{ inputs.observation_legs_json }}
+          DECLARED_EVIDENCE_KINDS_JSON: ${{ inputs.declared_evidence_kinds_json }}
         run: |
           set -euo pipefail
 
@@ -190,7 +203,7 @@ jobs:
           import sys
 
           state_path = os.environ["WORKFLOW_STATE_PATH"]
-          legs_raw = os.environ["OBSERVATION_LEGS_JSON"]
+          kinds_raw = os.environ["DECLARED_EVIDENCE_KINDS_JSON"]
 
           state = json.load(open(state_path, encoding="utf-8"))
           if type(state.get("enabled")) is not bool:
@@ -198,9 +211,9 @@ jobs:
           if state.get("publicationRequiresEveryPrerequisiteSatisfied") is not True:
               sys.exit(f"{state_path}: publication must require every prerequisite")
 
-          legs = json.loads(legs_raw)
-          if not isinstance(legs, list) or not all(isinstance(leg, str) for leg in legs):
-              sys.exit("observation_legs_json must be a JSON array of names")
+          kinds = json.loads(kinds_raw)
+          if not isinstance(kinds, list) or not all(isinstance(k, str) for k in kinds):
+              sys.exit("declared_evidence_kinds_json must be a JSON array of names")
 
           unmet = [
               str(item.get("id", "<unnamed>"))
@@ -211,8 +224,16 @@ jobs:
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
               handle.write(f"enabled={enabled}\n")
-              handle.write(f"observation_legs={json.dumps(legs)}\n")
+              handle.write(f"declared_evidence_kinds={json.dumps(kinds)}\n")
 
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary and enabled != "true":
+              with open(summary, "a", encoding="utf-8") as handle:
+                  handle.write("### Publication refused\n\n")
+                  for name in unmet:
+                      handle.write(f"- unsatisfied activation prerequisite: {name}\n")
+                  if not state["enabled"]:
+                      handle.write("- the reviewed activation state is disabled\n")
           for name in unmet:
               print(f"::notice::unsatisfied activation prerequisite: {name}")
           if enabled != "true":

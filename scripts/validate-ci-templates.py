@@ -1209,6 +1209,111 @@ def check_lanes_schema_runner_class() -> int:
     return 0
 
 
+def _block_keys(source: str, header: str):
+    """Keys directly under a top-level block, stopping at the next top level.
+
+    Written as a scan rather than a regex because a multi-line pattern reaches
+    past a blank line into the next block and reports its keys as this one's.
+    """
+
+    lines = source.splitlines()
+    for index, line in enumerate(lines):
+        if line != header:
+            continue
+        keys = set()
+        for following in lines[index + 1 :]:
+            if not following.strip():
+                continue
+            if not following[0].isspace():
+                break
+            match = re.match(r"^  (\S+):", following)
+            if match:
+                keys.add(match.group(1))
+        return keys
+    return None
+
+
+def check_gf_i09_publisher_contract() -> int:
+    """Hold the publisher shape to the rulings it claims to implement.
+
+    Every assertion here is a ruling that would otherwise live only in the
+    file's header comment, where nothing stops it drifting away from the YAML
+    underneath it.
+    """
+
+    relative = ".github/workflows/gf-i09-release-publisher.yml"
+    path = ROOT / relative
+    if not path.is_file():
+        print(f"{relative}: publisher shape is missing", file=sys.stderr)
+        return 1
+    source = path.read_text(encoding="utf-8")
+    executable = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    ok = True
+
+    def fail(message: str) -> None:
+        nonlocal ok
+        print(f"{relative}: {message}", file=sys.stderr)
+        ok = False
+
+    # Reusable only: it schedules nothing on its own.
+    triggers = re.findall(r"(?m)^  ([a-z_]+):$", executable.split("\njobs:", 1)[0])
+    if "workflow_call" not in triggers:
+        fail("the shape must be reusable")
+    for scheduling in ("push", "pull_request", "schedule", "workflow_dispatch"):
+        if scheduling in triggers:
+            fail(f"a shape schedules nothing on its own: {scheduling}")
+
+    input_names = re.findall(r"(?m)^      ([a-z_][a-z0-9_]*):$", executable)
+
+    # Keyless: a shape that accepted a signing key would make every consumer of
+    # it a key-custody problem.
+    if re.search(r"(?m)^    secrets:", executable):
+        fail("a keyless publisher declares no secrets")
+    if "${{ secrets." in executable:
+        fail("a keyless publisher reads no secret")
+    if not re.search(r"(?m)^  id-token: write$", executable):
+        fail("keyless signing needs an identity token")
+    granted = _block_keys(executable, "permissions:")
+    if granted is None:
+        fail("the permission set must be declared")
+    elif granted != {"contents", "id-token"}:
+        fail(f"the permission set must be exactly read plus identity: {granted}")
+
+    # The publisher declares; observations are verifier-owned.
+    for name in input_names:
+        if "observ" in name.lower():
+            fail(f"input {name} would let the publisher author an observation")
+
+    # Fail closed with no opt-out.
+    for name in input_names:
+        tokens = {token for token in name.lower().split("_") if token}
+        if {"force", "override", "bypass"} & tokens:
+            fail(f"input {name} is an escape hatch on a fail-closed gate")
+
+    # Refusals are named, not skipped silently.
+    if "GITHUB_STEP_SUMMARY" not in executable:
+        fail("an unmet term must be recorded by name, not left as a skipped step")
+    if "unsatisfied activation prerequisite" not in executable:
+        fail("the refusal record must name the term that failed")
+
+    # Reread, never relay.
+    if "git rev-parse HEAD" not in executable or "gh api" not in executable:
+        fail("branch truth must be reread and compared to the checkout")
+
+    # Self-hosted only, verdicted at run time because the class is caller data.
+    for runs_on in re.findall(r"(?m)^    runs-on: (.+)$", executable):
+        if not runs_on.strip().startswith("${{"):
+            fail(f"the class must come from a validated input, not {runs_on.strip()}")
+    if "Refuse a forge-hosted execution class" not in source:
+        fail("the execution class must be verdicted at run time")
+
+    if ok:
+        print("gf-i09 publisher shape contract holds")
+    return 0 if ok else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1221,6 +1326,7 @@ def main() -> int:
             "cache-backed-optin-contract",
             "rust-bazel-application-contract",
             "lanes-schema-runner-class",
+            "gf-i09-publisher-contract",
         ],
     )
     args = parser.parse_args()
@@ -1237,6 +1343,8 @@ def main() -> int:
         return check_rust_bazel_application_contract()
     if args.check == "lanes-schema-runner-class":
         return check_lanes_schema_runner_class()
+    if args.check == "gf-i09-publisher-contract":
+        return check_gf_i09_publisher_contract()
     return check_internal_refs()
 
 

@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check repo-role-census-contract-selftest repo-role-census-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check
+check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check repo-role-census-contract-selftest repo-role-census-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check gf-i09-publisher-contract-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -51,6 +51,15 @@ no-hosted-runners-selftest:
 # spelling fails even if it never writes a hosted label down.
 lanes-schema-runner-class-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py lanes-schema-runner-class
+
+# Hold the GF-I09 publisher shape to the rulings in its own header: reusable
+# only, keyless (no secrets input, no secret read, identity token and read
+# access and nothing else), declares evidence kinds but authors no observation,
+# no force/override input on a fail-closed gate, refusals recorded by name
+# rather than left as skipped steps, branch truth reread, and an execution
+# class that comes from a validated input and is verdicted again at run time.
+gf-i09-publisher-contract-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py gf-i09-publisher-contract
 
 # Parse all vendored JSON schemas.
 json-parse:

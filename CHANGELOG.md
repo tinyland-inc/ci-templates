@@ -29,15 +29,26 @@ Versioning: [SemVer 2.0](https://semver.org/).
   - **Reread, never relay.** The caller's branch is reread from the forge and
     compared to the checked-out commit before anything else runs. A triggering
     event is a claim about the past and is never a fact source.
-  - **Fail-closed by conjunction.** Publication requires the caller's reviewed
-    activation state AND every named activation prerequisite AND a fully
-    resolved payload. There is deliberately no force, override, or
-    skip-verification input: a shape with an escape hatch is not a fail-closed
-    shape.
+  - **Fail-closed by conjunction, every refusal named.** Publication requires
+    the caller's reviewed activation state AND every named activation
+    prerequisite AND a fully resolved payload. There is deliberately no force,
+    override, or skip-verification input: a shape with an escape hatch is not a
+    fail-closed shape. An unmet term is written into the run's summary by name,
+    because a step that is merely skipped reports nothing at all.
+  - **The publisher declares; it never observes.** `declared_evidence_kinds_json`
+    states which evidence kinds the decision will demand — one verification per
+    request per kind, same-named as the request, conjunction required. What was
+    actually seen is authored by independent verifiers, and a shape that let
+    the publisher record it would make the producer of a claim its own
+    verifier.
 
   The execution class is verdicted at run time in addition to the static scans,
   because `runner_class` is caller data and a static scan of this repository
   cannot see what a consumer passes.
+
+  `just gf-i09-publisher-contract-check` (new, in `just check`) holds the file
+  to each of those rulings, so they cannot drift out of the YAML while the
+  header comment still claims them.
 
 ### Fixed
 
