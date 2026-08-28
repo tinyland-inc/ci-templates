@@ -138,7 +138,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
   prepare/lint/typecheck/test/build/package command inputs: `bazel_targets` is
   the execution authority. Bazel validation now uses only the exact,
   root-custodied `TINYLAND_CI_BAZELISK_BIN` path and fails closed instead of
-  selecting PATH or installing Bazelisk through `npx`. Fork PRs are rejected
+  selecting PATH or installing Bazelisk through `npx`. Only GF Nix capability
+  classes are admitted; Docker/DinD classes cannot project this custody fact.
+  Fork PRs are rejected
   before GF scheduling; permissions are clamped read-only; checkout is exact and
   credential-free; cache proof comes from an immutable template action; and
   private owner-scoped API archives receive the read helper. Bazel-internal
