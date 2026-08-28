@@ -69,7 +69,8 @@ The artifact is review evidence only; the workflow never commits caller bytes.
 `tinyland.repo.json` and invokes the immutable v3.1.0
 `cache-attachment-validate` composite. That release-vendored action resolves
 `enrollment.substrateMode` and runs its own contract; caller-controlled scripts
-and network-fetched shell are never proof authority. The Bazel lane reads
+and network-fetched shell are never proof authority. Both gates run before any
+Bazel graph evaluation, including lock refresh. The Bazel lane reads
 `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
 --remote_upload_local_results=false`. This is cache-first only; no remote
 executor is wired.

@@ -468,6 +468,23 @@ jobs:
             echo "::warning::No GitHub token is available for private Bazel module tarball fetches."
           fi
 
+      # Optional cache-backed manifest gate; v4 remains cache-first and GF-only.
+      # The vendored schema validates tinyland.repo.json without network access.
+      - name: Validate repo manifest (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@5959c1230caab03fa324fc45e4829d7122a0e107
+        with:
+          path: ${{ env.WORKSPACE_DIR }}/tinyland.repo.json
+
+      # Optional shared-cache validation executes only the immutable template
+      # contract. Caller scripts and network-fetched shell never become authority.
+      - name: Assert shared-cache attachment (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v3.1.0
+        with:
+          substrate_mode: ${{ inputs.substrate_mode }}
+          runner_labels: ${{ join(runner.labels, ',') }}
+
       - name: Refresh or verify Bzlmod lock (GF only)
         if: ${{ inputs.verify_bzlmod_lock || inputs.emit_bzlmod_lock_artifact }}
         shell: bash
@@ -536,23 +553,6 @@ jobs:
           else
             run_with_bazel_fetch_retry "Validate Bazel targets" "\"$CI_BAZELISK_BIN\" build ${targets_quoted}--verbose_failures"
           fi
-
-      # Optional cache-backed manifest gate; v4 remains cache-first and GF-only.
-      # The vendored schema validates tinyland.repo.json without network access.
-      - name: Validate repo manifest (cache-backed lane)
-        if: ${{ inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@5959c1230caab03fa324fc45e4829d7122a0e107
-        with:
-          path: ${{ env.WORKSPACE_DIR }}/tinyland.repo.json
-
-      # Optional shared-cache validation executes only the immutable template
-      # contract. Caller scripts and network-fetched shell never become authority.
-      - name: Assert shared-cache attachment (cache-backed lane)
-        if: ${{ inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v3.1.0
-        with:
-          substrate_mode: ${{ inputs.substrate_mode }}
-          runner_labels: ${{ join(runner.labels, ',') }}
 
       - name: Validate Bazel targets (cache-backed)
         if: ${{ inputs.cache_backed }}

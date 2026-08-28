@@ -681,6 +681,18 @@ def check_cache_backed_optin_contract() -> int:
             )
             ok = False
 
+    # Cache-backed callers must fail closed before any Bazel graph evaluation,
+    # including module-extension execution during lock refresh.
+    cache_gate = workflow.find("Assert shared-cache attachment (cache-backed lane)")
+    lock_refresh = workflow.find("Refresh or verify Bzlmod lock (GF only)")
+    if cache_gate < 0 or lock_refresh < 0 or cache_gate > lock_refresh:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: cache attachment must be asserted "
+            "before Bzlmod lock refresh",
+            file=sys.stderr,
+        )
+        ok = False
+
     # CACHE-FIRST: the workflow must never wire a remote executor anywhere.
     for forbidden in ("--remote_executor", "--config=executor-backed", "BAZEL_REMOTE_EXECUTOR"):
         if forbidden in workflow:
