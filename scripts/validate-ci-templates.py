@@ -114,7 +114,6 @@ CURRENT_RELEASE_LINE = "v3"
 # description-only (`nix-setup`), which is why they are sequenced separately
 # from spoke-ci, where the delta is the gitleaks fix above.
 STALE_INTERNAL_REF_FILES = {
-    ".github/workflows/js-bazel-package.yml": "TIN-3914",
     ".github/workflows/spoke-deploy-cloudflare-pages.yml": "TIN-3914",
     ".github/workflows/spoke-public-preview.yml": "TIN-3914",
 }
@@ -127,6 +126,7 @@ def check_internal_refs() -> int:
     )
     main_pattern = re.compile(r"tinyland-inc/ci-templates/.*@main")
     exact_release = re.compile(r"\Av\d+\.\d+\.\d+\Z")
+    exact_commit = re.compile(r"\A[0-9a-f]{40}\Z")
 
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
@@ -139,7 +139,7 @@ def check_internal_refs() -> int:
             # An exact SemVer ref is the restricted workflows' immutability
             # contract (restricted-workflow-contract.rb pins the exact release
             # and rejects anything floating), so it is always admissible here.
-            if exact_release.match(ref) or ref == CURRENT_RELEASE_LINE:
+            if exact_release.match(ref) or exact_commit.match(ref) or ref == CURRENT_RELEASE_LINE:
                 continue
             if str(rel) in STALE_INTERNAL_REF_FILES:
                 continue
@@ -164,7 +164,7 @@ def check_internal_refs() -> int:
         stale = [
             f"{action}@{ref}"
             for action, ref in action_pattern.findall(target.read_text(encoding="utf-8"))
-            if not exact_release.match(ref) and ref != CURRENT_RELEASE_LINE
+            if not exact_release.match(ref) and not exact_commit.match(ref) and ref != CURRENT_RELEASE_LINE
         ]
         if not stale:
             print(
@@ -190,17 +190,80 @@ def check_js_bazel_package_runner_contract() -> int:
 
     required_workflow_snippets = [
         "runner_mode=repo_owned requires explicit runner_labels_json",
-        "must include an org capability-class label",
+        "must contain only GF Nix capability-class labels",
         "org_capability_label = re.compile",
-        "nix|nix-heavy|nix-kvm|nix-gpu|docker|dind",
-        '"tinyland-docker"',
+        "nix|nix-heavy|nix-kvm|nix-gpu",
+        '"tinyland-nix"',
         "runner_mode=shared requires shared_runner_labels_json",
+        "permissions:\n  contents: read",
+        "if: github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository",
+        "nix-setup@v3.1.0",
+        "rust-bazel-binary-custody@v3.1.0",
+        "CI_BAZELISK_BIN: ${{ steps.bazelisk-custody.outputs.path }}",
+        "ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+        "persist-credentials: false",
+        "git rev-parse HEAD",
+        "cache-attachment-validate@v3.1.0",
+        "repo-manifest-validate@5959c1230caab03fa324fc45e4829d7122a0e107",
+        "common --credential_helper=api.github.com=",
+        'f"https://api.github.com/repos/{owner}/"',
+        "bazel_targets accepts targets, not Bazel flags",
     ]
     required_docs_snippets = [
         "`repo_owned` is a trust and registration boundary",
         "workflow-facing labels still stay org capability classes",
         "It must not resolve to a known repo-label fossil.",
-        "forks because publish jobs are still gated by tag/workflow policy",
+        "Fork pull requests are skipped before any GF job is scheduled",
+        "Docker/DinD capability classes do not project",
+        "runner-owned `TINYLAND_CI_BAZELISK_BIN`",
+        "BCR is the only package publication authority",
+    ]
+    forbidden_workflow_snippets = [
+        "publish-npm:",
+        "publish-github:",
+        "npm publish",
+        "npm.pkg.github.com",
+        "registry.npmjs.org",
+        "NPM_TOKEN",
+        "TINYLAND_GITHUB_PACKAGES_TOKEN",
+        "      SYNC_PAT:",
+        "      GH_TOKEN:",
+        "packages: write",
+        "publish_mode",
+        "publish_node_version",
+        "package_dir",
+        "npm_access",
+        "npm_publish_provenance",
+        "npm_publish_mode",
+        "npm_registry_url",
+        "github_package_name",
+        "github_package_registry",
+        "dry_run",
+        "publish_on_tag",
+        "pnpm_version",
+        "cleanup_paths",
+        "lint_continue_on_error",
+        "typecheck_continue_on_error",
+        "npx --yes @bazel/bazelisk",
+        "pnpm/action-setup",
+        "actions/setup-node",
+        "pnpm install",
+        "node_versions",
+        "workspace_mode",
+        "metadata_check_command",
+        "prepare_command",
+        "lint_command",
+        "typecheck_command",
+        "unit_test_command",
+        "integration_test_command",
+        "build_command",
+        "package_check_command",
+        "command -v bazelisk",
+        "CI_TEMPLATES_REF:",
+        "curl -fsSL",
+        "$WORKSPACE_DIR/scripts/cache-attachment-contract.sh",
+        "uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2",
+        "uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2",
     ]
     forbidden_docs_snippets = [
         "- validate and publish on repo-specific runner labels",
@@ -215,6 +278,42 @@ def check_js_bazel_package_runner_contract() -> int:
                 file=sys.stderr,
             )
             ok = False
+
+    for snippet in forbidden_workflow_snippets:
+        if snippet in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: deprecated package publication or npx fallback remains: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    custody_step = workflow.find("- name: Resolve runner-custodied Bazelisk")
+    checkout_step = workflow.find("- uses: actions/checkout@")
+    if custody_step < 0 or checkout_step < 0 or custody_step > checkout_step:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: Bazelisk custody must resolve "
+            "before caller checkout",
+            file=sys.stderr,
+        )
+        ok = False
+
+    bare_bazelisk = re.compile(r"""(?<![A-Za-z0-9_/$.-])bazelisk(?=[\s"'])""")
+    for line_no, line in enumerate(workflow.splitlines(), start=1):
+        if bare_bazelisk.search(line) and "CI_BAZELISK_BIN" not in line:
+            print(
+                f"{workflow_path.relative_to(ROOT)}:{line_no}: bare Bazelisk "
+                "selection bypasses runner custody",
+                file=sys.stderr,
+            )
+            ok = False
+
+    retired_workflow = ROOT / ".github/workflows/npm-publish.yml"
+    if retired_workflow.exists():
+        print(
+            f"{retired_workflow.relative_to(ROOT)}: standalone npm publication workflow must stay removed",
+            file=sys.stderr,
+        )
+        ok = False
 
     for snippet in required_docs_snippets:
         if snippet not in docs:
@@ -233,7 +332,7 @@ def check_js_bazel_package_runner_contract() -> int:
 
     if not ok:
         return 1
-    print("js-bazel-package runner contract documented and guarded")
+    print("js-bazel-package runner and Bzlmod/BCR authority contract documented and guarded")
     return 0
 
 
@@ -404,19 +503,18 @@ def manifest_validator_invocations(
 
 
 def check_cache_backed_optin_contract() -> int:
-    """Guard the TIN-2110 opt-in cache-backed lane: default-off and cache-first.
+    """Guard the TIN-2110 cache-backed lane: default-off and cache-first.
 
-    Asserts the new `cache_backed` input is default-off, the default Bazel
-    validation step stays guarded so non-opted consumers are byte-identical, the
-    cache-backed step routes through `--config=ci-cached` + injected
-    `--remote_cache`, gates on the cache-attachment contract, and NEVER wires a
-    remote executor (cache-first only, TIN-1997 Option D).
+    The default lane uses the GF/Nix Bazelisk front door. The cache-backed lane
+    adds `--config=ci-cached` plus the injected `--remote_cache`, gates on the
+    cache-attachment contract, and never wires a remote executor.
     """
     workflow_path = ROOT / ".github/workflows/js-bazel-package.yml"
     docs_path = ROOT / "docs/js-bazel-package.md"
     bazelrc_path = ROOT / "bazelrc/ci-cached.bazelrc"
     flywheel_bazelrc_path = ROOT / "bazelrc/flywheel.bazelrc"
     contract_path = ROOT / "scripts/cache-attachment-contract.sh"
+    cache_action_path = ROOT / ".github/actions/cache-attachment-validate/action.yml"
     workflow = workflow_path.read_text(encoding="utf-8")
     docs = docs_path.read_text(encoding="utf-8")
 
@@ -425,6 +523,12 @@ def check_cache_backed_optin_contract() -> int:
     if not contract_path.exists():
         print(f"missing {contract_path.relative_to(ROOT)}", file=sys.stderr)
         ok = False
+    if not cache_action_path.exists():
+        print(f"missing {cache_action_path.relative_to(ROOT)}", file=sys.stderr)
+        cache_action = ""
+        ok = False
+    else:
+        cache_action = cache_action_path.read_text(encoding="utf-8")
     if not bazelrc_path.exists():
         print(f"missing {bazelrc_path.relative_to(ROOT)}", file=sys.stderr)
         ok = False
@@ -447,36 +551,48 @@ def check_cache_backed_optin_contract() -> int:
         ok = False
 
     required_workflow_snippets = [
-        # default path stays guarded => byte-identical for non-opted consumers
+        # the default GF/Nix Bazelisk path stays separate from the cache-backed path
         "if: ${{ !inputs.cache_backed }}",
-        # opt-in path gated on the fail-closed cache-attachment contract
+        # opt-in path gated on the exact release-vendored composite
         "Assert shared-cache attachment (cache-backed lane)",
-        "cache-attachment-contract.sh",
-        "--strict",
+        "cache-attachment-validate@v3.1.0",
         # opt-in path is cache-first: ci-cached config + injected remote cache, no upload
         "--config=ci-cached",
         "--remote_cache=${BAZEL_REMOTE_CACHE}",
         "--remote_upload_local_results=false",
-        # the unchanged default command must still be present verbatim
-        'run_with_bazel_fetch_retry "Validate Bazel targets" '
-        '"npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"',
-        # TIN-2109: manifest validation in the cache-backed lane (fail-closed)
+        # every graph command uses the custody action's exact path
+        "rust-bazel-binary-custody@v3.1.0",
+        "steps.bazelisk-custody.outputs.path",
+        '"\\\"$CI_BAZELISK_BIN\\\" build ${targets_quoted}--verbose_failures"',
+        # TIN-2109: manifest and cache validation use immutable template actions
         "Validate repo manifest (cache-backed lane)",
-        "repo-manifest-validate@v2",
-        # TIN-2109: expected mode is manifest-driven (enrollment.substrateMode)
-        ".enrollment.substrateMode",
-        "GF_BAZEL_SUBSTRATE_MODE=",
-        "GF_FLYWHEEL_PROFILE_STATE=",
-        # TIN-2109: runner labels fed so the contract rejects hosted/repo-label fallback
-        "GF_BAZEL_RUNNER_LABELS=",
+        "repo-manifest-validate@5959c1230caab03fa324fc45e4829d7122a0e107",
+        # runner labels cross the workflow/composite boundary explicitly
         "join(runner.labels, ',')",
-        # TIN-2109: fetch fallback pinned to the immutable releasing tag, not floating v2
-        "CI_TEMPLATES_REF: v2.5.1",
     ]
     for snippet in required_workflow_snippets:
         if snippet not in workflow:
             print(
                 f"{workflow_path.relative_to(ROOT)}: missing cache-backed snippet: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    # The pinned composite, rather than caller-controlled source or a network fetch,
+    # owns the fail-closed cache attachment contract.
+    required_cache_action_snippets = [
+        "scripts/cache-attachment-contract.sh",
+        ".enrollment.substrateMode",
+        "GF_BAZEL_SUBSTRATE_MODE=",
+        "GF_FLYWHEEL_PROFILE_STATE=",
+        "GF_BAZEL_RUNNER_LABELS=",
+        "--strict",
+    ]
+    for snippet in required_cache_action_snippets:
+        if snippet not in cache_action:
+            print(
+                f"{cache_action_path.relative_to(ROOT)}: missing cache contract snippet: "
+                f"{snippet}",
                 file=sys.stderr,
             )
             ok = False
@@ -604,6 +720,18 @@ def check_cache_backed_optin_contract() -> int:
                 file=sys.stderr,
             )
             ok = False
+
+    # Cache-backed callers must fail closed before any Bazel graph evaluation,
+    # including module-extension execution during lock refresh.
+    cache_gate = workflow.find("Assert shared-cache attachment (cache-backed lane)")
+    lock_refresh = workflow.find("Refresh or verify Bzlmod lock (GF only)")
+    if cache_gate < 0 or lock_refresh < 0 or cache_gate > lock_refresh:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: cache attachment must be asserted "
+            "before Bzlmod lock refresh",
+            file=sys.stderr,
+        )
+        ok = False
 
     # CACHE-FIRST: the workflow must never wire a remote executor anywhere.
     for forbidden in ("--remote_executor", "--config=executor-backed", "BAZEL_REMOTE_EXECUTOR"):

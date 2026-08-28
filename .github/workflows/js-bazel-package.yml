@@ -1,4 +1,4 @@
-name: JS Bazel Package
+name: JS Bzlmod Package
 
 on:
   workflow_call:
@@ -6,16 +6,16 @@ on:
     inputs:
       runner_mode:
         description: >-
-          Runner policy for validate and publish jobs: compat, shared, or
+          Runner policy for validation jobs: compat, shared, or
           repo_owned. TIN-3914 retired `hosted`: the estate has no
-          GitHub-hosted runners, so every mode resolves to a self-hosted
+          GitHub-hosted runners, so every mode resolves to a GF Nix
           capability class and `hosted` is rejected with a migration error.
         type: string
         default: "compat"
       shared_runner_labels_json:
-        description: "JSON array of shared GloriousFlywheel runner labels used when runner_mode=shared"
+        description: "JSON array of shared GF Nix capability labels used when runner_mode=shared"
         type: string
-        default: '["tinyland-docker"]'
+        default: '["tinyland-nix"]'
       runner_labels_json:
         description: >-
           JSON array of capability-class runner labels used by compat mode
@@ -25,75 +25,6 @@ on:
           the pre-TIN-3914 default was the GitHub-hosted Ubuntu label.
         type: string
         default: ""
-      workspace_mode:
-        description: "Workspace policy for validation: isolated or persistent_compat"
-        type: string
-        default: "persistent_compat"
-      publish_mode:
-        description: >-
-          Publish policy. `same_runner` is the only supported value:
-          TIN-3914 retired `hosted_exception`, which forced publish jobs
-          onto a GitHub-hosted runner. Passing it is a hard error carrying a
-          migration message, rather than a silent re-route of a token-bearing
-          job.
-        type: string
-        default: "same_runner"
-      node_versions:
-        description: "JSON array of Node.js versions to validate"
-        type: string
-        default: '["20", "22"]'
-      publish_node_version:
-        description: "Node.js version used for publish and dry-run steps"
-        type: string
-        default: "22"
-      pnpm_version:
-        description: "pnpm version to install"
-        type: string
-        default: "9"
-      metadata_check_command:
-        description: "Optional release metadata parity command"
-        type: string
-        default: ""
-      cleanup_paths:
-        description: "Optional space-delimited paths to chmod/rm before install when workspace_mode=persistent_compat"
-        type: string
-        default: "dist node_modules bazel-bin bazel-out bazel-testlogs .pnpm-store pkg pkg-github bazel-pkg.tgz MODULE.bazel.lock"
-      prepare_command:
-        description: "Optional workspace preparation command after install"
-        type: string
-        default: ""
-      lint_command:
-        description: "Optional lint command"
-        type: string
-        default: ""
-      lint_continue_on_error:
-        description: "When true, lint failures are reported but do not fail validation"
-        type: boolean
-        default: false
-      typecheck_command:
-        description: "Optional typecheck command"
-        type: string
-        default: ""
-      typecheck_continue_on_error:
-        description: "When true, typecheck failures are reported but do not fail validation"
-        type: boolean
-        default: false
-      unit_test_command:
-        description: "Optional unit test command"
-        type: string
-        default: ""
-      integration_test_command:
-        description: "Optional integration test command"
-        type: string
-        default: ""
-      build_command:
-        description: "Build command for the workspace artifact"
-        type: string
-        default: "pnpm build"
-      package_check_command:
-        description: "Optional package surface validation command"
-        type: string
-        default: "pnpm check:package"
       bazel_targets:
         description: "Space-delimited Bazel targets to validate"
         type: string
@@ -103,18 +34,34 @@ on:
         type: string
         default: "3"
       trusted_module_owners:
-        description: "Comma-separated GitHub owners whose github.com/raw.githubusercontent.com fetch URIs receive the registry token via the Bazel credential helper. Org-parameterized (TIN-2353): a tenant org lists itself to fetch its own private Bazel modules; tinyland-inc remains the default."
+        description: "Comma-separated GitHub owners whose github.com, raw.githubusercontent.com, and api.github.com/repos/<owner> source URIs receive the read token via the Bazel credential helper. Org-parameterized (TIN-2353); tinyland-inc remains the default."
         type: string
         default: "tinyland-inc"
+      verify_bzlmod_lock:
+        description: >-
+          Opt-in (default false) committed MODULE.bazel.lock verification. On a
+          GF self-hosted capability runner, require the tracked lock, run
+          `$CI_BAZELISK_BIN mod deps --lockfile_mode=update`, fail on
+          drift, and validate Bazel targets with `--lockfile_mode=error`.
+        type: boolean
+        default: false
+      emit_bzlmod_lock_artifact:
+        description: >-
+          Opt-in (default false) remote MODULE.bazel.lock refresh. On a GF
+          self-hosted capability runner, preserve any existing lock, run
+          `$CI_BAZELISK_BIN mod deps --lockfile_mode=update`, validate Bazel targets
+          with `--lockfile_mode=error`, and upload the resulting lock once as
+          the bzlmod-lock artifact.
+        type: boolean
+        default: false
       cache_backed:
         description: >-
           Opt-in (default false) shared-cache-backed Bazel validation. When true,
           the Bazel target validation runs through the cache-attachment contract
           (fail-closed) and `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
           --remote_upload_local_results=false`, reading the shared Bazel cache.
-          CACHE-FIRST only: no remote executor is wired. When false/unset the
-          existing plain `bazelisk build ... --verbose_failures` path runs
-          byte-identically (zero behavior change for non-opted consumers).
+          CACHE-FIRST only: no remote executor is wired. When false/unset,
+          targets use the same GF/Nix Bazelisk front door without cache flags.
         type: boolean
         default: false
       substrate_mode:
@@ -128,61 +75,18 @@ on:
           default (non-cache-backed) path.
         type: string
         default: ""
-      package_dir:
-        description: "Directory containing the Bazel-built publishable package"
-        type: string
-        default: "./bazel-bin/pkg"
-      npm_access:
-        description: "npm access mode"
-        type: string
-        default: "public"
-      npm_publish_provenance:
-        description: "When true, request npm provenance for npmjs publishes when supported"
-        type: boolean
-        default: true
-      npm_publish_mode:
-        description: "npmjs publication policy: required, optional, or disabled"
-        type: string
-        default: "required"
-      npm_registry_url:
-        description: "npm registry URL for publication"
-        type: string
-        default: "https://registry.npmjs.org"
-      github_package_name:
-        description: "Optional GitHub Packages package name; scope must match the GitHub owner, not necessarily the npmjs scope"
-        type: string
-        default: ""
-      github_package_registry:
-        description: "GitHub Packages registry URL"
-        type: string
-        default: "https://npm.pkg.github.com"
-      dry_run:
-        description: "When true, publish jobs only perform dry-runs"
-        type: boolean
-        default: true
-      publish_on_tag:
-        description: "When true, publish jobs run on push tag events even when dry_run remains true for PRs and branches"
-        type: boolean
-        default: false
     secrets:
-      NPM_TOKEN:
-        description: "npmjs.com publish token"
-        required: false
-      TINYLAND_GITHUB_PACKAGES_TOKEN:
-        description: "Optional GitHub Packages token with write:packages for existing granular packages that do not grant GITHUB_TOKEN workflow access"
-        required: false
       TINYLAND_REGISTRY_GITHUB_TOKEN:
         description: "GitHub token with read access to private tinyland-inc Bazel module tarballs"
         required: false
-      SYNC_PAT:
-        description: "Fallback GitHub token with read access to sibling tinyland-inc repositories"
-        required: false
-      GH_TOKEN:
-        description: "Fallback GitHub CLI token with read access to sibling tinyland-inc repositories"
-        required: false
+
+permissions:
+  contents: read
 
 jobs:
   resolve-runner:
+    # Fork PR code never reaches a GF self-hosted runner.
+    if: github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository
     # TIN-3914: the label-resolution job itself runs on the estate base
     # capability class. It is the job every other job reads its runs-on from,
     # so leaving it hosted would have kept a GitHub-hosted runner on the
@@ -191,7 +95,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       validate_runner_labels_json: ${{ steps.resolve.outputs.validate_runner_labels_json }}
-      publish_runner_labels_json: ${{ steps.resolve.outputs.publish_runner_labels_json }}
     steps:
       - name: Resolve runner labels
         id: resolve
@@ -200,7 +103,6 @@ jobs:
           RUNNER_MODE: ${{ inputs.runner_mode }}
           RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
           SHARED_RUNNER_LABELS_JSON: ${{ inputs.shared_runner_labels_json }}
-          PUBLISH_MODE: ${{ inputs.publish_mode }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -209,7 +111,6 @@ jobs:
           import re
 
           runner_mode = os.environ.get("RUNNER_MODE") or "compat"
-          publish_mode = os.environ.get("PUBLISH_MODE") or "same_runner"
           shared_runner_labels_raw = os.environ.get("SHARED_RUNNER_LABELS_JSON")
 
           if runner_mode == "hosted":
@@ -219,14 +120,6 @@ jobs:
 
           if runner_mode not in {"compat", "shared", "repo_owned"}:
               raise SystemExit(f"Unsupported runner_mode: {runner_mode}")
-
-          if publish_mode == "hosted_exception":
-              raise SystemExit(
-                  "publish_mode=hosted_exception was retired by TIN-3914 (the estate has no GitHub-hosted runners). Drop the input: publish now runs on the same validated self-hosted capability class. Note that npm provenance is not requested on self-hosted runners; see docs/migration-v2-to-v3.md"
-              )
-
-          if publish_mode != "same_runner":
-              raise SystemExit(f"Unsupported publish_mode: {publish_mode}")
 
           if runner_mode == "shared" and shared_runner_labels_raw is not None and not shared_runner_labels_raw.strip():
               raise SystemExit(
@@ -251,7 +144,7 @@ jobs:
               return labels
 
           org_capability_label = re.compile(
-              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$"
+              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu)$"
           )
           # TIN-3914: fail closed on a GitHub-hosted label in EVERY mode, not
           # just the capability-required ones. There is no hosted lane left to
@@ -268,16 +161,18 @@ jobs:
                   )
 
           def require_org_capability(labels: list[str], name: str) -> None:
-              if not any(org_capability_label.fullmatch(label) for label in labels):
+              if not labels or not all(
+                  org_capability_label.fullmatch(label) for label in labels
+              ):
                   raise SystemExit(
-                      f"{name} must include an org capability-class label "
-                      "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind)"
+                      f"{name} must contain only GF Nix capability-class labels "
+                      "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu)"
                   )
 
           runner_labels = parse_labels("RUNNER_LABELS_JSON", '["tinyland-nix"]')
           shared_runner_labels = parse_labels(
               "SHARED_RUNNER_LABELS_JSON",
-              '["tinyland-docker"]',
+              '["tinyland-nix"]',
           )
 
           # Check each list under its OWN name, before selection: in shared
@@ -294,24 +189,18 @@ jobs:
           if runner_mode == "repo_owned" and not (os.environ.get("RUNNER_LABELS_JSON") or "").strip():
               raise SystemExit("runner_mode=repo_owned requires explicit runner_labels_json")
 
-          if runner_mode == "repo_owned":
-              require_org_capability(validate_runner_labels, "runner_labels_json")
-          elif runner_mode == "shared":
-              require_org_capability(validate_runner_labels, "shared_runner_labels_json")
+          labels_name = (
+              "shared_runner_labels_json"
+              if runner_mode == "shared"
+              else "runner_labels_json"
+          )
+          require_org_capability(validate_runner_labels, labels_name)
 
-          # publish_mode is same_runner by construction above: publish runs on
-          # the validated self-hosted class, never a hosted exception lane.
-          publish_runner_labels = validate_runner_labels
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(
                   "validate_runner_labels_json="
                   + json.dumps(validate_runner_labels, separators=(",", ":")),
-                  file=output,
-              )
-              print(
-                  "publish_runner_labels_json="
-                  + json.dumps(publish_runner_labels, separators=(",", ":")),
                   file=output,
               )
           PY
@@ -322,11 +211,6 @@ jobs:
     timeout-minutes: 30
     env:
       BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
-      NODE_VERSION: ${{ matrix.node-version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: ${{ fromJson(inputs.node_versions || '["20", "22"]') }}
     steps:
       - name: Validate workflow contract
         shell: bash
@@ -334,10 +218,8 @@ jobs:
           RUNNER_MODE: ${{ inputs.runner_mode }}
           RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
           SHARED_RUNNER_LABELS_JSON: ${{ inputs.shared_runner_labels_json }}
-          WORKSPACE_MODE: ${{ inputs.workspace_mode }}
-          PUBLISH_MODE: ${{ inputs.publish_mode }}
-          NPM_PUBLISH_MODE: ${{ inputs.npm_publish_mode }}
           BAZEL_FETCH_RETRY_ATTEMPTS: ${{ inputs.bazel_fetch_retry_attempts || '3' }}
+          BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
         run: |
           set -euo pipefail
           case "$RUNNER_MODE" in
@@ -348,31 +230,6 @@ jobs:
               ;;
             *)
               echo "Unsupported runner_mode: $RUNNER_MODE" >&2
-              exit 1
-              ;;
-          esac
-          case "$WORKSPACE_MODE" in
-            isolated|persistent_compat) ;;
-            *)
-              echo "Unsupported workspace_mode: $WORKSPACE_MODE" >&2
-              exit 1
-              ;;
-          esac
-          case "$PUBLISH_MODE" in
-            same_runner) ;;
-            hosted_exception)
-              echo "publish_mode=hosted_exception was retired by TIN-3914 (the estate has no GitHub-hosted runners). Drop the input: publish now runs on the same validated self-hosted capability class. Note that npm provenance is not requested on self-hosted runners; see docs/migration-v2-to-v3.md" >&2
-              exit 1
-              ;;
-            *)
-              echo "Unsupported publish_mode: $PUBLISH_MODE" >&2
-              exit 1
-              ;;
-          esac
-          case "$NPM_PUBLISH_MODE" in
-            required|optional|disabled) ;;
-            *)
-              echo "Unsupported npm_publish_mode: $NPM_PUBLISH_MODE" >&2
               exit 1
               ;;
           esac
@@ -390,6 +247,18 @@ jobs:
             echo "bazel_fetch_retry_attempts must be between 1 and 5" >&2
             exit 1
           fi
+          read -r -a bazel_targets <<< "$BAZEL_TARGETS"
+          if [ "${#bazel_targets[@]}" -eq 0 ]; then
+            echo "bazel_targets must contain at least one Bazel target" >&2
+            exit 1
+          fi
+          for target in "${bazel_targets[@]}"; do
+            case "$target" in
+              -*) echo "bazel_targets accepts targets, not Bazel flags: $target" >&2; exit 1 ;;
+              //*|@*//*) ;;
+              *) echo "bazel_targets contains an invalid target pattern: $target" >&2; exit 1 ;;
+            esac
+          done
           if [ "$RUNNER_MODE" = "repo_owned" ] && [ -z "${RUNNER_LABELS_JSON//[[:space:]]/}" ]; then
             echo "runner_mode=repo_owned requires explicit runner_labels_json" >&2
             exit 1
@@ -399,15 +268,17 @@ jobs:
             echo "GitHub-hosted runner labels are forbidden estate-wide (TIN-3914); pass a self-hosted capability class" >&2
             exit 1
           fi
-          if [ "$RUNNER_MODE" = "repo_owned" ] || [ "$RUNNER_MODE" = "shared" ]; then
-            if [ "$RUNNER_MODE" = "repo_owned" ]; then
-              labels_json="$RUNNER_LABELS_JSON"
-              labels_name="runner_labels_json"
-            else
-              labels_json="$SHARED_RUNNER_LABELS_JSON"
-              labels_name="shared_runner_labels_json"
+          if [ "$RUNNER_MODE" = "shared" ]; then
+            labels_json="$SHARED_RUNNER_LABELS_JSON"
+            labels_name="shared_runner_labels_json"
+          else
+            labels_json="$RUNNER_LABELS_JSON"
+            labels_name="runner_labels_json"
+            if [ -z "${labels_json//[[:space:]]/}" ]; then
+              labels_json='["tinyland-nix"]'
             fi
-            LABELS_JSON="$labels_json" LABELS_NAME="$labels_name" python3 - <<'PY'
+          fi
+          LABELS_JSON="$labels_json" LABELS_NAME="$labels_name" python3 - <<'PY'
           import json
           import os
           import re
@@ -422,85 +293,65 @@ jobs:
               raise SystemExit(1) from exc
 
           org_capability_label = re.compile(
-              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$"
+              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu)$"
           )
-          if not isinstance(labels, list) or not any(
-              isinstance(label, str) and org_capability_label.fullmatch(label)
-              for label in labels
+          if (
+              not isinstance(labels, list)
+              or not labels
+              or not all(
+                  isinstance(label, str) and org_capability_label.fullmatch(label)
+                  for label in labels
+              )
           ):
               print(
-                  f"{labels_name} must include an org capability-class label "
-                  "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind)",
+                  f"{labels_name} must contain only GF Nix capability-class labels "
+                  "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu)",
                   file=sys.stderr,
               )
               raise SystemExit(1)
           PY
-          fi
+
+      - name: Configure self-hosted cache contract
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v3.1.0
+
+      - name: Resolve runner-custodied Bazelisk
+        id: bazelisk-custody
+        uses: tinyland-inc/ci-templates/.github/actions/rust-bazel-binary-custody@v3.1.0
+
+      - name: Bind exact Bazelisk path
+        shell: bash
+        env:
+          CI_BAZELISK_BIN: ${{ steps.bazelisk-custody.outputs.path }}
+        run: |
+          set -euo pipefail
+          printf 'CI_BAZELISK_BIN=%s\n' "$CI_BAZELISK_BIN" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          clean: ${{ inputs.workspace_mode != 'persistent_compat' }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+          persist-credentials: false
 
-      - name: Configure self-hosted cache contract
-        if: ${{ runner.environment != 'github-hosted' }}
-        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
+      - name: Assert exact source checkout
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$EXPECTED_SOURCE_SHA" ]; then
+            echo "::error::checkout $actual != expected source $EXPECTED_SOURCE_SHA"
+            exit 1
+          fi
 
-      - name: Resolve working directory
+      - name: Stage isolated graph-proof workspace
         shell: bash
         run: |
           set -euo pipefail
-          WORKSPACE_DIR="$GITHUB_WORKSPACE"
-          if [ "${{ inputs.workspace_mode }}" = "isolated" ]; then
-            WORKSPACE_DIR="$RUNNER_TEMP/js-bazel-package-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.node-version }}"
-            rm -rf "$WORKSPACE_DIR"
-            mkdir -p "$WORKSPACE_DIR"
-            cp -a "$GITHUB_WORKSPACE"/. "$WORKSPACE_DIR"
-          fi
+          WORKSPACE_DIR="$RUNNER_TEMP/js-bzlmod-package-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}"
+          mkdir "$WORKSPACE_DIR"
+          cp -a "$GITHUB_WORKSPACE"/. "$WORKSPACE_DIR"
           echo "WORKSPACE_DIR=$WORKSPACE_DIR" >> "$GITHUB_ENV"
-
-      - name: Clean stale workspace artifacts
-        if: ${{ inputs.workspace_mode == 'persistent_compat' && inputs.cleanup_paths != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          for path in ${{ inputs.cleanup_paths }}; do
-            case "$path" in
-              ""|/*|*..*|-*)
-                echo "Refusing unsafe cleanup path: $path" >&2
-                exit 1
-                ;;
-            esac
-            chmod -R u+w -- "$path" 2>/dev/null || true
-            rm -rf -- "$path"
-          done
-
-      - uses: pnpm/action-setup@fdbc4fdcf7d143a5d0a39e9a02e103b13e309024 # v6.0.4
-        with:
-          version: ${{ inputs.pnpm_version || '9' }}
-
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            **/pnpm-lock.yaml
-
-      - name: Enable Corepack
-        shell: bash
-        run: corepack enable
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          if [ -f pnpm-lock.yaml ]; then
-            pnpm install --frozen-lockfile
-          else
-            pnpm install --no-frozen-lockfile
-          fi
 
       - name: Install Bazel fetch retry helper
         shell: bash
@@ -526,7 +377,7 @@ jobs:
             fi
 
             while [ "$attempt" -le "$attempts" ]; do
-              local log_path="$RUNNER_TEMP/js-bazel-package-${slug}-attempt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${NODE_VERSION:-unknown}-${attempt}.log"
+              local log_path="$RUNNER_TEMP/js-bazel-package-${slug}-attempt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${attempt}.log"
               set +e
               bash -e -u -o pipefail -c "$command" 2>&1 | tee "$log_path"
               local status="${PIPESTATUS[0]}"
@@ -547,7 +398,7 @@ jobs:
               fi
 
               echo "::warning::$label hit a transient Bazel external fetch/download failure on attempt $attempt/$attempts; retrying."
-              npx --yes @bazel/bazelisk shutdown >/dev/null 2>&1 || true
+              "$CI_BAZELISK_BIN" shutdown >/dev/null 2>&1 || true
               sleep 10
               attempt=$((attempt + 1))
             done
@@ -558,7 +409,7 @@ jobs:
       - name: Install Bazel GitHub credential helper
         shell: bash
         env:
-          TINYLAND_REGISTRY_GITHUB_TOKEN: ${{ secrets.TINYLAND_REGISTRY_GITHUB_TOKEN || secrets.SYNC_PAT || secrets.GH_TOKEN || github.token }}
+          TINYLAND_REGISTRY_GITHUB_TOKEN: ${{ secrets.TINYLAND_REGISTRY_GITHUB_TOKEN || github.token }}
           BAZEL_TRUSTED_MODULE_OWNERS: ${{ inputs.trusted_module_owners }}
         run: |
           set -euo pipefail
@@ -585,12 +436,7 @@ jobs:
               request = {}
 
           uri = str(request.get("uri") or "")
-          token = (
-              os.environ.get("TINYLAND_REGISTRY_GITHUB_TOKEN")
-              or os.environ.get("GH_TOKEN")
-              or os.environ.get("GITHUB_TOKEN")
-              or ""
-          )
+          token = os.environ.get("TINYLAND_REGISTRY_GITHUB_TOKEN") or ""
 
           owners = [
               o.strip().lower()
@@ -603,6 +449,7 @@ jobs:
               for prefix in (
                   f"https://github.com/{owner}/",
                   f"https://raw.githubusercontent.com/{owner}/",
+                  f"https://api.github.com/repos/{owner}/",
               )
           )
 
@@ -617,6 +464,7 @@ jobs:
           {
             echo "common --credential_helper=github.com=$helper_path"
             echo "common --credential_helper=raw.githubusercontent.com=$helper_path"
+            echo "common --credential_helper=api.github.com=$helper_path"
           } >> user.bazelrc
 
           if [ -n "${TINYLAND_REGISTRY_GITHUB_TOKEN:-}" ]; then
@@ -629,108 +477,77 @@ jobs:
             echo "::warning::No GitHub token is available for private Bazel module tarball fetches."
           fi
 
-      - name: Prepare workspace
-        if: ${{ inputs.prepare_command != '' }}
-        shell: bash
-        env:
-          COMMAND: ${{ inputs.prepare_command }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          # shellcheck source=/dev/null
-          source "$BAZEL_FETCH_RETRY_HELPER"
-          run_with_bazel_fetch_retry "Prepare workspace" "$COMMAND"
+      # Optional cache-backed manifest gate; v4 remains cache-first and GF-only.
+      # The vendored schema validates tinyland.repo.json without network access.
+      - name: Validate repo manifest (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@5959c1230caab03fa324fc45e4829d7122a0e107
+        with:
+          path: ${{ env.WORKSPACE_DIR }}/tinyland.repo.json
 
-      - name: Verify release metadata
-        if: ${{ inputs.metadata_check_command != '' }}
-        shell: bash
-        env:
-          COMMAND: ${{ inputs.metadata_check_command }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          # shellcheck source=/dev/null
-          source "$BAZEL_FETCH_RETRY_HELPER"
-          run_with_bazel_fetch_retry "Verify release metadata" "$COMMAND"
+      # Optional shared-cache validation executes only the immutable template
+      # contract. Caller scripts and network-fetched shell never become authority.
+      - name: Assert shared-cache attachment (cache-backed lane)
+        if: ${{ inputs.cache_backed }}
+        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v3.1.0
+        with:
+          substrate_mode: ${{ inputs.substrate_mode }}
+          runner_labels: ${{ join(runner.labels, ',') }}
 
-      - name: Lint
-        if: ${{ inputs.lint_command != '' }}
-        continue-on-error: ${{ inputs.lint_continue_on_error }}
+      - name: Refresh or verify Bzlmod lock (GF only)
+        if: ${{ inputs.verify_bzlmod_lock || inputs.emit_bzlmod_lock_artifact }}
         shell: bash
         env:
-          COMMAND: ${{ inputs.lint_command }}
+          VERIFY_BZLMOD_LOCK: ${{ inputs.verify_bzlmod_lock }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          RUNNER_LABELS: ${{ join(runner.labels, ',') }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          # shellcheck source=/dev/null
-          source "$BAZEL_FETCH_RETRY_HELPER"
-          run_with_bazel_fetch_retry "Lint" "$COMMAND"
 
-      - name: Typecheck
-        if: ${{ inputs.typecheck_command != '' }}
-        continue-on-error: ${{ inputs.typecheck_continue_on_error }}
-        shell: bash
-        env:
-          COMMAND: ${{ inputs.typecheck_command }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          # shellcheck source=/dev/null
-          source "$BAZEL_FETCH_RETRY_HELPER"
-          run_with_bazel_fetch_retry "Typecheck" "$COMMAND"
+          if [ "$RUNNER_ENVIRONMENT" != "self-hosted" ] \
+            || [[ ! ",$RUNNER_LABELS," =~ ,[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu), ]]; then
+            echo "::error::Bzlmod lock refresh/verification requires a GF self-hosted capability runner."
+            exit 1
+          fi
+          if [ ! -f MODULE.bazel ]; then
+            echo "::error::Bzlmod lock refresh/verification requires MODULE.bazel at the workspace root."
+            exit 1
+          fi
 
-      - name: Unit tests
-        if: ${{ inputs.unit_test_command != '' }}
-        shell: bash
-        env:
-          COMMAND: ${{ inputs.unit_test_command }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          # shellcheck source=/dev/null
-          source "$BAZEL_FETCH_RETRY_HELPER"
-          run_with_bazel_fetch_retry "Unit tests" "$COMMAND"
+          if [ "$VERIFY_BZLMOD_LOCK" = "true" ]; then
+            if ! git ls-files --error-unmatch -- MODULE.bazel.lock >/dev/null 2>&1; then
+              echo "::error::verify_bzlmod_lock=true requires a tracked MODULE.bazel.lock."
+              exit 1
+            fi
+            if [ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]; then
+              echo "::error::MODULE.bazel.lock was dirty before committed-lock verification."
+              exit 1
+            fi
+          fi
 
-      - name: Integration tests
-        if: ${{ inputs.integration_test_command != '' }}
-        shell: bash
-        env:
-          COMMAND: ${{ inputs.integration_test_command }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
           # shellcheck source=/dev/null
           source "$BAZEL_FETCH_RETRY_HELPER"
-          run_with_bazel_fetch_retry "Integration tests" "$COMMAND"
+          run_with_bazel_fetch_retry "Refresh Bzlmod lock" \
+            "\"$CI_BAZELISK_BIN\" mod deps --lockfile_mode=update"
 
-      - name: Build workspace artifact
-        shell: bash
-        env:
-          COMMAND: ${{ inputs.build_command || 'pnpm build' }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          # shellcheck source=/dev/null
-          source "$BAZEL_FETCH_RETRY_HELPER"
-          run_with_bazel_fetch_retry "Build workspace artifact" "$COMMAND"
-
-      - name: Validate package surface
-        if: ${{ inputs.package_check_command != '' }}
-        shell: bash
-        env:
-          COMMAND: ${{ inputs.package_check_command }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          # shellcheck source=/dev/null
-          source "$BAZEL_FETCH_RETRY_HELPER"
-          run_with_bazel_fetch_retry "Validate package surface" "$COMMAND"
+          if [ ! -f MODULE.bazel.lock ]; then
+            echo "::error::Bazel did not produce MODULE.bazel.lock."
+            exit 1
+          fi
+          if [ "$VERIFY_BZLMOD_LOCK" = "true" ] \
+            && [ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]; then
+            git --no-pager diff -- MODULE.bazel.lock
+            echo "::error::Bzlmod lock drift detected; download a remote refresh artifact and commit it."
+            exit 1
+          fi
 
       - name: Validate Bazel targets
         if: ${{ !inputs.cache_backed }}
         shell: bash
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
+          ENFORCE_BZLMOD_LOCK: ${{ inputs.verify_bzlmod_lock || inputs.emit_bzlmod_lock_artifact }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
@@ -740,79 +557,18 @@ jobs:
           # shellcheck source=/dev/null
           source "$BAZEL_FETCH_RETRY_HELPER"
           targets_quoted="$(printf '%q ' "${bazel_targets[@]}")"
-          run_with_bazel_fetch_retry "Validate Bazel targets" "npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"
-
-      # Opt-in (cache_backed=true) manifest validation. This is a NEW conditional
-      # path; the default path above is untouched (byte-identical for non-opted
-      # consumers). Validates the consumer's tinyland.repo.json against the
-      # vendored ci-templates schema and FAILS CLOSED on an invalid manifest
-      # (TIN-2109). Network-free: the schema ships in the action.
-      - name: Validate repo manifest (cache-backed lane)
-        if: ${{ inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2
-        with:
-          path: ${{ env.WORKSPACE_DIR }}/tinyland.repo.json
-
-      # Opt-in (cache_backed=true) shared-cache-backed validation. This is a NEW
-      # conditional path; the default path above is untouched. CACHE-FIRST only:
-      # no remote executor is ever wired here (TIN-1997 Option D / TIN-2110).
-      # The contract's EXPECTED MODE is manifest-driven (TIN-2109): it is read
-      # from enrollment.substrateMode in tinyland.repo.json (authoritative), not a
-      # hard-coded workflow default. Runner labels are fed so the contract rejects
-      # hosted / non-cluster runner fallback (no silent degrade).
-      - name: Assert shared-cache attachment (cache-backed lane)
-        if: ${{ inputs.cache_backed }}
-        shell: bash
-        env:
-          CI_TEMPLATES_REF: v2.5.1
-          SUBSTRATE_MODE_INPUT: ${{ inputs.substrate_mode }}
-          RUNNER_LABELS: ${{ join(runner.labels, ',') }}
-        run: |
-          set -euo pipefail
-          # The contract script ships in this ci-templates repo; locate it from
-          # the checked-out caller workspace fallback, else fetch the immutable
-          # pinned copy (CI_TEMPLATES_REF is the releasing tag, not floating v2).
-          script="$RUNNER_TEMP/cache-attachment-contract.sh"
-          if [ -f "$WORKSPACE_DIR/scripts/cache-attachment-contract.sh" ]; then
-            script="$WORKSPACE_DIR/scripts/cache-attachment-contract.sh"
+          if [ "$ENFORCE_BZLMOD_LOCK" = "true" ]; then
+            run_with_bazel_fetch_retry "Validate Bazel targets" "\"$CI_BAZELISK_BIN\" build ${targets_quoted}--lockfile_mode=error --verbose_failures"
           else
-            curl -fsSL \
-              "https://raw.githubusercontent.com/tinyland-inc/ci-templates/${CI_TEMPLATES_REF}/scripts/cache-attachment-contract.sh" \
-              -o "$script"
-            chmod +x "$script"
+            run_with_bazel_fetch_retry "Validate Bazel targets" "\"$CI_BAZELISK_BIN\" build ${targets_quoted}--verbose_failures"
           fi
-
-          # Manifest-driven expected mode (TIN-2109). Authority order:
-          #   1. enrollment.substrateMode in the consumer's tinyland.repo.json
-          #   2. the substrate_mode workflow input (operator override)
-          #   3. existing default (shared-cache-backed) for back-compat
-          # When the manifest declares a mode that disagrees with the actual
-          # endpoint attachment, the contract script fails closed.
-          declared_mode=""
-          manifest="$WORKSPACE_DIR/tinyland.repo.json"
-          if [ -f "$manifest" ]; then
-            declared_mode="$(jq -r '.enrollment.substrateMode // empty' "$manifest")"
-          fi
-          if [ -z "$declared_mode" ]; then
-            declared_mode="$SUBSTRATE_MODE_INPUT"
-          fi
-          export GF_BAZEL_SUBSTRATE_MODE="${declared_mode:-shared-cache-backed}"
-          export GF_FLYWHEEL_PROFILE_STATE="$GF_BAZEL_SUBSTRATE_MODE"
-          echo "GF_FLYWHEEL_PROFILE_STATE=$GF_FLYWHEEL_PROFILE_STATE" >> "$GITHUB_ENV"
-          echo "::notice::cache-backed lane expected mode (manifest-driven): $GF_BAZEL_SUBSTRATE_MODE"
-          echo "::notice::Flywheel profile state: $GF_FLYWHEEL_PROFILE_STATE"
-
-          # Feed runner labels so the contract rejects hosted / non-cluster
-          # runner fallback. A missing substrate is a deterministic failure,
-          # never a silent degrade to a GitHub-hosted build.
-          export GF_BAZEL_RUNNER_LABELS="$RUNNER_LABELS"
-          bash "$script" --strict
 
       - name: Validate Bazel targets (cache-backed)
         if: ${{ inputs.cache_backed }}
         shell: bash
         env:
           BAZEL_TARGETS: ${{ inputs.bazel_targets || '//:pkg' }}
+          ENFORCE_BZLMOD_LOCK: ${{ inputs.verify_bzlmod_lock || inputs.emit_bzlmod_lock_artifact }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
@@ -829,309 +585,34 @@ jobs:
           # CACHE-FIRST: ci-cached config + injected remote cache, read-only
           # (no upload), and no remote executor is wired. The remote cache
           # hit/transfer lines in this step's log are the real-attach proof.
-          run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
-            "npx --yes @bazel/bazelisk build ${targets_quoted}--config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
-
-      - name: Validate npm tarball from Bazel artifact
-        shell: bash
-        env:
-          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          npm pack --dry-run "$PACKAGE_DIR"
-
-      - name: Validate npm publish dry-run from Bazel artifact
-        if: ${{ inputs.npm_publish_mode != 'disabled' }}
-        shell: bash
-        env:
-          NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
-          NPM_PUBLISH_MODE: ${{ inputs.npm_publish_mode || 'required' }}
-          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          set +e
-          dry_run_output="$(npm publish --dry-run --ignore-scripts --access "$NPM_ACCESS" "$PACKAGE_DIR" 2>&1)"
-          dry_run_status="$?"
-          set -e
-          printf '%s\n' "$dry_run_output"
-          if [ "$dry_run_status" -ne 0 ]; then
-            if grep -Fq "You cannot publish over the previously published versions" <<<"$dry_run_output"; then
-              echo "::notice::Skipping npm publish dry-run because this exact package version already exists in npm."
-            elif [ "$NPM_PUBLISH_MODE" = "optional" ]; then
-              echo "::warning::npmjs publish dry-run failed, but npm_publish_mode=optional makes npmjs non-blocking."
-            else
-              exit "$dry_run_status"
-            fi
+          if [ "$ENFORCE_BZLMOD_LOCK" = "true" ]; then
+            run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
+              "\"$CI_BAZELISK_BIN\" build ${targets_quoted}--lockfile_mode=error --config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
+          else
+            run_with_bazel_fetch_retry "Validate Bazel targets (cache-backed)" \
+              "\"$CI_BAZELISK_BIN\" build ${targets_quoted}--config=ci-cached --remote_cache=${BAZEL_REMOTE_CACHE} --remote_upload_local_results=false --verbose_failures"
           fi
 
-      - name: Validate GitHub Packages dry-run from Bazel artifact
-        if: ${{ inputs.github_package_name != '' }}
+      - name: Confirm committed Bzlmod lock stayed unchanged
+        if: ${{ inputs.verify_bzlmod_lock }}
         shell: bash
-        env:
-          GITHUB_PACKAGE_NAME: ${{ inputs.github_package_name }}
-          GITHUB_PACKAGE_REGISTRY: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
-          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
         run: |
           set -euo pipefail
           cd "$WORKSPACE_DIR"
-          rm -rf pkg-github
-          cp -R "$PACKAGE_DIR" pkg-github
-          chmod -R u+w pkg-github
-          node - <<'NODE'
-          const fs = require('fs');
-          const path = './pkg-github/package.json';
-          const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
-          pkg.name = process.env.GITHUB_PACKAGE_NAME;
-          pkg.publishConfig = {
-            ...(pkg.publishConfig || {}),
-            registry: process.env.GITHUB_PACKAGE_REGISTRY
-          };
-          fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
-          NODE
-          npm publish ./pkg-github --dry-run --ignore-scripts
+          if [ -n "$(git status --porcelain=v1 -- MODULE.bazel.lock)" ]; then
+            git --no-pager diff -- MODULE.bazel.lock
+            echo "::error::MODULE.bazel.lock changed after committed-lock verification."
+            exit 1
+          fi
 
-      - name: Archive Bazel package artifact
-        shell: bash
-        env:
-          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
-        run: |
-          set -euo pipefail
-          cd "$WORKSPACE_DIR"
-          PACKAGE_PARENT=$(dirname "$PACKAGE_DIR")
-          PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
-          tar -czf bazel-pkg.tgz -C "$PACKAGE_PARENT" "$PACKAGE_BASENAME"
-
-      - name: Upload Bazel package artifact
-        if: ${{ matrix.node-version == (inputs.publish_node_version || '22') }}
+      - name: Upload refreshed Bzlmod lock
+        if: ${{ inputs.emit_bzlmod_lock_artifact }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bazel-pkg
-          path: ${{ env.WORKSPACE_DIR }}/bazel-pkg.tgz
+          name: bzlmod-lock
+          path: ${{ env.WORKSPACE_DIR }}/MODULE.bazel.lock
           if-no-files-found: error
 
-  publish-npm:
-    needs:
-      - resolve-runner
-      - validate
-    if: ${{ inputs.npm_publish_mode != 'disabled' && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
-    runs-on: ${{ fromJson(needs.resolve-runner.outputs.publish_runner_labels_json) }}
-    timeout-minutes: 20
-    steps:
-      - name: Resolve npmjs publish policy
-        id: npm-policy
-        shell: bash
-        env:
-          NPM_PUBLISH_MODE: ${{ inputs.npm_publish_mode || 'required' }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          case "${{ inputs.publish_mode }}" in
-            same_runner) ;;
-            hosted_exception)
-              echo "publish_mode=hosted_exception was retired by TIN-3914 (the estate has no GitHub-hosted runners). Drop the input: publish now runs on the same validated self-hosted capability class. Note that npm provenance is not requested on self-hosted runners; see docs/migration-v2-to-v3.md" >&2
-              exit 1
-              ;;
-            *)
-              echo "Unsupported publish_mode: ${{ inputs.publish_mode }}" >&2
-              exit 1
-              ;;
-          esac
-          case "$NPM_PUBLISH_MODE" in
-            required)
-              if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-                echo "NPM_TOKEN is required for npmjs publication." >&2
-                exit 1
-              fi
-              echo "should_publish=true" >> "$GITHUB_OUTPUT"
-              ;;
-            optional)
-              if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-                echo "::notice::Skipping npmjs publication because npm_publish_mode=optional and NPM_TOKEN is absent."
-                echo "should_publish=false" >> "$GITHUB_OUTPUT"
-              else
-                echo "should_publish=true" >> "$GITHUB_OUTPUT"
-              fi
-              ;;
-            *)
-              echo "Unsupported npm_publish_mode: $NPM_PUBLISH_MODE" >&2
-              exit 1
-              ;;
-          esac
+      # TIN-89: no registry publication lives in this workflow. Release
+      # authority is an immutable source tag/archive plus a reviewed BCR append.
 
-      - name: Configure self-hosted cache contract
-        if: ${{ steps.npm-policy.outputs.should_publish == 'true' && runner.environment != 'github-hosted' }}
-        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
-
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
-        if: ${{ steps.npm-policy.outputs.should_publish == 'true' }}
-        with:
-          node-version: ${{ inputs.publish_node_version || '22' }}
-          registry-url: ${{ inputs.npm_registry_url || 'https://registry.npmjs.org' }}
-
-      - name: Download Bazel package artifact
-        if: ${{ steps.npm-policy.outputs.should_publish == 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: bazel-pkg
-
-      - name: Extract Bazel package artifact into isolated publish workspace
-        if: ${{ steps.npm-policy.outputs.should_publish == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          PUBLISH_ROOT="$RUNNER_TEMP/js-bazel-package-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}"
-          rm -rf "$PUBLISH_ROOT"
-          mkdir -p "$PUBLISH_ROOT"
-          tar -xzf bazel-pkg.tgz -C "$PUBLISH_ROOT"
-          echo "PUBLISH_ROOT=$PUBLISH_ROOT" >> "$GITHUB_ENV"
-
-      - name: Publish npm artifact
-        if: ${{ steps.npm-policy.outputs.should_publish == 'true' }}
-        shell: bash
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
-          NPM_PUBLISH_MODE: ${{ inputs.npm_publish_mode || 'required' }}
-          NPM_REGISTRY_URL: ${{ inputs.npm_registry_url || 'https://registry.npmjs.org' }}
-          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
-          RUNNER_ENVIRONMENT: ${{ runner.environment }}
-        run: |
-          set -euo pipefail
-          : "${PACKAGE_DIR:?}"
-          PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
-          PACKAGE_PATH="$PUBLISH_ROOT/$PACKAGE_BASENAME"
-          PACKAGE_JSON="$PACKAGE_PATH/package.json"
-          PACKAGE_NAME=$(node -e "const pkg=require(process.argv[1]); if (!pkg.name) process.exit(1); console.log(pkg.name)" "$PACKAGE_JSON")
-          PACKAGE_VERSION=$(node -e "const pkg=require(process.argv[1]); if (!pkg.version) process.exit(1); console.log(pkg.version)" "$PACKAGE_JSON")
-          PACKAGE_ID="${PACKAGE_NAME}@${PACKAGE_VERSION}"
-          if existing_version=$(npm view "$PACKAGE_ID" version --registry "$NPM_REGISTRY_URL" 2>/dev/null); then
-            if [ "$existing_version" = "$PACKAGE_VERSION" ]; then
-              echo "::notice::Skipping npmjs publish because $PACKAGE_ID already exists in $NPM_REGISTRY_URL."
-              exit 0
-            fi
-          fi
-          PUBLISH_ARGS=("$PACKAGE_PATH" --ignore-scripts --access "$NPM_ACCESS")
-          # Fails closed: only an explicit `github-hosted` environment opts in.
-          # npm validates provenance server-side against the Runner Environment
-          # extension in the signing certificate, so requesting it anywhere else
-          # makes the publish FAIL, not merely lose a claim; an empty or
-          # unexpected value must therefore take the no-provenance path.
-          if [ "${{ inputs.npm_publish_provenance }}" = "true" ] && [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
-            PUBLISH_ARGS+=(--provenance)
-          elif [ "${{ inputs.npm_publish_provenance }}" = "true" ]; then
-            # TIN-3914 retired the hosted publish exception, so this job always
-            # runs self-hosted and npm provenance is never requested. Say so
-            # out loud rather than dropping a supply-chain claim silently.
-            echo "::warning::npm_publish_provenance=true but this publish runs on a self-hosted runner; npm provenance is NOT requested (TIN-3914 retired publish_mode=hosted_exception). See docs/migration-v2-to-v3.md."
-          fi
-          set +e
-          npm publish "${PUBLISH_ARGS[@]}"
-          publish_status="$?"
-          set -e
-          if [ "$publish_status" -ne 0 ] && [ "$NPM_PUBLISH_MODE" = "optional" ]; then
-            echo "::warning::npmjs publish failed, but npm_publish_mode=optional makes npmjs non-blocking."
-            exit 0
-          fi
-          exit "$publish_status"
-
-  publish-github:
-    needs:
-      - resolve-runner
-      - validate
-    if: ${{ inputs.github_package_name != '' && (inputs.dry_run == false || (inputs.publish_on_tag == true && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))) }}
-    runs-on: ${{ fromJson(needs.resolve-runner.outputs.publish_runner_labels_json) }}
-    timeout-minutes: 20
-    steps:
-      - name: Validate publish contract
-        shell: bash
-        env:
-          TINYLAND_GITHUB_PACKAGES_TOKEN_PRESENT: ${{ secrets.TINYLAND_GITHUB_PACKAGES_TOKEN != '' }}
-        run: |
-          set -euo pipefail
-          case "${{ inputs.publish_mode }}" in
-            same_runner) ;;
-            hosted_exception)
-              echo "publish_mode=hosted_exception was retired by TIN-3914 (the estate has no GitHub-hosted runners). Drop the input: publish now runs on the same validated self-hosted capability class. Note that npm provenance is not requested on self-hosted runners; see docs/migration-v2-to-v3.md" >&2
-              exit 1
-              ;;
-            *)
-              echo "Unsupported publish_mode: ${{ inputs.publish_mode }}" >&2
-              exit 1
-              ;;
-          esac
-          if [ "$TINYLAND_GITHUB_PACKAGES_TOKEN_PRESENT" = "true" ]; then
-            echo "Using TINYLAND_GITHUB_PACKAGES_TOKEN for GitHub Packages publication."
-          else
-            echo "Using workflow GITHUB_TOKEN for GitHub Packages publication."
-          fi
-
-      - name: Configure self-hosted cache contract
-        if: ${{ runner.environment != 'github-hosted' }}
-        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
-
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
-        with:
-          node-version: ${{ inputs.publish_node_version || '22' }}
-          registry-url: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
-
-      - name: Download Bazel package artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: bazel-pkg
-
-      - name: Extract Bazel package artifact into isolated publish workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          PUBLISH_ROOT="$RUNNER_TEMP/js-bazel-package-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}"
-          rm -rf "$PUBLISH_ROOT"
-          mkdir -p "$PUBLISH_ROOT"
-          tar -xzf bazel-pkg.tgz -C "$PUBLISH_ROOT"
-          echo "PUBLISH_ROOT=$PUBLISH_ROOT" >> "$GITHUB_ENV"
-
-      - name: Prepare GitHub Packages publish directory
-        shell: bash
-        env:
-          GITHUB_PACKAGE_NAME: ${{ inputs.github_package_name }}
-          GITHUB_PACKAGE_REGISTRY: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
-          PACKAGE_DIR: ${{ inputs.package_dir || './bazel-bin/pkg' }}
-        run: |
-          set -euo pipefail
-          PACKAGE_BASENAME=$(basename "$PACKAGE_DIR")
-          rm -rf "$PUBLISH_ROOT/pkg-github"
-          cp -R "$PUBLISH_ROOT/$PACKAGE_BASENAME" "$PUBLISH_ROOT/pkg-github"
-          chmod -R u+w "$PUBLISH_ROOT/pkg-github"
-          node - <<'NODE'
-          const fs = require('fs');
-          const path = process.env.PUBLISH_ROOT + '/pkg-github/package.json';
-          const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
-          pkg.name = process.env.GITHUB_PACKAGE_NAME;
-          pkg.publishConfig = {
-            ...(pkg.publishConfig || {}),
-            registry: process.env.GITHUB_PACKAGE_REGISTRY
-          };
-          fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
-          NODE
-
-      - name: Publish GitHub Packages artifact
-        shell: bash
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.TINYLAND_GITHUB_PACKAGES_TOKEN || github.token }}
-          GITHUB_PACKAGE_REGISTRY: ${{ inputs.github_package_registry || 'https://npm.pkg.github.com' }}
-          NPM_ACCESS: ${{ inputs.npm_access || 'public' }}
-        run: |
-          set -euo pipefail
-          PACKAGE_PATH="$PUBLISH_ROOT/pkg-github"
-          PACKAGE_JSON="$PACKAGE_PATH/package.json"
-          PACKAGE_NAME=$(node -e "const pkg=require(process.argv[1]); if (!pkg.name) process.exit(1); console.log(pkg.name)" "$PACKAGE_JSON")
-          PACKAGE_VERSION=$(node -e "const pkg=require(process.argv[1]); if (!pkg.version) process.exit(1); console.log(pkg.version)" "$PACKAGE_JSON")
-          PACKAGE_ID="${PACKAGE_NAME}@${PACKAGE_VERSION}"
-          if existing_version=$(npm view "$PACKAGE_ID" version --registry "$GITHUB_PACKAGE_REGISTRY" 2>/dev/null); then
-            if [ "$existing_version" = "$PACKAGE_VERSION" ]; then
-              echo "::notice::Skipping GitHub Packages publish because $PACKAGE_ID already exists in $GITHUB_PACKAGE_REGISTRY."
-              exit 0
-            fi
-          fi
-          npm publish "$PACKAGE_PATH" --access "$NPM_ACCESS" --ignore-scripts

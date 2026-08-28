@@ -5,6 +5,19 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **TIN-3092: opt-in Bzlmod lock verification and remote refresh artifacts**
+  (MINOR) — `js-bazel-package.yml` now accepts two default-off inputs.
+  `verify_bzlmod_lock` preserves a clean tracked `MODULE.bazel.lock`, proves
+  `bazelisk mod deps --lockfile_mode=update` leaves it unchanged, enforces
+  `--lockfile_mode=error` for target validation, and checks it again afterward.
+  `emit_bzlmod_lock_artifact` performs the same GF-only refresh but uploads the
+  resulting lock as `bzlmod-lock`, allowing a new package or dependency bump to
+  carry remote-generated lock bytes into review without mutating or pushing the
+  caller checkout. Leaving both inputs unset skips lock refresh. The next-major
+  graph proof still runs through the sole `bazel_targets` authority.
+
 ### Fixed
 
 - **`repo-manifest-validate` routes by `schema_version` instead of hardcoding
@@ -113,6 +126,28 @@ Versioning: [SemVer 2.0](https://semver.org/).
   repo only ever shipped the dispatch composites that talked to a
   receiver; it never hosted one, and `boundaries.owns_gitops_apply` was
   already `false`. Manifest-only; no consumer reads either value.
+
+### Removed
+
+- **TIN-89: the next-major JS package lane is Bzlmod/BCR-only** (MAJOR) —
+  `.github/workflows/js-bazel-package.yml` no longer accepts npmjs/GitHub
+  Packages inputs or tokens, performs registry dry-runs, uploads an npm-shaped
+  publish artifact, or defines `publish-npm` / `publish-github` jobs. The
+  unused standalone `npm-publish.yml` workflow and its live operator guide are
+  removed. The reusable surface also drops Node/pnpm setup and arbitrary
+  prepare/lint/typecheck/test/build/package command inputs: `bazel_targets` is
+  the execution authority. Bazel validation now uses only the exact,
+  root-custodied `TINYLAND_CI_BAZELISK_BIN` path and fails closed instead of
+  selecting PATH or installing Bazelisk through `npx`. Only GF Nix capability
+  classes are admitted; Docker/DinD classes cannot project this custody fact.
+  Fork PRs are rejected
+  before GF scheduling; permissions are clamped read-only; checkout is exact and
+  credential-free; cache proof comes from an immutable template action; and
+  private owner-scoped API archives receive the read helper. Bazel-internal
+  pnpm toolchains, consumer `npm_translate_lock`, and Bazel-built package targets
+  remain valid build mechanics; publication authority is the immutable source
+  tag/archive followed by a reviewed append-only BCR entry. Exact v3 tags and
+  releases are unchanged; see `docs/migration-v3-to-v4.md`.
 
 ## [3.1.0] — 2026-08-19
 
