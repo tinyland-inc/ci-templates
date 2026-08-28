@@ -227,8 +227,7 @@ Set `attic-public-read: "true"` on any of the three to opt in. What flips:
 
 | Workflow | Purpose |
 |---|---|
-| `js-bazel-package.yml` | Pre-existing: JS/TS packages built by Bazel and published to GitHub Packages, with npmjs required/optional/disabled by package policy. Supports an **opt-in, default-off `cache_backed`** shared-cache Bazel validation lane (cache-first; see below). |
-| `npm-publish.yml` | Pre-existing: Node package build + publish, callable only (no local tag/manual trigger). Ran GitHub-hosted until TIN-3914 moved all three jobs to `tinyland-nix`. |
+| `js-bazel-package.yml` | Next-major JS/TS package validation: Bzlmod/BCR-only release authority, GF/Nix-provided Bazelisk, optional committed-lock verification/remote lock artifact, and an opt-in `cache_backed` lane. Consumer `npm_translate_lock` and package-manager toolchains remain inside `MODULE.bazel`/`BUILD.bazel`; the workflow exposes no arbitrary npm/pnpm command lane and no npmjs or GitHub Packages publication path. |
 | **`rust-bazel-application.yml`** | Opt-in/default-off native Darwin/Linux Rust application validation with Bazel-only rustfmt, clippy, build, unit, integration, and package targets; cache reads are runtime-attached and writes require an explicitly enabled protected push ref. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
 | **`spoke-lane-env.yml`** *(deprecated)* | Retired-era Blahaj-dispatch PR-env workflow, kept callable only. The PR-env producer is the product's owner-overlay repository — see site.scaffold `docs/patterns/owner-overlay-apply-plane.md` and the merged scaffold #119 recut. Do not point a new spoke at it. |
@@ -272,18 +271,15 @@ What moved:
 | `spoke-ci.yml` | `secrets-scan`, `lanes-load`, `repo-manifest` | `ubuntu-latest` | `default_runner_class`, group-routed on opt-in |
 | `spoke-lane-env.yml` *(deprecated)* | `check-blahaj-token`, `lanes-load`, `dispatch-apply`, `destroy-lanes` | `ubuntu-latest` | `tinyland-nix` |
 | `js-bazel-package.yml` | `resolve-runner` | `ubuntu-latest` | `tinyland-nix` |
-| `npm-publish.yml` | `build-and-test`, `publish-gpr`, `publish-npm` | `ubuntu-latest` | `tinyland-nix` |
 | `rust-bazel-application.yml` | `trust-gate` | `ubuntu-24.04` | `tinyland-nix` |
 | `spoke-deploy-cloudflare-pages.yml` | `build` | `ubuntu-latest` | `tinyland-nix` |
 | `spoke-public-preview.yml` | `dispatch` | `ubuntu-latest` | `tinyland-nix` |
 
-Two `js-bazel-package.yml` input **values** are retired and now rejected with a
-migration error rather than silently re-routed: `runner_mode: hosted` and
-`publish_mode: hosted_exception`. Retiring the publish exception has one
-consequence worth reading before you bump: publishes are now always self-hosted,
-and the pre-existing provenance guard only requests `npm publish --provenance`
-off self-hosted runners, so **npm provenance is no longer requested** and
-`npm_publish_provenance` is inert (the job says so with a `::warning::`).
+In v3, `runner_mode: hosted` and `publish_mode: hosted_exception` were
+retired. Main now carries the next-major contract: `publish_mode` and every
+npmjs/GitHub Packages input, secret, dry-run, and publish job are removed rather
+than re-routed. Exact v3 tags remain immutable; migration is opt-in and documented
+in [`docs/migration-v3-to-v4.md`](docs/migration-v3-to-v4.md).
 
 `scripts/lint-runs-on.rb` enforces the rule at author time. A GitHub-hosted
 label is a **FAIL**, not a warning, wherever it can be read statically: a bare
@@ -620,9 +616,9 @@ endpoints, and localhost without explicit proof).
 ## Cache-backed enrollment (cache-first, TIN-2110)
 
 `js-bazel-package.yml` exposes an **opt-in, default-off** `cache_backed` input.
-When unset, the Bazel validation runs the existing
-`bazelisk build … --verbose_failures` path byte-identically — zero impact on
-non-opted consumers. When `cache_backed: true`, the workflow runs the fail-closed
+The next-major lane requires `bazelisk` from the GF/Nix toolchain and fails
+closed when it is absent; there is no `npx` package fallback. When
+`cache_backed: true`, the workflow runs the fail-closed
 cache-attachment contract and then validates with
 `--config=ci-cached --remote_cache=$BAZEL_REMOTE_CACHE
 --remote_upload_local_results=false`, reading the shared Bazel cache. This lane is
@@ -679,7 +675,9 @@ floating major are rejected by the closure validator.
 
 ## Migration from `@main`
 
-See [`docs/migration-v0-to-v1.md`](docs/migration-v0-to-v1.md) and
-[`docs/migration-v1-to-v2.md`](docs/migration-v1-to-v2.md). Note the v0→v1
+See [`docs/migration-v0-to-v1.md`](docs/migration-v0-to-v1.md),
+[`docs/migration-v1-to-v2.md`](docs/migration-v1-to-v2.md),
+[`docs/migration-v2-to-v3.md`](docs/migration-v2-to-v3.md), and
+[`docs/migration-v3-to-v4.md`](docs/migration-v3-to-v4.md). Note the v0→v1
 guide recommends `spoke-lane-env.yml`; that recommendation is superseded by
 the Superseded note at the top of this README.

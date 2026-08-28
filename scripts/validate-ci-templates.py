@@ -200,7 +200,31 @@ def check_js_bazel_package_runner_contract() -> int:
         "`repo_owned` is a trust and registration boundary",
         "workflow-facing labels still stay org capability classes",
         "It must not resolve to a known repo-label fossil.",
-        "forks because publish jobs are still gated by tag/workflow policy",
+        "forks because this workflow has no registry publication job or publish credential",
+        "BCR is the only package publication authority",
+    ]
+    forbidden_workflow_snippets = [
+        "publish-npm:",
+        "publish-github:",
+        "npm publish",
+        "npm.pkg.github.com",
+        "registry.npmjs.org",
+        "NPM_TOKEN",
+        "TINYLAND_GITHUB_PACKAGES_TOKEN",
+        "npx --yes @bazel/bazelisk",
+        "pnpm/action-setup",
+        "actions/setup-node",
+        "pnpm install",
+        "node_versions",
+        "workspace_mode",
+        "metadata_check_command",
+        "prepare_command",
+        "lint_command",
+        "typecheck_command",
+        "unit_test_command",
+        "integration_test_command",
+        "build_command",
+        "package_check_command",
     ]
     forbidden_docs_snippets = [
         "- validate and publish on repo-specific runner labels",
@@ -215,6 +239,22 @@ def check_js_bazel_package_runner_contract() -> int:
                 file=sys.stderr,
             )
             ok = False
+
+    for snippet in forbidden_workflow_snippets:
+        if snippet in workflow:
+            print(
+                f"{workflow_path.relative_to(ROOT)}: deprecated package publication or npx fallback remains: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    retired_workflow = ROOT / ".github/workflows/npm-publish.yml"
+    if retired_workflow.exists():
+        print(
+            f"{retired_workflow.relative_to(ROOT)}: standalone npm publication workflow must stay removed",
+            file=sys.stderr,
+        )
+        ok = False
 
     for snippet in required_docs_snippets:
         if snippet not in docs:
@@ -233,7 +273,7 @@ def check_js_bazel_package_runner_contract() -> int:
 
     if not ok:
         return 1
-    print("js-bazel-package runner contract documented and guarded")
+    print("js-bazel-package runner and Bzlmod/BCR authority contract documented and guarded")
     return 0
 
 
@@ -404,13 +444,11 @@ def manifest_validator_invocations(
 
 
 def check_cache_backed_optin_contract() -> int:
-    """Guard the TIN-2110 opt-in cache-backed lane: default-off and cache-first.
+    """Guard the TIN-2110 cache-backed lane: default-off and cache-first.
 
-    Asserts the new `cache_backed` input is default-off, the default Bazel
-    validation step stays guarded so non-opted consumers are byte-identical, the
-    cache-backed step routes through `--config=ci-cached` + injected
-    `--remote_cache`, gates on the cache-attachment contract, and NEVER wires a
-    remote executor (cache-first only, TIN-1997 Option D).
+    The default lane uses the GF/Nix Bazelisk front door. The cache-backed lane
+    adds `--config=ci-cached` plus the injected `--remote_cache`, gates on the
+    cache-attachment contract, and never wires a remote executor.
     """
     workflow_path = ROOT / ".github/workflows/js-bazel-package.yml"
     docs_path = ROOT / "docs/js-bazel-package.md"
@@ -447,7 +485,7 @@ def check_cache_backed_optin_contract() -> int:
         ok = False
 
     required_workflow_snippets = [
-        # default path stays guarded => byte-identical for non-opted consumers
+        # the default GF/Nix Bazelisk path stays separate from the cache-backed path
         "if: ${{ !inputs.cache_backed }}",
         # opt-in path gated on the fail-closed cache-attachment contract
         "Assert shared-cache attachment (cache-backed lane)",
@@ -457,9 +495,10 @@ def check_cache_backed_optin_contract() -> int:
         "--config=ci-cached",
         "--remote_cache=${BAZEL_REMOTE_CACHE}",
         "--remote_upload_local_results=false",
-        # the unchanged default command must still be present verbatim
+        # the default graph-proof command must be present verbatim
         'run_with_bazel_fetch_retry "Validate Bazel targets" '
-        '"npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"',
+        '"bazelisk build ${targets_quoted}--verbose_failures"',
+        "command -v bazelisk",
         # TIN-2109: manifest validation in the cache-backed lane (fail-closed)
         "Validate repo manifest (cache-backed lane)",
         "repo-manifest-validate@v2",
