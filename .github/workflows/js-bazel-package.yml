@@ -8,14 +8,14 @@ on:
         description: >-
           Runner policy for validation jobs: compat, shared, or
           repo_owned. TIN-3914 retired `hosted`: the estate has no
-          GitHub-hosted runners, so every mode resolves to a self-hosted
+          GitHub-hosted runners, so every mode resolves to a GF Nix
           capability class and `hosted` is rejected with a migration error.
         type: string
         default: "compat"
       shared_runner_labels_json:
-        description: "JSON array of shared GloriousFlywheel runner labels used when runner_mode=shared"
+        description: "JSON array of shared GF Nix capability labels used when runner_mode=shared"
         type: string
-        default: '["tinyland-docker"]'
+        default: '["tinyland-nix"]'
       runner_labels_json:
         description: >-
           JSON array of capability-class runner labels used by compat mode
@@ -144,7 +144,7 @@ jobs:
               return labels
 
           org_capability_label = re.compile(
-              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$"
+              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu)$"
           )
           # TIN-3914: fail closed on a GitHub-hosted label in EVERY mode, not
           # just the capability-required ones. There is no hosted lane left to
@@ -161,16 +161,18 @@ jobs:
                   )
 
           def require_org_capability(labels: list[str], name: str) -> None:
-              if not any(org_capability_label.fullmatch(label) for label in labels):
+              if not labels or not all(
+                  org_capability_label.fullmatch(label) for label in labels
+              ):
                   raise SystemExit(
-                      f"{name} must include an org capability-class label "
-                      "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind)"
+                      f"{name} must contain only GF Nix capability-class labels "
+                      "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu)"
                   )
 
           runner_labels = parse_labels("RUNNER_LABELS_JSON", '["tinyland-nix"]')
           shared_runner_labels = parse_labels(
               "SHARED_RUNNER_LABELS_JSON",
-              '["tinyland-docker"]',
+              '["tinyland-nix"]',
           )
 
           # Check each list under its OWN name, before selection: in shared
@@ -187,10 +189,12 @@ jobs:
           if runner_mode == "repo_owned" and not (os.environ.get("RUNNER_LABELS_JSON") or "").strip():
               raise SystemExit("runner_mode=repo_owned requires explicit runner_labels_json")
 
-          if runner_mode == "repo_owned":
-              require_org_capability(validate_runner_labels, "runner_labels_json")
-          elif runner_mode == "shared":
-              require_org_capability(validate_runner_labels, "shared_runner_labels_json")
+          labels_name = (
+              "shared_runner_labels_json"
+              if runner_mode == "shared"
+              else "runner_labels_json"
+          )
+          require_org_capability(validate_runner_labels, labels_name)
 
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
@@ -264,15 +268,17 @@ jobs:
             echo "GitHub-hosted runner labels are forbidden estate-wide (TIN-3914); pass a self-hosted capability class" >&2
             exit 1
           fi
-          if [ "$RUNNER_MODE" = "repo_owned" ] || [ "$RUNNER_MODE" = "shared" ]; then
-            if [ "$RUNNER_MODE" = "repo_owned" ]; then
-              labels_json="$RUNNER_LABELS_JSON"
-              labels_name="runner_labels_json"
-            else
-              labels_json="$SHARED_RUNNER_LABELS_JSON"
-              labels_name="shared_runner_labels_json"
+          if [ "$RUNNER_MODE" = "shared" ]; then
+            labels_json="$SHARED_RUNNER_LABELS_JSON"
+            labels_name="shared_runner_labels_json"
+          else
+            labels_json="$RUNNER_LABELS_JSON"
+            labels_name="runner_labels_json"
+            if [ -z "${labels_json//[[:space:]]/}" ]; then
+              labels_json='["tinyland-nix"]'
             fi
-            LABELS_JSON="$labels_json" LABELS_NAME="$labels_name" python3 - <<'PY'
+          fi
+          LABELS_JSON="$labels_json" LABELS_NAME="$labels_name" python3 - <<'PY'
           import json
           import os
           import re
@@ -287,20 +293,23 @@ jobs:
               raise SystemExit(1) from exc
 
           org_capability_label = re.compile(
-              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind)$"
+              r"^[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu)$"
           )
-          if not isinstance(labels, list) or not any(
-              isinstance(label, str) and org_capability_label.fullmatch(label)
-              for label in labels
+          if (
+              not isinstance(labels, list)
+              or not labels
+              or not all(
+                  isinstance(label, str) and org_capability_label.fullmatch(label)
+                  for label in labels
+              )
           ):
               print(
-                  f"{labels_name} must include an org capability-class label "
-                  "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu|-docker|-dind)",
+                  f"{labels_name} must contain only GF Nix capability-class labels "
+                  "(<org-pool>-nix|-nix-heavy|-nix-kvm|-nix-gpu)",
                   file=sys.stderr,
               )
               raise SystemExit(1)
           PY
-          fi
 
       - name: Configure self-hosted cache contract
         uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v3.1.0
@@ -497,7 +506,7 @@ jobs:
           cd "$WORKSPACE_DIR"
 
           if [ "$RUNNER_ENVIRONMENT" != "self-hosted" ] \
-            || [[ ! ",$RUNNER_LABELS," =~ ,[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu|docker|dind), ]]; then
+            || [[ ! ",$RUNNER_LABELS," =~ ,[a-z0-9][a-z0-9-]*-(nix|nix-heavy|nix-kvm|nix-gpu), ]]; then
             echo "::error::Bzlmod lock refresh/verification requires a GF self-hosted capability runner."
             exit 1
           fi

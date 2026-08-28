@@ -190,13 +190,14 @@ def check_js_bazel_package_runner_contract() -> int:
 
     required_workflow_snippets = [
         "runner_mode=repo_owned requires explicit runner_labels_json",
-        "must include an org capability-class label",
+        "must contain only GF Nix capability-class labels",
         "org_capability_label = re.compile",
-        "nix|nix-heavy|nix-kvm|nix-gpu|docker|dind",
-        '"tinyland-docker"',
+        "nix|nix-heavy|nix-kvm|nix-gpu",
+        '"tinyland-nix"',
         "runner_mode=shared requires shared_runner_labels_json",
         "permissions:\n  contents: read",
         "if: github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository",
+        "nix-setup@v3.1.0",
         "rust-bazel-binary-custody@v3.1.0",
         "CI_BAZELISK_BIN: ${{ steps.bazelisk-custody.outputs.path }}",
         "ref: ${{ github.event.pull_request.head.sha || github.sha }}",
@@ -213,6 +214,7 @@ def check_js_bazel_package_runner_contract() -> int:
         "workflow-facing labels still stay org capability classes",
         "It must not resolve to a known repo-label fossil.",
         "Fork pull requests are skipped before any GF job is scheduled",
+        "Docker/DinD capability classes do not project",
         "runner-owned `TINYLAND_CI_BAZELISK_BIN`",
         "BCR is the only package publication authority",
     ]
@@ -224,6 +226,24 @@ def check_js_bazel_package_runner_contract() -> int:
         "registry.npmjs.org",
         "NPM_TOKEN",
         "TINYLAND_GITHUB_PACKAGES_TOKEN",
+        "      SYNC_PAT:",
+        "      GH_TOKEN:",
+        "packages: write",
+        "publish_mode",
+        "publish_node_version",
+        "package_dir",
+        "npm_access",
+        "npm_publish_provenance",
+        "npm_publish_mode",
+        "npm_registry_url",
+        "github_package_name",
+        "github_package_registry",
+        "dry_run",
+        "publish_on_tag",
+        "pnpm_version",
+        "cleanup_paths",
+        "lint_continue_on_error",
+        "typecheck_continue_on_error",
         "npx --yes @bazel/bazelisk",
         "pnpm/action-setup",
         "actions/setup-node",
@@ -263,6 +283,26 @@ def check_js_bazel_package_runner_contract() -> int:
         if snippet in workflow:
             print(
                 f"{workflow_path.relative_to(ROOT)}: deprecated package publication or npx fallback remains: {snippet}",
+                file=sys.stderr,
+            )
+            ok = False
+
+    custody_step = workflow.find("- name: Resolve runner-custodied Bazelisk")
+    checkout_step = workflow.find("- uses: actions/checkout@")
+    if custody_step < 0 or checkout_step < 0 or custody_step > checkout_step:
+        print(
+            f"{workflow_path.relative_to(ROOT)}: Bazelisk custody must resolve "
+            "before caller checkout",
+            file=sys.stderr,
+        )
+        ok = False
+
+    bare_bazelisk = re.compile(r"""(?<![A-Za-z0-9_/$.-])bazelisk(?=[\s"'])""")
+    for line_no, line in enumerate(workflow.splitlines(), start=1):
+        if bare_bazelisk.search(line) and "CI_BAZELISK_BIN" not in line:
+            print(
+                f"{workflow_path.relative_to(ROOT)}:{line_no}: bare Bazelisk "
+                "selection bypasses runner custody",
                 file=sys.stderr,
             )
             ok = False

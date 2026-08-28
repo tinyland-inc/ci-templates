@@ -22,12 +22,15 @@ prepare, lint, typecheck, test, build, or package commands. Consumer
 `pnpm-lock.yaml`, rules_js, `npm_translate_lock`, and generated JS trees may
 still exist inside `MODULE.bazel` / `BUILD.bazel`; Bazel owns their execution.
 
-Every job uses a GF self-hosted capability class. `runner_mode` accepts
-`compat`, `shared`, or `repo_owned`; `hosted` remains rejected.
+Every job uses a GF Nix capability class. `runner_mode` accepts `compat`,
+`shared`, or `repo_owned`; `hosted` remains rejected. Docker/DinD
+capability classes do not project the Nix Bazelisk custody fact and are rejected.
 
 - `compat` uses `runner_labels_json`, defaulting to `["tinyland-nix"]`.
-- `shared` requires non-empty `shared_runner_labels_json`.
+- `shared` uses `shared_runner_labels_json`, defaulting to `["tinyland-nix"]`.
 - `repo_owned` requires explicit `runner_labels_json`.
+- every selected label set may contain only `*-nix`, `*-nix-heavy`,
+  `*-nix-kvm`, or `*-nix-gpu` capability classes.
 
 `repo_owned` is a trust and registration boundary. The workflow-facing labels
 still stay org capability classes; isolation belongs in ARC registration,
