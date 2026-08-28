@@ -5,6 +5,40 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`gf-i09-release-publisher.yml` — the reusable shape of the release chain's
+  middle role** (MINOR — a new `workflow_call` surface; no existing consumer's
+  default execution path changes, because no existing consumer calls it). The
+  GF-I09 handoff needs a producer, a publisher, and a consumer. The producer is
+  structurally forbidden to authorize publication and the consumer never
+  receives payload bytes, so excluding the middle role from both ends left the
+  interface open in the middle — no further work on either end makes them meet.
+  This workflow is that middle role's shape; the instance (which application,
+  which tenant, which registration, which policy) stays in the owner overlay
+  that calls it by exact immutable pin.
+
+  Three properties are why it is centralized rather than copied:
+
+  - **Keyless identity.** The publisher signs with the run's own workload
+    identity; the claim tuple (issuer, repository, reference, workflow path) IS
+    the identity, verified downstream against a policy pinned by digest. The
+    workflow therefore accepts no secret input and mints no key — a shape that
+    took a signing key as an input would make every consumer of it a
+    key-custody problem.
+  - **Reread, never relay.** The caller's branch is reread from the forge and
+    compared to the checked-out commit before anything else runs. A triggering
+    event is a claim about the past and is never a fact source.
+  - **Fail-closed by conjunction.** Publication requires the caller's reviewed
+    activation state AND every named activation prerequisite AND a fully
+    resolved payload. There is deliberately no force, override, or
+    skip-verification input: a shape with an escape hatch is not a fail-closed
+    shape.
+
+  The execution class is verdicted at run time in addition to the static scans,
+  because `runner_class` is caller data and a static scan of this repository
+  cannot see what a consumer passes.
+
 ### Fixed
 
 - **`repo-manifest-validate` routes by `schema_version` instead of hardcoding
