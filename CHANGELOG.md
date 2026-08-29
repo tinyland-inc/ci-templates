@@ -5,7 +5,80 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- **The dependency-free fallback validator is deleted** (TIN-4132, operator
+  ratification 2026-08-27; landed per TIN-4192). This SUPERSEDES the three
+  entries below that describe widening and guarding that subset: there is no
+  second engine left to widen. `scripts/manifest-schema-validate.py` now
+  imports `jsonschema` or exits 2 naming the dependency, and the composite does
+  the same before it reads anything.
+
+  The subset was a gate that read as coverage while enforcing less than the
+  schema said. `not` went unevaluated for months, so every prohibition passed
+  unconditionally — static spokes carrying the evicted
+  `authorities.gitops_receiver` validated at exit 0 against the authority v1
+  schema. Under it, v2's `allOf[5]` overlay guard fired vacuously alongside
+  `allOf[11]`, making `application-owner-overlay` and
+  `organization-execution-overlay` unsatisfiable; that was misread as schema
+  over-reach for weeks. Widening the subset and adding
+  `assert_fallback_covers()` made it honest about its gaps, but honest-about-a-
+  gap is still a second engine kept in step by a hand-written harness.
+
+  Its REASON FOR EXISTING is also gone: the TIN-2109 cold-`nix develop`
+  store-lock failure belonged to the shared-store host-runner generation, and
+  current ARC pods mount per-pod ephemeral nix stores (GF substrate
+  confirmation, 2026-08-27). `jsonschema` is supplied by the `nix-setup`
+  composite, cache-hot from the in-cluster Attic.
+
+  **The action still does not shell out to `nix develop`** — the TIN-2109
+  ruling that it must not stands, and `just cache-backed-optin-contract-check`
+  still asserts it. Providing the interpreter is the calling workflow's job.
+
+  What replaces the deleted differential lane is a REFUSAL contract in
+  `scripts/manifest-schema-validate-selftest.sh`: with `jsonschema` hidden, the
+  validator must exit 2 and name the dependency, and must NOT return a verdict
+  of any kind — including on an invalid manifest, where answering 1 would mean
+  something still validated it. Every one of those cases returned 0 or 1 off
+  the subset before this change, so they are live guards against a fallback
+  being reintroduced rather than tautologies. Mutate-proved: reinstating a
+  fallback that answers "valid" on `ImportError` fails 5 of 20 cases and
+  nothing else. On a host that cannot import `jsonschema` the harness now
+  refuses (exit 2) instead of reporting green over an engine it never ran.
+
+### Added
+
+- **`schemas/VENDORED.json` + `just vendored-schema-provenance-check`.**
+  ci-templates carries COPIES of schemas whose own `$id` names
+  `tinyland-inc/site.scaffold` as the authority, and until now there was no
+  lock and no gate — which is how the v1 copy diverged from its source in BOTH
+  directions (ci-templates gained `authorities.artifact_registry`;
+  site.scaffold gained a `gitops_receiver` prohibition) with nothing comparing
+  them. The v2 copy arrived the same way and is byte-identical to its source
+  today, which is exactly why this is the cheapest moment to record it.
+
+  The gate is deliberately HERMETIC: it compares the vendored bytes to the
+  recorded digests and does not reach site.scaffold, because a network call
+  would make every consumer's CI depend on another repository being reachable.
+  It catches what a lock can catch offline — a hand-edit that never went
+  through a re-vendor — plus a vendored manifest schema that no entry records
+  at all, and an empty record that would otherwise vouch for nothing. v1 is
+  recorded as `drifted` and REPORTED, not failed: adopting upstream's v1 bytes
+  changes what every existing consumer is validated against and is its own
+  change with its own review. Mutate-proved three ways (one flipped byte in the
+  v2 copy, an unrecorded schema file, an emptied record); each goes red and the
+  restored tree goes green.
+
 ### Fixed
+
+- **`validate-ci-templates.py manifest` no longer hardcodes v1 either.** It
+  resolved `schemas/tinyland-repo-manifest.schema.json` unconditionally — the
+  same defect the composite shipped, one directory over, and it survived that
+  fix because nothing pointed the two at each other. Measured on this repo's
+  own manifest with `schema_version` set to 2, the old code answered
+  `/schema_version: 1 was expected`; it now imports `resolve_schema_name` from
+  `scripts/manifest-schema-validate.py` so `SCHEMA_BY_VERSION` stays the single
+  copy of the mapping, and reports the real v2 errors instead.
 
 - **`repo-manifest-validate` routes by `schema_version` instead of hardcoding
   v1** (MINOR — a previously-failing consumer starts passing; no passing

@@ -51,14 +51,33 @@ runs:
           exit 1
         fi
 
-        # Dependency-free, network-free validation (TIN-2109). The validator
-        # prefers the authoritative `jsonschema` package when importable and
-        # otherwise uses a stdlib JSON-Schema-subset fallback, so the gate works
-        # on nix self-hosted cluster runners (where a cold `nix develop` can fail
-        # on a nix-store lock) as well as on hosted runners. Fail-closed: a
-        # non-zero exit (invalid manifest) fails the step.
+        # ONE ENGINE, OR NO VERDICT (TIN-4132/TIN-4192, superseding the
+        # TIN-2109 fallback posture). This step used to accept a bundled
+        # stdlib JSON-Schema-SUBSET validator whenever `jsonschema` was not
+        # importable. That subset never evaluated `not`, `contains`, or
+        # `anyOf` — the keywords in which BOTH manifest schemas express every
+        # prohibition — so on exactly the runners it existed for it reported
+        # "valid" for manifests carrying prohibited keys. A gate that reads as
+        # coverage while enforcing nothing is worse than an absent one.
+        #
+        # Its reason for existing is also dead: the cold-`nix develop`
+        # store-lock failure belonged to the shared-store host-runner
+        # generation, and current ARC pods mount per-pod ephemeral nix stores
+        # (GF substrate confirmation, 2026-08-27).
+        #
+        # The dependency is supplied by the `nix-setup` composite, cache-hot
+        # from the in-cluster Attic, which cluster lanes already run before
+        # this step. A runner with neither gets a visible red naming the
+        # dependency — never a silently weaker verdict.
+        #
+        # This step deliberately does NOT shell out to `nix develop` itself.
+        # The TIN-2109 ruling that this action must not depend on it still
+        # stands and is asserted by `just cache-backed-optin-contract-check`;
+        # providing the interpreter is the calling workflow's job, and doing it
+        # here would make the gate's own bootstrap a second failure surface.
         if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
-          echo "::notice::host python lacks jsonschema; using bundled stdlib validator"
+          echo "::error::python3 cannot import 'jsonschema', so this gate has no validator. It REFUSES to substitute a weaker one (TIN-4132). Run the tinyland-inc/ci-templates nix-setup composite in this job before repo-manifest-validate, or provide jsonschema in the host python environment."
+          exit 2
         fi
 
         # Route by the manifest's own schema_version rather than hardcoding the
@@ -80,6 +99,10 @@ runs:
         set -e
         case "$rc" in
           0) ;;
+          2)
+            echo "::error::the manifest gate could not run: no JSON Schema engine was available (see the error above). This is a RUNNER problem, not a manifest problem — nothing validated $manifest."
+            exit 2
+            ;;
           3)
             echo "::error file=$manifest::repo manifest declares a schema_version this ci-templates release publishes no schema for (see the error above). Supported versions ship under schemas/ — if this is a real new revision, vendor its schema and extend SCHEMA_BY_VERSION in scripts/manifest-schema-validate.py."
             exit 1

@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""Dependency-free JSON Schema validator + schema router for the Tinyland repo manifest.
+"""Schema router + validator for the Tinyland repo manifest.
 
-Why this exists (TIN-2109): the cache-backed enrollment gate must validate the
-consumer's tinyland.repo.json against a vendored schema under `schemas/` on ANY
-runner, with NO network and NO third-party package. The shared
-`repo-manifest-validate` action previously required either host `jsonschema` or a
-working `nix develop` dev shell; on nix self-hosted cluster runners a cold
-`nix develop` can fail (e.g. nix-store lock permission), which would make the
-fail-closed gate fail for the WRONG reason. This validator uses only the Python
-standard library.
+Real `jsonschema`, or no verdict at all.
 
 Two responsibilities, deliberately in one file
 ----------------------------------------------
@@ -25,20 +18,46 @@ is never silently routed to v1. (This mirrors the routing site.scaffold added in
 `scripts/validate_repo_manifest.py`; the idiom is deliberately the same on both
 sides so a reader of one recognises the other.)
 
-**2. Honest fallback coverage.** The stdlib path implements a *subset* of JSON
-Schema 2020-12. A subset validator pointed at a schema that uses keywords it
-does not implement returns "valid" for manifests the authoritative validator
-would reject — a gate that reads as coverage while enforcing nothing, which is
-worse than no gate. The v2 schema uses `not`, `anyOf`, and `contains` heavily
-(17/4/13 occurrences), none of which the original subset understood. So the
-subset is widened to cover them, AND `assert_fallback_covers()` walks the schema
-and refuses to run at all (exit 2) if it meets an assertion keyword outside
-`ENFORCED_KEYWORDS`. A future schema keyword now stops the gate loudly instead
-of quietly draining it.
+**2. One engine.** This file used to carry a second, dependency-free validator
+that implemented a *subset* of JSON Schema 2020-12 and was used whenever the
+`jsonschema` package was not importable. THAT FALLBACK IS GONE (TIN-4132,
+operator-ratified 2026-08-27; landed here per TIN-4192). A subset validator
+pointed at a schema that asserts with keywords it does not implement returns
+"valid" for manifests the authoritative validator rejects — a gate that reads
+as coverage while enforcing nothing, which is worse than no gate:
 
-When the real `jsonschema` package is importable it is preferred (so behavior
-matches the authoritative validator) and the coverage guard is skipped — it has
-nothing to guard.
+  - `not` went unevaluated for months, so every prohibition passed
+    unconditionally. Static spokes carrying the evicted
+    `authorities.gitops_receiver` (forbidden by the authority v1 schema's
+    `allOf[0].then.authorities.not.required`) validated at exit 0.
+  - v2 expresses its role discipline negatively (`not` ×17, `contains` ×13,
+    `anyOf` ×4). Under the subset, `allOf[5]`'s `if primary_role not in
+    [...overlays...]` guard fired VACUOUSLY alongside `allOf[11]`, making
+    `application-owner-overlay` and `organization-execution-overlay`
+    unsatisfiable — misread as schema over-reach for weeks.
+
+A later widening + `assert_fallback_covers()` guard made the subset honest
+about which keywords it enforced, but honest-about-a-gap is still a second
+engine to keep in step with the first, and the differential only ever held
+because a hand-written selftest asserted it.
+
+The subset's REASON FOR EXISTING is also dead. It guarded against a cold
+`nix develop` failing on a nix-store lock (TIN-2109) — a failure class of the
+shared-store host-runner generation. Current ARC pods mount per-pod ephemeral
+PVC nix stores, so cross-job store-lock contention is structurally gone (GF
+substrate confirmation, 2026-08-27). The dependency is supplied by the
+`nix-setup` composite, cache-hot from the in-cluster Attic. A host with neither
+`jsonschema` nor `nix` now gets a VISIBLE red naming the dependency (exit 2)
+instead of a silently weaker verdict. A gate that refuses is honest; a gate
+that quietly validates less is the defect this file used to be.
+
+**3. JSON equality, not Python equality.** `_as_schema_version()` reads the
+declared version by JSON's rules, not Python's: `true` is NOT version 1 even
+though `bool` subclasses `int`, while `2.0` IS version 2, because JSON Schema
+2020-12 counts a number with zero fractional part as an `integer` and compares
+numbers mathematically. The router must agree with the schema it routes to —
+exiting 3 on `2.0` would refuse to route a document that the schema it would
+have routed to accepts.
 
 Usage:
   manifest-schema-validate.py <schema.json> <manifest.json>
@@ -46,23 +65,14 @@ Usage:
 
 The second form routes by the manifest's own `schema_version`; it is what the
 composite action calls. The first form validates against exactly the schema
-named, and is how a caller pins one on purpose (the Justfile self-test uses it
-to prove a v2 manifest really is rejected by the v1 schema).
-
-**3. JSON equality, not Python equality.** The subset compares `const`/`enum`
-with `_json_equal()`, not `==`/`in`. Python's `==` is the wrong relation for
-JSON values in two directions at once: `True == 1` is true in Python and false
-in JSON (a boolean and a number are different types and never equal), while
-`1 == 1.0` is true in both — JSON Schema compares numbers mathematically. Using
-`==` therefore let a JSON `true` satisfy `{"const": 1}`, which is exactly the
-`schema_version` const the v1 schema pins. `_as_schema_version()` applies the
-same rules to the router, so `2.0` routes to v2 rather than being rejected by a
-gate whose own schema would have accepted it.
+named, and is how a caller pins one on purpose (the selftest uses it to prove a
+v2 manifest really is rejected by the v1 schema).
 
 Exit codes:
   0  valid against the schema for its declared schema_version
   1  invalid against that schema
-  2  usage / IO error, or the stdlib fallback cannot faithfully evaluate the schema
+  2  usage / IO error, or `jsonschema` is unavailable and this gate refuses to
+     substitute a weaker validator
   3  schema_version absent, mistyped, or naming no published schema
   4  the schema the manifest routes to is not present in this checkout
 """
@@ -70,7 +80,6 @@ Exit codes:
 from __future__ import annotations
 
 import json
-import re
 import sys
 
 EXIT_VALID = 0
@@ -94,127 +103,42 @@ KNOWN_UNSUPPORTED_DIALECTS = (
     'an apiVersion/kind envelope such as "tinyland.repo/v1"',
 )
 
-#: Assertion keywords the stdlib fallback actually enforces. The coverage guard
-#: below refuses any schema that asserts with something outside this set, so the
-#: subset can never silently under-validate.
-ENFORCED_KEYWORDS = frozenset(
-    {
-        "$ref",
-        "const",
-        "enum",
-        "type",
-        "minLength",
-        "maxLength",
-        "pattern",
-        "minItems",
-        "maxItems",
-        "uniqueItems",
-        "items",
-        "contains",
-        "properties",
-        "required",
-        "additionalProperties",
-        "allOf",
-        "anyOf",
-        "oneOf",
-        "not",
-        "if",
-        "then",
-        "else",
-    }
+#: The one diagnostic for a missing engine. Kept as a module constant because
+#: the selftest greps for it: an exit code alone cannot prove the operator was
+#: told WHICH dependency to provide, and "refuses loudly" is the whole claim of
+#: this change.
+MISSING_ENGINE_MESSAGE = (
+    "python package 'jsonschema' is not importable, so this gate has no "
+    "validator. It REFUSES to substitute a weaker one (TIN-4132: the stdlib "
+    "subset it used to fall back to silently skipped `not`, `contains` and "
+    "`anyOf`, and passed manifests carrying prohibited keys). Provide it via "
+    "the nix-setup composite (the ci devshell closure carries it), `nix "
+    "develop --command`, or the host python environment, then re-run."
 )
-
-#: Keywords that carry no assertion. Ignoring them is correct, not a gap.
-#: `format` is an annotation by default in 2020-12, which is also how the
-#: authoritative validator treats it unless a format checker is wired in.
-ANNOTATION_KEYWORDS = frozenset(
-    {
-        "$schema",
-        "$id",
-        "$anchor",
-        "$comment",
-        "$defs",
-        "definitions",
-        "title",
-        "description",
-        "default",
-        "examples",
-        "format",
-        "deprecated",
-        "readOnly",
-        "writeOnly",
-    }
-)
-
-#: Where subschemas live, so the coverage walk visits schema positions only and
-#: never mistakes a user-chosen property NAME (`owns_auth`, `apply_plane`) for a
-#: keyword.
-_SUBSCHEMA_KEYS = ("additionalProperties", "items", "contains", "not", "if", "then", "else")
-_SUBSCHEMA_LIST_KEYS = ("allOf", "anyOf", "oneOf", "prefixItems")
-_SUBSCHEMA_MAP_KEYS = ("properties", "$defs", "definitions", "patternProperties", "dependentSchemas")
 
 
 class UnsupportedSchemaVersion(Exception):
     """Raised when no vendored schema covers the declared `schema_version`."""
 
 
-class FallbackCoverageGap(Exception):
-    """Raised when the stdlib subset cannot faithfully evaluate a schema."""
-
-
 def _supported() -> str:
     return ", ".join(str(v) for v in sorted(SCHEMA_BY_VERSION))
-
-
-def _json_equal(left, right) -> bool:
-    """JSON Schema value equality (2020-12 §4.2.2), which Python `==` is not.
-
-    Two divergences matter here, and they point in opposite directions:
-
-    * `bool` subclasses `int` in Python, so `True == 1` and `False == 0`. In
-      JSON a boolean and a number are values of different types and are never
-      equal. With bare `==`, `{"const": 1}` — the `schema_version` const the v1
-      manifest schema pins — accepts the document `{"schema_version": true}`.
-    * Numbers, on the other hand, *do* compare mathematically: `1` and `1.0`
-      are the same JSON value, so an integral float must satisfy an integer
-      `const`/`enum`. A naive "the types must match exactly" repair would break
-      that and disagree with the authoritative validator the other way.
-
-    Everything else is structural: same type, and for arrays/objects the same
-    shape compared elementwise with these same rules.
-    """
-    if isinstance(left, bool) or isinstance(right, bool):
-        return isinstance(left, bool) and isinstance(right, bool) and left is right
-    if left is None or right is None:
-        return left is None and right is None
-    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
-        return left == right
-    if isinstance(left, str) and isinstance(right, str):
-        return left == right
-    if isinstance(left, list) and isinstance(right, list):
-        return len(left) == len(right) and all(
-            _json_equal(a, b) for a, b in zip(left, right)
-        )
-    if isinstance(left, dict) and isinstance(right, dict):
-        return left.keys() == right.keys() and all(
-            _json_equal(value, right[key]) for key, value in left.items()
-        )
-    return False
 
 
 def _as_schema_version(value: object) -> int | None:
     """Return the integer `schema_version` `value` denotes, or None.
 
-    The same JSON equality rules `_json_equal` applies, applied to routing, so
-    the router and the schema it routes to cannot disagree:
+    JSON's equality rules, not Python's, so the router and the schema it routes
+    to cannot disagree:
 
     * `true` is not version 1, even though `bool` subclasses `int` in Python.
-    * `2.0` *is* version 2. JSON Schema 2020-12 counts a number with zero
-      fractional part as an `integer`, and compares numbers mathematically, so
-      the v2 schema's `{"const": 2}` accepts `2.0`. A router that exited 3 on
-      `2.0` would be refusing to route a document the schema it would have
-      routed to accepts — the gate contradicting itself, and the operator told
-      to fix a manifest that is in fact conformant.
+      The v1 schema pins `{"const": 1}`, and JSON Schema 2020-12 §4.2.2 makes a
+      boolean and a number values of different types that are never equal.
+    * `2.0` *is* version 2. JSON Schema counts a number with zero fractional
+      part as an `integer` and compares numbers mathematically, so the v2
+      schema's `{"const": 2}` accepts `2.0`. A router that exited 3 on `2.0`
+      would be refusing to route a document the schema accepts — the gate
+      contradicting itself, and the operator told to fix a conformant manifest.
     * `2.5`, `NaN`, and `inf` denote no version: `is_integer()` is false for
       all three.
     """
@@ -270,165 +194,6 @@ def resolve_schema_name(document: object) -> str:
         ) from None
 
 
-def assert_fallback_covers(schema, root=None, path="#") -> None:
-    """Refuse to evaluate a schema whose assertions the subset does not implement.
-
-    Walks schema POSITIONS only. A validator that ignores `not`/`anyOf`/
-    `contains` reports a manifest valid that the authoritative validator
-    rejects, and the caller cannot tell the difference from a real pass.
-    """
-    if isinstance(schema, bool) or schema is None:
-        return
-    if not isinstance(schema, dict):
-        raise FallbackCoverageGap(f"{path}: schema node is not an object or boolean")
-
-    for key in schema:
-        if key in ENFORCED_KEYWORDS or key in ANNOTATION_KEYWORDS:
-            continue
-        raise FallbackCoverageGap(
-            f"{path}: schema uses '{key}', which the dependency-free fallback validator does "
-            f"not enforce. Refusing to report a verdict it cannot back: install `jsonschema` "
-            f"on this runner, or implement '{key}' in scripts/manifest-schema-validate.py and "
-            "add it to ENFORCED_KEYWORDS."
-        )
-
-    for key in _SUBSCHEMA_KEYS:
-        if key in schema:
-            assert_fallback_covers(schema[key], root, f"{path}/{key}")
-    for key in _SUBSCHEMA_LIST_KEYS:
-        for idx, sub in enumerate(schema.get(key, []) or []):
-            assert_fallback_covers(sub, root, f"{path}/{key}/{idx}")
-    for key in _SUBSCHEMA_MAP_KEYS:
-        for name, sub in (schema.get(key) or {}).items():
-            assert_fallback_covers(sub, root, f"{path}/{key}/{name}")
-
-
-def _type_ok(value, expected) -> bool:
-    if isinstance(expected, list):
-        return any(_type_ok(value, t) for t in expected)
-    if expected == "object":
-        return isinstance(value, dict)
-    if expected == "array":
-        return isinstance(value, list)
-    if expected == "string":
-        return isinstance(value, str)
-    if expected == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if expected == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if expected == "boolean":
-        return isinstance(value, bool)
-    if expected == "null":
-        return value is None
-    return True
-
-
-def _resolve_ref(root: dict, ref: str):
-    if not ref.startswith("#/"):
-        raise ValueError(f"unsupported $ref (only local refs): {ref}")
-    node = root
-    for part in ref[2:].split("/"):
-        part = part.replace("~1", "/").replace("~0", "~")
-        node = node[part]
-    return node
-
-
-def _fails(instance, schema, root) -> bool:
-    """True when `instance` violates `schema`. Used by not/anyOf/oneOf/contains."""
-    probe: list[str] = []
-    validate(instance, schema, root, "", probe)
-    return bool(probe)
-
-
-def validate(instance, schema, root, path, errors) -> None:
-    if isinstance(schema, bool):
-        if not schema:
-            errors.append(f"{path or '/'}: schema is `false`; no value is valid here")
-        return
-
-    if "$ref" in schema:
-        validate(instance, _resolve_ref(root, schema["$ref"]), root, path, errors)
-        # 2020-12 allows siblings to $ref; continue checking them too.
-
-    # `_json_equal`, never `!=`/`not in`: Python would accept `true` for
-    # `{"const": 1}` (bool subclasses int) while still needing 1.0 to satisfy 1.
-    if "const" in schema and not _json_equal(instance, schema["const"]):
-        errors.append(
-            f"{path or '/'}: must equal const {json.dumps(schema['const'])}, "
-            f"got {json.dumps(instance)}"
-        )
-
-    if "enum" in schema and not any(
-        _json_equal(instance, option) for option in schema["enum"]
-    ):
-        errors.append(
-            f"{path or '/'}: {json.dumps(instance)} is not one of "
-            f"{json.dumps(schema['enum'])}"
-        )
-
-    if "type" in schema and not _type_ok(instance, schema["type"]):
-        errors.append(f"{path or '/'}: is not of type {schema['type']!r}")
-
-    if isinstance(instance, str):
-        if "minLength" in schema and len(instance) < schema["minLength"]:
-            errors.append(f"{path or '/'}: shorter than minLength {schema['minLength']}")
-        if "maxLength" in schema and len(instance) > schema["maxLength"]:
-            errors.append(f"{path or '/'}: longer than maxLength {schema['maxLength']}")
-        if "pattern" in schema and re.search(schema["pattern"], instance) is None:
-            errors.append(f"{path or '/'}: does not match pattern {schema['pattern']!r}")
-
-    if isinstance(instance, list):
-        if "minItems" in schema and len(instance) < schema["minItems"]:
-            errors.append(f"{path or '/'}: fewer than minItems {schema['minItems']}")
-        if "maxItems" in schema and len(instance) > schema["maxItems"]:
-            errors.append(f"{path or '/'}: more than maxItems {schema['maxItems']}")
-        if schema.get("uniqueItems") and len(
-            {json.dumps(i, sort_keys=True) for i in instance}
-        ) != len(instance):
-            errors.append(f"{path or '/'}: items are not unique")
-        if "items" in schema:
-            for idx, item in enumerate(instance):
-                validate(item, schema["items"], root, f"{path}/{idx}", errors)
-        if "contains" in schema and not any(
-            not _fails(item, schema["contains"], root) for item in instance
-        ):
-            errors.append(f"{path or '/'}: no item satisfies `contains`")
-
-    if isinstance(instance, dict):
-        props = schema.get("properties", {})
-        for key in schema.get("required", []):
-            if key not in instance:
-                errors.append(f"{path or '/'}: missing required property '{key}'")
-        if schema.get("additionalProperties") is False:
-            for key in instance:
-                if key not in props:
-                    errors.append(f"{path or '/'}: additional property '{key}' is not allowed")
-        for key, subschema in props.items():
-            if key in instance:
-                validate(instance[key], subschema, root, f"{path}/{key}", errors)
-
-    for sub in schema.get("allOf", []):
-        validate(instance, sub, root, path, errors)
-
-    if "anyOf" in schema and all(_fails(instance, sub, root) for sub in schema["anyOf"]):
-        errors.append(f"{path or '/'}: matches none of the {len(schema['anyOf'])} `anyOf` branches")
-
-    if "oneOf" in schema:
-        matched = sum(1 for sub in schema["oneOf"] if not _fails(instance, sub, root))
-        if matched != 1:
-            errors.append(f"{path or '/'}: matches {matched} `oneOf` branches, expected exactly 1")
-
-    if "not" in schema and not _fails(instance, schema["not"], root):
-        errors.append(f"{path or '/'}: must NOT match the `not` subschema, but does")
-
-    if "if" in schema:
-        if not _fails(instance, schema["if"], root):
-            if "then" in schema:
-                validate(instance, schema["then"], root, path, errors)
-        elif "else" in schema:
-            validate(instance, schema["else"], root, path, errors)
-
-
 def _read_json(path: str):
     with open(path, encoding="utf-8") as handle:
         return json.loads(handle.read())
@@ -453,6 +218,15 @@ def main(argv: list[str]) -> int:
         schema_path, manifest_path = argv[1], argv[2]
     else:
         return _usage()
+
+    # Resolve the engine BEFORE reading anything. A missing engine is not a
+    # property of this manifest, and reporting it as `file=<manifest>` would
+    # annotate an innocent file in the consumer's diff.
+    try:
+        from jsonschema import Draft202012Validator
+    except ImportError:
+        print(f"::error::{MISSING_ENGINE_MESSAGE}", file=sys.stderr)
+        return EXIT_USAGE
 
     try:
         instance = _read_json(manifest_path)
@@ -490,35 +264,15 @@ def main(argv: list[str]) -> int:
             print(f"::error::cannot read schema: {exc}", file=sys.stderr)
             return EXIT_USAGE
 
-    # Prefer the authoritative validator when available.
-    try:
-        from jsonschema import Draft202012Validator
-
-        Draft202012Validator.check_schema(schema)
-        errs = sorted(
-            Draft202012Validator(schema).iter_errors(instance),
-            key=lambda e: list(e.absolute_path),
-        )
-        if errs:
-            for e in errs:
-                p = "/" + "/".join(str(x) for x in e.absolute_path)
-                print(f"::error file={manifest_path}::at {p}: {e.message}", file=sys.stderr)
-            return EXIT_INVALID
-        return EXIT_VALID
-    except ImportError:
-        pass
-
-    try:
-        assert_fallback_covers(schema)
-    except FallbackCoverageGap as exc:
-        print(f"::error file={schema_path}::{exc}", file=sys.stderr)
-        return EXIT_USAGE
-
-    errors: list[str] = []
-    validate(instance, schema, schema, "", errors)
-    if errors:
-        for msg in errors:
-            print(f"::error file={manifest_path}::{msg}", file=sys.stderr)
+    Draft202012Validator.check_schema(schema)
+    errs = sorted(
+        Draft202012Validator(schema).iter_errors(instance),
+        key=lambda e: list(e.absolute_path),
+    )
+    if errs:
+        for e in errs:
+            p = "/" + "/".join(str(x) for x in e.absolute_path)
+            print(f"::error file={manifest_path}::at {p}: {e.message}", file=sys.stderr)
         return EXIT_INVALID
     return EXIT_VALID
 

@@ -1,0 +1,46 @@
+{
+  "_comment": [
+    "Provenance for schemas vendored from tinyland-inc/site.scaffold, which the",
+    "$id of both manifest schemas already names as the authority. Recording the",
+    "source revision and per-file digests is what makes the vendoring auditable:",
+    "before this file, ci-templates carried a COPY of the v1 schema with no lock",
+    "and no drift gate, and it had silently diverged from its source in BOTH",
+    "directions (ci-templates gained authorities.artifact_registry; site.scaffold",
+    "gained a gitops_receiver prohibition). Nothing compared them.",
+    "",
+    "The v2 copy arrived the same way and is currently byte-identical to its",
+    "source. This file exists so that stays a checkable fact rather than a",
+    "coincidence -- it is the cheapest moment a drift gate will ever be added.",
+    "",
+    "v1 is recorded as DRIFTED on purpose. This change does not silently adopt",
+    "upstream's v1 bytes -- that would change what every consumer is validated",
+    "against, which is a separate decision with its own review. It records the",
+    "divergence so the drift gate can report it instead of nobody noticing.",
+    "",
+    "Re-vendoring recipe: copy the source file, recompute sha256 for both the",
+    "vendored copy and (for a drifted entry) the upstream one, and update",
+    "source_revision in the same change. `just vendored-schema-provenance-check`",
+    "verifies the vendored digests offline; it deliberately does NOT reach",
+    "site.scaffold, so upstream freshness stays a separate, non-blocking question."
+  ],
+  "source_repository": "tinyland-inc/site.scaffold",
+  "source_revision": "cf05836bf98526ac6f05af31200176d9141f9584",
+  "source_revision_note": "site.scaffold main @ 2026-08-29. Both schema files are byte-identical at 6c58bb630de1 and at this revision, so recording the newer tip is a provenance refresh, not a content change.",
+  "files": [
+    {
+      "vendored": "schemas/tinyland-repo-manifest.v2.schema.json",
+      "source": "docs/schemas/tinyland-repo-manifest.v2.schema.json",
+      "sha256": "c7049f33e6098822c79736d9232a97609d3a052dda4d56e213f9fba4f12ad64b",
+      "upstream_sha256": "c7049f33e6098822c79736d9232a97609d3a052dda4d56e213f9fba4f12ad64b",
+      "state": "identical"
+    },
+    {
+      "vendored": "schemas/tinyland-repo-manifest.schema.json",
+      "source": "docs/schemas/tinyland-repo-manifest.schema.json",
+      "sha256": "4b8155126349ef226ead7e079e0917b3b8e91c2ecb3bc4f8de4ca1baad3887ec",
+      "upstream_sha256": "15965f1864c8d853805cf0596d5d1d76da536e09be46d05fd1cf8137f7122a4a",
+      "state": "drifted",
+      "state_note": "Known divergence, reported not reconciled. ci-templates alone defines authorities.artifact_registry; site.scaffold alone forbids authorities.gitops_receiver on a static spoke. De-forking v1 changes what live consumers are validated against and is its own change."
+    }
+  ]
+}
