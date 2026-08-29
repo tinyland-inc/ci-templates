@@ -51,14 +51,52 @@ runs:
           exit 1
         fi
 
-        # Dependency-free, network-free validation (TIN-2109). The validator
-        # prefers the authoritative `jsonschema` package when importable and
-        # otherwise uses a stdlib JSON-Schema-subset fallback, so the gate works
-        # on nix self-hosted cluster runners (where a cold `nix develop` can fail
-        # on a nix-store lock) as well as on hosted runners. Fail-closed: a
-        # non-zero exit (invalid manifest) fails the step.
+        # ONE ENGINE, OR NO VERDICT (TIN-4132/TIN-4192, superseding the
+        # TIN-2109 fallback posture). This step used to accept a bundled
+        # stdlib JSON-Schema-SUBSET validator whenever `jsonschema` was not
+        # importable. That subset never evaluated `not`, `contains`, or
+        # `anyOf` — the keywords in which BOTH manifest schemas express every
+        # prohibition — so on exactly the runners it existed for it reported
+        # "valid" for manifests carrying prohibited keys. A gate that reads as
+        # coverage while enforcing nothing is worse than an absent one.
+        #
+        # Its reason for existing is also dead: the cold-`nix develop`
+        # store-lock failure belonged to the shared-store host-runner
+        # generation, and current ARC pods mount per-pod ephemeral nix stores
+        # (GF substrate confirmation, 2026-08-27).
+        #
+        # Supplying the dependency is the CALLING WORKFLOW's job. No
+        # ci-templates composite does it: nix-setup detects Attic and Bazel
+        # cache endpoints, setup-nix installs Nix and its daemon, and neither
+        # installs a python package. A runner without it gets a visible red
+        # naming the dependency — never a silently weaker verdict.
+        #
+        # RELEASE GATE, not a merge gate: cutting a v2/v3 release carrying this
+        # refusal turns the manifest gate red for spoke-ci consumers on the
+        # self-hosted nix pool, where the deleted fallback is load-bearing
+        # TODAY (site.scaffold run 33204538631, 2026-08-28: "host python lacks
+        # jsonschema; using bundled stdlib validator", after setup-nix had
+        # already run). spoke-ci.yml calls repo-manifest-validate@v3 — a
+        # FLOATING inner ref — so even a consumer pinned to the immutable
+        # spoke-ci.yml@v3.1.0 picks this up the moment @v3 moves, with nothing
+        # on their side changing. Provision the pool, or the calling job,
+        # before tagging.
+        #
+        # This step deliberately does NOT shell out to `nix develop` itself.
+        # The TIN-2109 ruling that this action must not depend on it still
+        # stands and is asserted by `just cache-backed-optin-contract-check`;
+        # providing the interpreter is the calling workflow's job, and doing it
+        # here would make the gate's own bootstrap a second failure surface.
+        # The remedy named here must be one that WORKS. An earlier draft told
+        # the operator to "run the nix-setup composite in this job", which
+        # cannot help: nix-setup detects Attic and Bazel cache endpoints, and
+        # setup-nix installs Nix and its daemon. Neither installs a python
+        # package, so that sentence sent a blocked caller to a composite with
+        # nothing to give them. A refusal with an inert remedy is a hard stop
+        # with no exit.
         if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
-          echo "::notice::host python lacks jsonschema; using bundled stdlib validator"
+          echo "::error::python3 cannot import 'jsonschema', so this gate has no validator. It REFUSES to substitute a weaker one (TIN-4132). Remedy: make the python3 this job runs one that CAN import it — add a step BEFORE this one that puts it on PATH (\`nix profile install nixpkgs#python3Packages.jsonschema\`), or run the calling job inside a devshell that carries it. The ci-templates nix-setup and setup-nix composites do NOT provide it: nix-setup configures Attic/Bazel cache endpoints, setup-nix installs Nix itself, and neither installs a python package."
+          exit 5
         fi
 
         # Route by the manifest's own schema_version rather than hardcoding the
@@ -74,12 +112,35 @@ runs:
         # shell is how it would drift. The mapping is total — an absent,
         # mistyped, or unpublished schema_version exits 3 naming the value it
         # saw, and is never quietly routed to v1.
+        # Exit-code vocabulary, shared with the validator and asserted by
+        # scripts/manifest-schema-validate-selftest.sh:
+        #   0 valid  1 invalid  2 usage/IO  3 unpublished version
+        #   4 routed schema absent  5 no JSON Schema engine
+        #
+        # 2 and 5 used to be ONE code, and this case statement is where that
+        # cost something. The `2)` arm below was written for the refusal, so it
+        # announced "this is a RUNNER problem, not a manifest problem" — and
+        # then inherited every usage/IO error too. A consumer whose
+        # tinyland.repo.json had a stray comma was told their runner image was
+        # broken while the validator's own honest `::error::cannot read
+        # manifest: Expecting value: line 1 column 32` scrolled past above it.
+        # Worse than the wrong words: it is the same "two copies of one fact
+        # drift apart" failure this change exists to close, reproduced one
+        # directory away from the file it was closing it in.
         set +e
         python3 "$validator" --schemas-dir "$schemas_dir" "$manifest"
         rc=$?
         set -e
         case "$rc" in
           0) ;;
+          5)
+            echo "::error::the manifest gate could not run: no JSON Schema engine was available (see the error above). This is a RUNNER problem, not a manifest problem — nothing validated $manifest."
+            exit 5
+            ;;
+          2)
+            echo "::error file=$manifest::the manifest gate could not run: a usage or IO error (see the error above) — most often $manifest is unreadable or is not valid JSON. Nothing validated it. This is NOT a runner problem: the engine was already proven importable by the check above."
+            exit 1
+            ;;
           3)
             echo "::error file=$manifest::repo manifest declares a schema_version this ci-templates release publishes no schema for (see the error above). Supported versions ship under schemas/ — if this is a real new revision, vendor its schema and extend SCHEMA_BY_VERSION in scripts/manifest-schema-validate.py."
             exit 1

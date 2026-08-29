@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check repo-role-census-contract-selftest repo-role-census-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check
+check: yaml-parse json-parse vendored-schema-provenance-check repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check repo-role-census-contract-selftest repo-role-census-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -66,6 +66,15 @@ repo-manifest-validate:
       echo "python jsonschema unavailable and nix missing" >&2; exit 2; \
     fi; \
     "${validator[@]}" scripts/validate-ci-templates.py manifest
+
+# Assert every vendored manifest schema still matches schemas/VENDORED.json.
+# Hermetic by design: it compares recorded digests and does NOT reach
+# site.scaffold — a network call here would make every consumer's CI depend on
+# another repo being reachable. It catches a hand-edited copy, which is what a
+# lock can catch offline; upstream freshness is a separate, non-blocking
+# question. A `drifted` entry is reported, not failed.
+vendored-schema-provenance-check:
+    cd {{ root }} && python3 scripts/validate-ci-templates.py vendored-schema-provenance
 
 # Ensure internal ci-templates action refs resolve to checked-in sibling actions.
 internal-refs-check:
@@ -143,12 +152,12 @@ cache-backed-optin-contract-check:
 cache-contract-selftest:
     cd {{ root }} && bash scripts/cache-attachment-contract-selftest.sh
 
-# Prove the dependency-free manifest validator routes each schema_version to
-# ITS schema, fails an unpublished version loudly instead of falling back to v1,
-# fails closed on an invalid manifest, and — on the stdlib fallback path the nix
-# cluster runners actually take — enforces every keyword the vendored schemas
-# use rather than quietly ignoring the ones it never implemented.
-# TIN-2109; routing + fallback coverage added alongside schema_version 2.
+# Prove the manifest validator routes each schema_version to ITS schema, fails
+# an unpublished version loudly instead of falling back to v1, fails closed on
+# an invalid manifest, and — with `jsonschema` hidden — REFUSES to answer at all
+# rather than substituting a weaker engine. The refusal cases are the ones that
+# go red if a fallback validator is ever reintroduced.
+# TIN-2109 (routing); TIN-4132/TIN-4192 (one engine, or no verdict).
 manifest-validate-selftest:
     cd {{ root }} && bash scripts/manifest-schema-validate-selftest.sh
 
