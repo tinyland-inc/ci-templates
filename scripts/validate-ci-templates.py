@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import sys
+from collections import Counter
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -1271,6 +1272,39 @@ def check_vendored_schema_provenance() -> int:
     A `drifted` entry is REPORTED, not failed. The divergence is known and
     de-forking it changes what live consumers are validated against; what must
     not happen is it going unnoticed again.
+
+    SCOPE. This check covers `schemas/*.schema.json` — every schema in the
+    directory. It was written globbing `tinyland-repo-manifest*.json`, and that
+    narrower glob was not a smaller version of the same gate, it was a gate
+    that could not see the file it most needed to: `schemas/lanes.schema.json`
+    carries a site.scaffold `$id`, is drifted from its source TODAY (the
+    vendored copy still describes blahaj PR-env provisioning, reaper TTL and
+    `--config=flywheel-executor`; upstream says the schema "grants no receiver,
+    apply, DNS, or lifecycle authority" and uses
+    `GF_BAZEL_SUBSTRATE_MODE=executor-backed`), and backs the `lanes-load`
+    action that tinyland.dev's CI actually runs. The old glob would have
+    printed "all 2 vendored schemas match" over a directory holding four, one
+    of them drifted and load-bearing — coverage-shaped output enforcing less
+    than it read as, which is the exact defect this file exists to end.
+
+    STATE VOCABULARY, and why each arm is asserted rather than recorded:
+
+      identical  the vendored bytes equal the upstream bytes; `upstream_sha256`
+                 must equal `sha256`, or the record is claiming a match it does
+                 not have
+      drifted    a known divergence; `upstream_sha256` must be present and must
+                 DIFFER, or "drifted" is describing a file that isn't
+      unsourced  the `$id` names a site.scaffold path that does not exist at
+                 the recorded revision, so there is nothing to compare and
+                 `upstream_sha256` must be absent
+
+    Before this, `state` and `upstream_sha256` were recorded and never checked:
+    an entry could say `identical` next to an `upstream_sha256` of 64 zeros and
+    pass silently. `state` is the field an operator reads to sequence the v1
+    de-fork, so unasserted metadata there is a wrong answer waiting to be
+    trusted. The digest equality is free and offline; what stays advisory is
+    `source_revision` itself, which only a network call could verify and which
+    this check deliberately will not make.
     """
 
     record_path = ROOT / "schemas" / "VENDORED.json"
@@ -1288,24 +1322,52 @@ def check_vendored_schema_provenance() -> int:
         )
         return 1
 
-    recorded = {entry["vendored"] for entry in entries}
+    failures = 0
+
+    # Entry shape first, by name. A malformed record used to reach
+    # `entry["sha256"]` and die on an uncaught KeyError traceback -- it failed
+    # closed, but every other failure path in this function emits a `::error::`
+    # an operator can act on, and a stack trace is not one.
+    required_keys = ("vendored", "source", "sha256", "state")
+    well_formed = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            print(
+                f"::error file=schemas/VENDORED.json::files[{index}] is not an object",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+        absent = [key for key in required_keys if key not in entry]
+        if absent:
+            name = entry.get("vendored", f"files[{index}]")
+            print(
+                f"::error file=schemas/VENDORED.json::{name} is missing required "
+                f"key(s): {', '.join(absent)}. Every entry needs {', '.join(required_keys)}.",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+        well_formed.append(entry)
+
+    recorded = {entry["vendored"] for entry in well_formed}
     on_disk = {
         f"schemas/{path.name}"
-        for path in sorted((ROOT / "schemas").glob("tinyland-repo-manifest*.json"))
+        for path in sorted((ROOT / "schemas").glob("*.schema.json"))
     }
-    failures = 0
     for missing in sorted(on_disk - recorded):
         # A new vendored schema that nobody recorded is the exact hole this
         # gate exists to close, so it must not be silently out of scope.
         print(
-            f"::error file={missing}::vendored manifest schema is not recorded in "
+            f"::error file={missing}::schema in schemas/ is not recorded in "
             "schemas/VENDORED.json, so nothing pins it to a source revision. Add an "
-            "entry with its source path and sha256.",
+            "entry with its source path, sha256 and state (use state=unsourced if "
+            "its $id names a path that does not exist upstream).",
             file=sys.stderr,
         )
         failures += 1
 
-    for entry in entries:
+    for entry in well_formed:
         vendored = ROOT / entry["vendored"]
         if not vendored.is_file():
             print(f"::error::vendored schema missing: {entry['vendored']}", file=sys.stderr)
@@ -1323,19 +1385,77 @@ def check_vendored_schema_provenance() -> int:
             )
             failures += 1
             continue
-        state = entry.get("state", "identical")
-        print(f"vendored ok: {entry['vendored']} ({state})")
-        if state == "drifted":
+
+        # The state claim itself, asserted against the digests beside it. These
+        # are pure record-internal consistency checks -- offline, no network --
+        # and they are what turns `state` from a comment into a fact.
+        state = entry["state"]
+        upstream = entry.get("upstream_sha256")
+        if state == "identical":
+            if upstream != actual:
+                print(
+                    f"::error file={entry['vendored']}::recorded state=identical but "
+                    f"upstream_sha256 ({(upstream or '(absent)')[:16]}) does not equal the "
+                    f"vendored digest ({actual[:16]}). Either the copy is drifted and the "
+                    "state is wrong, or the recorded upstream digest is.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+        elif state == "drifted":
+            if not upstream:
+                print(
+                    f"::error file={entry['vendored']}::recorded state=drifted without an "
+                    "upstream_sha256, so the divergence it claims is unmeasurable.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+            if upstream == actual:
+                print(
+                    f"::error file={entry['vendored']}::recorded state=drifted but "
+                    "upstream_sha256 equals the vendored digest -- the copy matches its "
+                    "source, so record it as identical rather than carrying a divergence "
+                    "that no longer exists.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+        elif state == "unsourced":
+            if upstream:
+                print(
+                    f"::error file={entry['vendored']}::recorded state=unsourced but an "
+                    "upstream_sha256 is present. Unsourced means no upstream file exists "
+                    "to digest; if one does, record identical or drifted.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+        else:
             print(
-                f"::notice file={entry['vendored']}::known divergence from "
+                f"::error file={entry['vendored']}::unknown state {state!r}. Accepted: "
+                "identical, drifted, unsourced.",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+
+        print(f"vendored ok: {entry['vendored']} ({state})")
+        if state in ("drifted", "unsourced"):
+            print(
+                f"::notice file={entry['vendored']}::{state} against "
                 f"{record['source_repository']}: {entry.get('state_note', '')}"
             )
 
     if failures:
         return 1
+    counts = Counter(entry["state"] for entry in well_formed)
+    summary = ", ".join(f"{counts[state]} {state}" for state in sorted(counts))
     print(
-        f"all {len(entries)} vendored schemas match schemas/VENDORED.json "
-        f"(source {record['source_repository']} @ {record['source_revision'][:12]})"
+        f"all {len(well_formed)} schemas in schemas/ are recorded in "
+        f"schemas/VENDORED.json and match their digests ({summary}; source "
+        f"{record['source_repository']} @ {record['source_revision'][:12]}, "
+        "revision itself advisory -- this check never leaves the checkout)"
     )
     return 0
 

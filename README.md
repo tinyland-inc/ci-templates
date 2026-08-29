@@ -531,8 +531,16 @@ manifest, which is a broken release rather than a consumer problem.
 
 ### One engine, or no verdict
 
-The validator imports `jsonschema` or exits `2` naming the dependency. There is
+The validator imports `jsonschema` or exits `5` naming the dependency. There is
 no fallback, deliberately (TIN-4132/TIN-4192).
+
+`5` is its own code and not shared with `2`. The refusal and every usage/IO
+error answered `2` together in the first draft, and the composite's `2)` arm —
+written for the refusal — therefore greeted an unparseable `tinyland.repo.json`
+with "this is a RUNNER problem, not a manifest problem". The caller went
+looking at their runner image for a defect that was a comma in their own file.
+`2` now means only what it says: the CLI was called wrongly, or the manifest or
+a schema could not be read.
 
 A dependency-free stdlib validator used to stand in whenever the package was
 unimportable. It implemented a *subset* of JSON Schema and, for months, never
@@ -547,20 +555,33 @@ enforcing less than the schema says is worse than no gate.
 Its reason for existing is gone as well. It guarded a cold `nix develop`
 failing on a nix-store lock (TIN-2109) — a failure class of the shared-store
 host-runner generation. Current ARC pods mount per-pod ephemeral nix stores, so
-that contention is structurally gone. **`jsonschema` is supplied by the
-`nix-setup` composite**, cache-hot from the in-cluster Attic; run it in the job
-before `repo-manifest-validate`. The composite does *not* shell out to
-`nix develop` itself — `just cache-backed-optin-contract-check` still asserts it
-must not.
+that contention is structurally gone.
+
+**Supplying the dependency is the calling workflow's job, and no ci-templates
+composite does it for you.** An earlier draft of this section said `jsonschema`
+was "supplied by the `nix-setup` composite, cache-hot from the in-cluster
+Attic". It is not, and never was: grep `nix-setup/action.yml` for
+`python|pip|jsonschema|nix develop` and the only line that matches is `set -euo
+pipefail` — it detects Attic and Bazel cache endpoints. `setup-nix` installs Nix
+and starts its daemon; it installs no python package either. Put a step before
+`repo-manifest-validate` that makes `python3` able to import it (`nix profile
+install nixpkgs#python3Packages.jsonschema`, or a devshell the job runs inside).
+`repo-manifest-validate` deliberately does *not* shell out to `nix develop`
+itself — `just cache-backed-optin-contract-check` still asserts it must not, and
+making the gate's own bootstrap a second failure surface is not the fix.
 
 `scripts/manifest-schema-validate-selftest.sh` (via `just
 manifest-validate-selftest`) covers routing and validation against that one
 engine, plus a **refusal contract**: with `jsonschema` hidden behind an
-`ImportError` shim, the validator must exit `2` and name the dependency, and
+`ImportError` shim, the validator must exit `5` and name the dependency, and
 must not return a verdict of any kind — including on an *invalid* manifest,
 where answering `1` would mean something still validated it. Every one of those
 cases returned `0` or `1` off the subset before it was deleted, so they are live
-guards against a fallback being reintroduced rather than tautologies. It also
+guards against a fallback being reintroduced rather than tautologies. A second
+lane pins the other half of the split — with the engine *present*, a malformed
+or absent manifest must be `2`, so the two meanings cannot silently recombine —
+and two cases assert the refusal names a remedy that exists and says which
+composites cannot help. It also
 carries an **engine-identity control**: a `dependentRequired` violation must be
 *reported*, which is a verdict only the real engine can produce. On a host that
 cannot import `jsonschema` the harness refuses (exit `2`) rather than printing
@@ -568,18 +589,51 @@ cannot import `jsonschema` the harness refuses (exit `2`) rather than printing
 
 ### Vendored schema provenance
 
-`schemas/VENDORED.json` records the source revision and per-file sha256 of every
-manifest schema vendored from site.scaffold, and `just
-vendored-schema-provenance-check` asserts the copies still match. Before it,
-there was no lock and no gate, and the v1 copy had silently diverged from its
-source in **both** directions with nothing comparing them.
+`schemas/VENDORED.json` records the source revision and per-file sha256 of
+**every schema in `schemas/`**, and `just vendored-schema-provenance-check`
+asserts the copies still match. Before it, there was no lock and no gate, and
+the v1 copy had silently diverged from its source in **both** directions with
+nothing comparing them.
+
+Scope is the whole directory on purpose. The first draft globbed
+`tinyland-repo-manifest*.json` and reported "all 2 vendored schemas match" over
+a directory holding four — including `lanes.schema.json`, which this README's
+own vendoring note already listed, which is drifted today, and which backs the
+`lanes-load` action that consumer CI runs. A gate that reads as coverage while
+enforcing less than it appears to is the defect this whole section is about.
+
+Each entry carries a `state`, and the state is **asserted**, not just recorded:
+`identical` requires `upstream_sha256` to equal the vendored digest, `drifted`
+requires one that differs, and `unsourced` requires none at all. Before that,
+an entry could claim `identical` beside an `upstream_sha256` of 64 zeros and
+pass — unread metadata in the exact field an operator reads to sequence a
+de-fork.
+
+`unsourced` is a real class here, not a placeholder:
+`blahaj-dispatch.schema.json` and `public-preview-dispatch.schema.json` carry
+`$id`s naming site.scaffold paths that **404** at the recorded revision. Their
+digests are still pinned, so a hand-edit is caught; what cannot be claimed is
+provenance. That also means the "`$id` names the authority" heuristic this file
+rests on is not by itself reliable, which is worth knowing before trusting it
+elsewhere.
 
 The gate is deliberately **hermetic**: recorded digests only, no network. A
 network call would make every consumer's CI depend on another repository being
 reachable. It catches what a lock can catch offline — a hand-edit that never
-went through a re-vendor — plus a vendored manifest schema that no entry records
-and a record with no entries at all. Upstream *freshness* is a separate,
-non-blocking question. An entry marked `drifted` is reported, never failed.
+went through a re-vendor — plus a schema that no entry records, a malformed
+entry (named, not a traceback), and a record with no entries at all. Upstream
+*freshness*, and `source_revision` itself, stay separate non-blocking
+questions: no offline check can prove that string names a real commit. An entry
+marked `drifted` is reported, never failed.
+
+**Do not reflexively re-vendor a `drifted` entry.** `lanes.schema.json` has
+drifted in both directions and this repo is *ahead* on one of them: the
+vendored copy carries the TIN-3914 org-namespaced capability-class `pattern`
+where upstream still carries a hardcoded `tinyland-*` `enum`. Adopting
+upstream's bytes turns this repo's own `just lanes-schema-runner-class-check`
+red (`runnerClass no longer admits capability class great-falls-tool-bus-nix`).
+Upstream is ahead on authority language. Reconciling it is a real change with a
+real decision in it.
 
 **Known drift, not closed here:** the vendored
 `tinyland-repo-manifest.schema.json` (v1) and site.scaffold's copy have diverged

@@ -45,11 +45,12 @@ The subset's REASON FOR EXISTING is also dead. It guarded against a cold
 `nix develop` failing on a nix-store lock (TIN-2109) — a failure class of the
 shared-store host-runner generation. Current ARC pods mount per-pod ephemeral
 PVC nix stores, so cross-job store-lock contention is structurally gone (GF
-substrate confirmation, 2026-08-27). The dependency is supplied by the
-`nix-setup` composite, cache-hot from the in-cluster Attic. A host with neither
-`jsonschema` nor `nix` now gets a VISIBLE red naming the dependency (exit 2)
-instead of a silently weaker verdict. A gate that refuses is honest; a gate
-that quietly validates less is the defect this file used to be.
+substrate confirmation, 2026-08-27). Supplying the dependency is the calling
+workflow's job — no ci-templates composite does it, `nix-setup` and `setup-nix`
+included (see MISSING_ENGINE_MESSAGE below for why that sentence used to read
+otherwise). A host without it now gets a VISIBLE red naming the dependency
+(exit 5) instead of a silently weaker verdict. A gate that refuses is honest; a
+gate that quietly validates less is the defect this file used to be.
 
 **3. JSON equality, not Python equality.** `_as_schema_version()` reads the
 declared version by JSON's rules, not Python's: `true` is NOT version 1 even
@@ -71,10 +72,21 @@ v2 manifest really is rejected by the v1 schema).
 Exit codes:
   0  valid against the schema for its declared schema_version
   1  invalid against that schema
-  2  usage / IO error, or `jsonschema` is unavailable and this gate refuses to
-     substitute a weaker validator
+  2  usage / IO error: the CLI was called wrongly, or the manifest or a schema
+     could not be read or parsed
   3  schema_version absent, mistyped, or naming no published schema
   4  the schema the manifest routes to is not present in this checkout
+  5  no engine: `jsonschema` is not importable and this gate refuses to
+     substitute a weaker validator
+
+2 and 5 are DELIBERATELY DISTINCT, and were not always. The refusal used to
+share exit 2 with every usage/IO error, so the composite action's `2)` arm --
+written for the refusal -- told a consumer with an unparseable
+`tinyland.repo.json` that "this is a RUNNER problem, not a manifest problem".
+It was neither true nor actionable: the caller went looking at their runner
+image for a defect that was a comma in their own file. Two meanings on one code
+is how a diagnostic lies while every test still passes, so they are separated
+here and each arm is asserted by the selftest.
 """
 
 from __future__ import annotations
@@ -87,6 +99,7 @@ EXIT_INVALID = 1
 EXIT_USAGE = 2
 EXIT_UNSUPPORTED_VERSION = 3
 EXIT_MISSING_SCHEMA = 4
+EXIT_NO_ENGINE = 5
 
 #: The total published mapping, relative to the vendored `schemas/` directory.
 #: A version absent from this dict has no schema here, and saying so is the
@@ -107,13 +120,28 @@ KNOWN_UNSUPPORTED_DIALECTS = (
 #: the selftest greps for it: an exit code alone cannot prove the operator was
 #: told WHICH dependency to provide, and "refuses loudly" is the whole claim of
 #: this change.
+#:
+#: The remedy sentence is load-bearing and was WRONG in the first draft of this
+#: change: it said "provide it via the nix-setup composite (the ci devshell
+#: closure carries it)". `nix-setup` does not carry it and cannot -- grep its
+#: action.yml for `python|pip|jsonschema|nix develop` and the only line that
+#: matches is `set -euo pipefail`; it detects Attic and Bazel cache endpoints.
+#: `setup-nix` installs Nix and starts the daemon; it installs no python
+#: package either. A hard refusal whose named remedy is inert is a dead end
+#: with a helpful tone, so the message now names remedies that exist and says
+#: plainly which composites do not help.
 MISSING_ENGINE_MESSAGE = (
     "python package 'jsonschema' is not importable, so this gate has no "
     "validator. It REFUSES to substitute a weaker one (TIN-4132: the stdlib "
     "subset it used to fall back to silently skipped `not`, `contains` and "
-    "`anyOf`, and passed manifests carrying prohibited keys). Provide it via "
-    "the nix-setup composite (the ci devshell closure carries it), `nix "
-    "develop --command`, or the host python environment, then re-run."
+    "`anyOf`, and passed manifests carrying prohibited keys). Remedy: make the "
+    "python3 this step runs one that CAN import it. Add a step BEFORE this one "
+    "that puts it on PATH -- `nix profile install "
+    "nixpkgs#python3Packages.jsonschema` -- or run the calling job inside a "
+    "devshell that carries it. The ci-templates `nix-setup` and `setup-nix` "
+    "composites do NOT provide it: nix-setup configures Attic/Bazel cache "
+    "endpoints and setup-nix installs Nix itself, and neither installs a "
+    "python package."
 )
 
 
@@ -225,8 +253,11 @@ def main(argv: list[str]) -> int:
     try:
         from jsonschema import Draft202012Validator
     except ImportError:
+        # EXIT_NO_ENGINE, not EXIT_USAGE. Sharing a code with "the manifest is
+        # not readable" is what let the composite action attribute a malformed
+        # tinyland.repo.json to the runner image.
         print(f"::error::{MISSING_ENGINE_MESSAGE}", file=sys.stderr)
-        return EXIT_USAGE
+        return EXIT_NO_ENGINE
 
     try:
         instance = _read_json(manifest_path)

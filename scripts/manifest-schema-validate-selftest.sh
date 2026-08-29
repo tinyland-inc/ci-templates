@@ -22,10 +22,15 @@
 #     runs every case twice. The differential-lane machinery it used is gone
 #     with it: two engines kept in step by a hand-written harness was the
 #     hazard, not the fix. What replaces those cases is a REFUSAL contract —
-#     with `jsonschema` hidden, the validator must exit 2 naming the dependency
+#     with `jsonschema` hidden, the validator must exit 5 naming the dependency
 #     and must NOT return a verdict of any kind. Those cases are the ones that
 #     fail if a fallback is ever reintroduced, because a fallback would answer
-#     0 or 1 where this file demands 2.
+#     0 or 1 where this file demands 5.
+#
+#     The refusal's own code is asserted too. It was 2 in the first draft,
+#     shared with every usage/IO error, and the composite action's `2)` arm
+#     therefore reported a malformed `tinyland.repo.json` as a broken runner.
+#     Both halves of that split now have cases: refusal is 5, usage/IO is 2.
 #
 #  3. That same subset compared `const`/`enum` with Python `==`/`in`. `bool`
 #     subclasses `int` in Python, so `True == 1`: a manifest declaring
@@ -250,26 +255,58 @@ run_case_saying 1 engine "is a dependency of" \
 # With `jsonschema` hidden, the validator must produce NO verdict. Every case
 # here returned 0 or 1 before TIN-4132 — off the stdlib subset — so each one is
 # a live guard against a fallback being reintroduced, not a tautology.
+#
+# The refusal's code is 5, NOT 2. It shared 2 with every usage/IO error in the
+# first draft of this change, which made the composite action's `2)` arm — a
+# message about the runner — fire for a manifest that was simply unparseable.
+# The pair of lanes below is what keeps them distinct: everything under
+# `refusal` must be 5, and the `usage/IO` cases further down must be 2 WITH the
+# engine present. Collapse them again and one of the two lanes goes red.
 
-run_case_saying 2 refusal "jsonschema" \
+run_case_saying 5 refusal "jsonschema" \
   "a VALID v1 manifest yields no verdict without the engine (was exit 0 via the fallback)" -- \
   --schemas-dir "${schemas}" "${v1}"
-run_case 2 refusal \
-  "an INVALID v1 manifest yields 2 (refusal), not 1 — refusal is not a verdict" -- \
+run_case 5 refusal \
+  "an INVALID v1 manifest yields 5 (refusal), not 1 — refusal is not a verdict" -- \
   --schemas-dir "${schemas}" "${work}/invalid-v1.json"
-run_case 2 refusal \
+run_case 5 refusal \
   "the explicit-schema form refuses too; there is no un-gated entry point" -- \
   "${schemas}/tinyland-repo-manifest.schema.json" "${v1}"
-run_case_saying 2 refusal "nix-setup" \
-  "the refusal names the remedy, not just the missing import" -- \
+
+# The remedy must be one that WORKS. The first draft named the `nix-setup`
+# composite, which provides no python package at all (it configures Attic and
+# Bazel cache endpoints); an operator following it got nowhere. These two cases
+# pin a remedy that exists AND the sentence that retracts the inert one, so
+# restoring the old text cannot pass while claiming to name a remedy.
+run_case_saying 5 refusal "nix profile install" \
+  "the refusal names a remedy that actually provides the package" -- \
+  --schemas-dir "${schemas}" "${v2}"
+run_case_saying 5 refusal "do NOT provide it" \
+  "the refusal says which composites cannot help, so nobody is sent to nix-setup again" -- \
   --schemas-dir "${schemas}" "${v2}"
 
 # The engine check must come BEFORE the manifest is read, so a runner missing
-# the dependency is told about the dependency rather than about a file. Same
-# exit code, different message: assert the message.
-run_case_saying 2 refusal "jsonschema" \
+# the dependency is told about the dependency rather than about a file.
+run_case_saying 5 refusal "jsonschema" \
   "a missing manifest still reports the missing ENGINE, not the missing file" -- \
   --schemas-dir "${schemas}" "${work}/does-not-exist.json"
+
+# --- usage / IO is exit 2, and only exit 2 ---------------------------------
+#
+# With the engine PRESENT, an unreadable or unparseable manifest is a manifest
+# problem. These cases had no coverage at all before, which is why exit 2's two
+# meanings could drift apart unnoticed: nothing ever asserted the non-refusal
+# half of the code.
+
+printf '%s\n' 'this is not json {' >"${work}/malformed.json"
+
+run_case_saying 2 engine "cannot read manifest" \
+  "a malformed manifest is exit 2 (usage/IO) and says so — never the refusal code" -- \
+  --schemas-dir "${schemas}" "${work}/malformed.json"
+run_case_saying 2 engine "cannot read manifest" \
+  "an absent manifest is exit 2 with the engine present, not 5" -- \
+  --schemas-dir "${schemas}" "${work}/does-not-exist.json"
+run_case 2 engine "no arguments is a usage error, still 2" --
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ ${fail} -eq 0 ]]
