@@ -123,18 +123,27 @@ Versioning: [SemVer 2.0](https://semver.org/).
   Publisher and read-only verifier independently check the upload-artifact
   identity, name, archive digest, run metadata, exact entry census, constituent
   digests, and candidate derivation. The publisher binds caller and called
-  reusable-workflow identities from OIDC, requires an immutable signed workflow
-  ref and exact registered certificate subject, signs the exact payload and
-  statement bytes, and performs create-only OCI publication. The verifier
-  rereads payload and receipt by descriptor digest, verifies both Sigstore
-  bundles, and is the only source of `published=true`. The verified protected
-  caller is the trusted producer; these bindings are not described as a sandbox
-  against hostile same-job persistence, which would require a stronger
-  sandbox/RBE producer contract. The runner is the fixed `tinyland-nix`
-  capability class. Registered structural and hostile-mutation checks run in
-  `just check`. This is publisher-only: no apply, plan, state mutation,
-  controller, endpoint, credential, secret, or dispatch behavior. No existing
-  consumer calls it, so existing execution paths remain byte-identical.
+  reusable-workflow identities from OIDC, requires an exact signed workflow SHA
+  and registered certificate subject, and signs the exact payload and statement
+  bytes. ORAS is installed from the verified 1.3.4-capable setup action commit;
+  both privilege jobs assert exact ORAS 1.3.4 and Cosign 3.1.3 runtime versions.
+  Each privilege job uses its own fixed runner-temp 0600 ORAS registry config
+  and an immediate unconditional cleanup step; the OIDC token is written by
+  exclusive 0600 creation and atomic replacement, then removed with the
+  publisher authentication. OCI publication is collision-checked by a tag
+  containing the run ID, run attempt, and source SHA under the trusted GHCR/no
+  hostile co-writer boundary. ORAS has no conditional tag-create primitive, so
+  publication is therefore explicitly collision-checked, not atomic. The
+  verifier rereads payload and receipt by descriptor digest, verifies both
+  Sigstore bundles, and is the only source of `published=true`. The verified
+  protected caller is the trusted producer; these bindings are not described as
+  a sandbox against hostile same-job persistence, which would require a
+  stronger sandbox/RBE producer contract. The runner is the fixed
+  `tinyland-nix` capability class. Registered structural and hostile-mutation
+  checks run in `just check`. This is publisher-only: no apply, plan, state
+  mutation, controller, endpoint, caller-supplied or durable credential,
+  secret, or dispatch behavior. No existing consumer calls it, so existing
+  execution paths remain byte-identical.
 
 - **`schemas/VENDORED.json` + `just vendored-schema-provenance-check`.**
   ci-templates carries COPIES of schemas whose own `$id` names

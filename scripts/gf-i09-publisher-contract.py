@@ -14,7 +14,7 @@ EXPECTED_USES = Counter(
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10": 1,
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a": 1,
         "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c": 2,
-        "oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d": 2,
+        "oras-project/setup-oras@8fb134d3ffae70fde00fa608ff83311dda675fa5": 2,
         "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6": 2,
     }
 )
@@ -43,9 +43,13 @@ REQUIRED = (
     "certificate_identity",
     "workflow_source_sha256",
     "cosign sign-blob",
-    "absent()",
+    "require_unoccupied_tag()",
     "oras manifest fetch",
-    "oras pull --output",
+    "oras pull --registry-config",
+    "Remove publisher ephemeral authentication",
+    "Remove verifier ephemeral authentication",
+    "publisher workflow ref must end in one exact 40-hex commit SHA",
+    "OCI tags are collision-checked under trusted GHCR",
     "cosign verify-blob",
     "publication-receipt.json",
     "Threat boundary: the verified protected caller commit is the trusted producer.",
@@ -64,6 +68,11 @@ FORBIDDEN = (
     "opentofu ",
     "GF_I09_HANDOFF",
     "GITHUB_ENV",
+    "create-only",
+    "refs/tags",
+    "rm -rf",
+    "${HOME",
+    "$HOME",
 )
 
 
@@ -98,6 +107,7 @@ def verdict(source: str) -> list[str]:
     executable = "\n".join(
         line for line in source.splitlines() if not line.lstrip().startswith("#")
     )
+    logical = executable.replace("\\\n", " ")
 
     def require(condition: bool, message: str) -> None:
         if not condition:
@@ -186,6 +196,75 @@ def verdict(source: str) -> list[str]:
             for item in uses
         ),
         "every action must use a full immutable commit",
+    )
+    require(
+        executable.count("version: 1.3.4") == 2
+        and executable.count("cosign-release: v3.1.3") == 2,
+        "both privilege jobs must install the exact approved ORAS and Cosign versions",
+    )
+    require(
+        executable.count("oras version | awk") == 2
+        and executable.count(')" = "1.3.4"') == 2
+        and executable.count("cosign version --json | jq -er .gitVersion") == 2
+        and executable.count(')" = "v3.1.3"') == 2,
+        "both privilege jobs must prove exact ORAS and Cosign runtime versions",
+    )
+    require(
+        executable.count(
+            'r"gf-i09-release-publisher\\.yml@[0-9a-f]{40}$"'
+        ) == 1
+        and "refs/tags" not in executable
+        and "@main" not in executable,
+        "publisher workflow registration must accept only an exact 40-hex SHA",
+    )
+    oras_commands = re.findall(
+        r"(?m)^([^\n]*\boras (?:login|logout|push|pull|manifest fetch)\b[^\n]*)$",
+        logical,
+    )
+    require(
+        len(oras_commands) == 11
+        and all('--registry-config "${registry_config}"' in line for line in oras_commands),
+        "every registry-facing ORAS command must use the fixed ephemeral config",
+    )
+    require(
+        executable.count("version: 1.3.4") == 2
+        and executable.count(
+            "oras-project/setup-oras@8fb134d3ffae70fde00fa608ff83311dda675fa5"
+        ) == 2,
+        "setup-oras must be the verified 1.3.4-capable action commit",
+    )
+    for job_name, cleanup_name in (
+        ("publish", "Remove publisher ephemeral authentication"),
+        ("verify", "Remove verifier ephemeral authentication"),
+    ):
+        job = jobs.get(job_name, "")
+        cleanup = f"- name: {cleanup_name}\n        if: ${{{{ always() }}}}"
+        require(
+            job.count(cleanup) == 1
+            and "\n      - name:" not in job[job.find(cleanup) + len(cleanup) :],
+            f"{job_name} auth cleanup must be immediate, unconditional, and final",
+        )
+    require(
+        executable.count("gf-i09-publish-registry-config.json") >= 3
+        and executable.count("gf-i09-verify-registry-config.json") >= 3
+        and executable.count("printf '{}\\n' > \"${registry_config}\"") == 2
+        and executable.count('chmod 0600 "${registry_config}"') == 2
+        and executable.count('stat -c \'%a\' -- "${registry_config}"') == 2,
+        "each privilege job must create and validate its own fixed 0600 registry config",
+    )
+    require(
+        executable.count("os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW") == 1
+        and executable.count("os.replace(token_tmp, token_path)") == 1
+        and executable.count("stat.S_IMODE(token_meta.st_mode) != 0o600") == 1,
+        "OIDC token creation must be exclusive, atomic, non-symlink, and mode 0600",
+    )
+    require(
+        executable.count(
+            'tag="gf-i09-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA:0:12}"'
+        ) == 1
+        and "ORAS exposes no conditional tag-create primitive, so this is not atomic."
+        in source,
+        "publication must state and implement the trusted-registry collision boundary",
     )
 
     require(
@@ -307,8 +386,14 @@ def verdict(source: str) -> list[str]:
         "prepare must expose only trusted gate/freeze digest outputs",
     )
     require(
-        len(re.findall(r"(?m)^\s+oras pull --output", executable)) == 2,
-        "verify must perform exactly two immutable OCI pulls",
+        len(
+            re.findall(
+                r'(?m)^\s+oras pull --registry-config "\${registry_config}"',
+                logical,
+            )
+        )
+        == 2,
+        "verify must perform exactly two isolated immutable OCI pulls",
     )
     require(
         executable.count("cosign verify-blob") == 2,
@@ -386,8 +471,8 @@ def self_test(source: str) -> int:
             "job_workflow_sha", "called_sha", 1
         ),
         "readback dropped": source.replace(
-            'oras pull --output "${root}/receipt"',
-            'true # oras pull --output "${root}/receipt"',
+            'oras pull --registry-config "${registry_config}"',
+            'true # oras pull --registry-config "${registry_config}"',
             1,
         ),
         "signature verify dropped": source.replace(
@@ -453,6 +538,55 @@ def self_test(source: str) -> int:
         "statement constituent digest removed": source.replace(
             'if digest(statement_bytes) != os.environ["PREPARE_STATEMENT_DIGEST"]:',
             "if False:",
+            1,
+        ),
+        "old setup-oras action": source.replace(
+            "oras-project/setup-oras@8fb134d3ffae70fde00fa608ff83311dda675fa5",
+            "oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d",
+            1,
+        ),
+        "ORAS install version drift": source.replace(
+            "version: 1.3.4", "version: 1.3.3", 1
+        ),
+        "ORAS runtime version check drift": source.replace(
+            ')" = "1.3.4"', ')" = "1.3.3"', 1
+        ),
+        "Cosign install version drift": source.replace(
+            "cosign-release: v3.1.3", "cosign-release: v3.1.2", 1
+        ),
+        "Cosign runtime version check drift": source.replace(
+            ')" = "v3.1.3"', ')" = "v3.1.2"', 1
+        ),
+        "mutable publisher workflow ref": source.replace(
+            'r"gf-i09-release-publisher\\.yml@[0-9a-f]{40}$"',
+            'r"gf-i09-release-publisher\\.yml@(?:[0-9a-f]{40}|main)$"',
+            1,
+        ),
+        "registry config isolation removed": source.replace(
+            '--registry-config "${registry_config}"', "", 1
+        ),
+        "auth cleanup no longer unconditional": source.replace(
+            "if: ${{ always() }}", "if: success()", 1
+        ),
+        "recursive auth cleanup": source.replace(
+            "rm -f --", "rm -rf --", 1
+        ),
+        "OIDC exclusive create removed": source.replace(
+            "os.O_EXCL", "0", 1
+        ),
+        "OIDC atomic replace removed": source.replace(
+            "os.replace(token_tmp, token_path)",
+            "token_path.write_bytes(token_tmp.read_bytes())",
+            1,
+        ),
+        "collision attempt binding removed": source.replace(
+            'tag="gf-i09-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA:0:12}"',
+            'tag="gf-i09-${GITHUB_RUN_ID}-${GITHUB_SHA:0:12}"',
+            1,
+        ),
+        "false create-only claim": source.replace(
+            "name: gf-i09-release-publisher",
+            "name: gf-i09-release-publisher\n# create-only",
             1,
         ),
         "apply behavior": source.replace(
