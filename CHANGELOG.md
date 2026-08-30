@@ -113,6 +113,29 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Added
 
+- **GF-I09 release publisher successor.** Adds a new default-off reusable
+  workflow with no inputs or secrets. A protected, signed caller push supplies
+  one fixed tracked canonical declaration and two fixed Just recipes; caller
+  code runs only in an unprivileged prepare job. The gate and freeze derive a
+  fixed runner-temp handoff without exporting its path: the gate emits the
+  canonical candidate digest, freeze verifies those exact bytes and a strict
+  two-regular-file census, then emits payload and final-statement digests.
+  Publisher and read-only verifier independently check the upload-artifact
+  identity, name, archive digest, run metadata, exact entry census, constituent
+  digests, and candidate derivation. The publisher binds caller and called
+  reusable-workflow identities from OIDC, requires an immutable signed workflow
+  ref and exact registered certificate subject, signs the exact payload and
+  statement bytes, and performs create-only OCI publication. The verifier
+  rereads payload and receipt by descriptor digest, verifies both Sigstore
+  bundles, and is the only source of `published=true`. The verified protected
+  caller is the trusted producer; these bindings are not described as a sandbox
+  against hostile same-job persistence, which would require a stronger
+  sandbox/RBE producer contract. The runner is the fixed `tinyland-nix`
+  capability class. Registered structural and hostile-mutation checks run in
+  `just check`. This is publisher-only: no apply, plan, state mutation,
+  controller, endpoint, credential, secret, or dispatch behavior. No existing
+  consumer calls it, so existing execution paths remain byte-identical.
+
 - **`schemas/VENDORED.json` + `just vendored-schema-provenance-check`.**
   ci-templates carries COPIES of schemas whose own `$id` names
   `tinyland-inc/site.scaffold` as the authority, and until now there was no

@@ -9,7 +9,7 @@ _default:
     @just --list --unsorted
 
 # Run all repository-local validation.
-check: yaml-parse json-parse vendored-schema-provenance-check repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check repo-role-census-contract-selftest repo-role-census-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check
+check: yaml-parse json-parse vendored-schema-provenance-check repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check repo-role-census-contract-selftest repo-role-census-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check gf-i09-publisher-contract-check gf-i09-publisher-contract-selftest
     @echo "ci-templates checks passed."
 
 # Parse all GitHub workflow/action YAML with Ruby's stdlib YAML parser.
@@ -51,6 +51,13 @@ no-hosted-runners-selftest:
 # spelling fails even if it never writes a hosted label down.
 lanes-schema-runner-class-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py lanes-schema-runner-class
+
+# GF-I09 publisher-only workflow: structural contract plus hostile mutation oracles.
+gf-i09-publisher-contract-check:
+    cd {{ root }} && python3 scripts/gf-i09-publisher-contract.py
+
+gf-i09-publisher-contract-selftest:
+    cd {{ root }} && python3 scripts/gf-i09-publisher-contract.py --self-test
 
 # Parse all vendored JSON schemas.
 json-parse:

@@ -1,0 +1,1009 @@
+name: gf-i09-release-publisher
+
+# Publisher-only GF-I09 bridge. The caller owns one canonical tracked
+# declaration and two fixed Just recipes. Caller code runs only in prepare,
+# without OIDC or package authority. Publish never checks out caller code.
+# Verify has package-read only and is the sole source of published=true.
+#
+# Threat boundary: the verified protected caller commit is the trusted producer.
+# These digest bindings are not a sandbox against hostile same-job persistence;
+# they make every post-freeze byte change fail independently in both privileged
+# jobs. Stronger producer isolation belongs in a sandbox/RBE contract.
+on:
+  workflow_call:
+    outputs:
+      activation_enabled:
+        description: Whether the closed activation conjunction admitted publication.
+        value: ${{ jobs.result.outputs.activation_enabled }}
+      published:
+        description: True only after read-only OCI and Sigstore verification.
+        value: ${{ jobs.result.outputs.published }}
+      published_reference:
+        description: Immutable OCI reference, empty unless published is true.
+        value: ${{ jobs.result.outputs.published_reference }}
+      payload_digest:
+        description: Digest of the exact producer payload bytes.
+        value: ${{ jobs.result.outputs.payload_digest }}
+      descriptor_digest:
+        description: OCI descriptor digest observed after create-only publication.
+        value: ${{ jobs.result.outputs.descriptor_digest }}
+      receipt_descriptor_digest:
+        description: OCI descriptor digest of the reread publication receipt.
+        value: ${{ jobs.result.outputs.receipt_descriptor_digest }}
+
+jobs:
+  prepare:
+    name: Prove caller and assemble without publication authority
+    runs-on: tinyland-nix
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      activation_enabled: ${{ steps.gate.outputs.enabled }}
+      candidate_digest: ${{ steps.gate.outputs.candidate_digest }}
+      payload_digest: ${{ steps.freeze.outputs.payload_digest }}
+      statement_digest: ${{ steps.freeze.outputs.statement_digest }}
+      artifact_id: ${{ steps.handoff.outputs.artifact-id }}
+      artifact_digest: ${{ steps.handoff.outputs.artifact-digest }}
+    steps:
+      - name: Checkout exact caller commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Prove signed protected push and closed declaration
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_EVENT_NAME}" = "push"
+          test "${GITHUB_RUN_ATTEMPT}" = "1"
+          test "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}"
+          test "${REF_PROTECTED}" = "true"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${DEFAULT_BRANCH}" --jq .object.sha)" = "${GITHUB_SHA}"
+          commit_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}")"
+          jq -e --arg sha "${GITHUB_SHA}" '
+            .sha == $sha
+            and .commit.verification.verified == true
+            and .commit.verification.reason == "valid"
+          ' <<<"${commit_json}" >/dev/null
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import stat
+          import subprocess
+          from pathlib import Path
+
+          CONFIG = ".github/gf-i09/publisher.json"
+          PREREQUISITES = (
+              "consumer-verifier-ready",
+              "gf-i07-evidence-qualified",
+              "owner-overlay-registration-reviewed",
+              "producer-contract-passed",
+          )
+          EVIDENCE = ("descriptor-digest", "payload-digest", "signature-bundle")
+          MEDIA = "application/vnd.tinyland.gf.owner-overlay.application-release.v1+json"
+          REF_RE = re.compile(
+              r"^tinyland-inc/ci-templates/\.github/workflows/"
+              r"gf-i09-release-publisher\.yml@"
+              r"(?:[0-9a-f]{40}|refs/tags/v[1-9][0-9]*\.[0-9]+\.[0-9]+)$"
+          )
+
+          def pairs(items):
+              result = {}
+              for key, value in items:
+                  if key in result:
+                      raise SystemExit(f"duplicate JSON key: {key}")
+                  result[key] = value
+              return result
+
+          def canonical(value):
+              return (
+                  json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                  + "\n"
+              ).encode()
+
+          def digest(data):
+              return "sha256:" + hashlib.sha256(data).hexdigest()
+
+          root = Path.cwd().resolve()
+          runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          handoff = runner_temp / "gf-i09-handoff"
+          try:
+              handoff.lstat()
+          except FileNotFoundError:
+              handoff.mkdir(mode=0o700)
+          else:
+              raise SystemExit("fixed handoff path already exists")
+          handoff_meta = handoff.lstat()
+          if stat.S_ISLNK(handoff_meta.st_mode) or not stat.S_ISDIR(handoff_meta.st_mode):
+              raise SystemExit("fixed handoff path must be a real directory")
+          if handoff.resolve(strict=True).parent != runner_temp:
+              raise SystemExit("fixed handoff path escaped RUNNER_TEMP")
+          path = root / CONFIG
+          metadata = path.lstat()
+          if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+              raise SystemExit(f"{CONFIG}: must be a regular non-symlink file")
+          if path.resolve(strict=True).parent != (root / ".github/gf-i09").resolve(strict=True):
+              raise SystemExit(f"{CONFIG}: escaped the fixed directory")
+          stage = subprocess.check_output(["git", "ls-files", "--stage", "--", CONFIG], text=True).split()
+          if len(stage) < 4 or stage[0] != "100644":
+              raise SystemExit(f"{CONFIG}: must be a tracked mode-100644 blob")
+          raw = path.read_bytes()
+          config = json.loads(raw, object_pairs_hook=pairs)
+          keys = {
+              "schema", "enabled", "activation_prerequisites", "evidence_kinds",
+              "payload_kind", "payload_media_type", "publication_repository",
+              "publisher_workflow_ref", "certificate_identity",
+          }
+          if not isinstance(config, dict) or set(config) != keys or raw != canonical(config):
+              raise SystemExit(f"{CONFIG}: must be closed GF Canonical JSON v1")
+          if config["schema"] != "tinyland.gf-i09.publisher/v1":
+              raise SystemExit("unsupported publisher schema")
+          if type(config["enabled"]) is not bool:
+              raise SystemExit("enabled must be boolean")
+          if config["payload_kind"] != "application-release" or config["payload_media_type"] != MEDIA:
+              raise SystemExit("payload declaration is not the GF-I09 application release")
+          owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+          repo_re = re.compile(
+              rf"^oci://ghcr\.io/{re.escape(owner)}/"
+              r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$"
+          )
+          if not isinstance(config["publication_repository"], str) or not repo_re.fullmatch(
+              config["publication_repository"]
+          ):
+              raise SystemExit("publication repository must be tag-free GHCR under the caller owner")
+          if not isinstance(config["publisher_workflow_ref"], str) or not REF_RE.fullmatch(
+              config["publisher_workflow_ref"]
+          ):
+              raise SystemExit("publisher workflow ref must be an immutable commit or exact semver tag")
+          identity = config["certificate_identity"]
+          if (
+              not isinstance(identity, str)
+              or not 1 <= len(identity) <= 512
+              or any(ord(char) < 0x21 or ord(char) > 0x7E for char in identity)
+              or f"job_workflow_ref:{config['publisher_workflow_ref']}" not in identity
+          ):
+              raise SystemExit("certificate identity must bind the exact job_workflow_ref")
+          if tuple(config["evidence_kinds"]) != EVIDENCE or len(set(config["evidence_kinds"])) != len(EVIDENCE):
+              raise SystemExit("evidence kinds are not the exact unique closed set")
+          prerequisites = config["activation_prerequisites"]
+          if not isinstance(prerequisites, list) or not prerequisites:
+              raise SystemExit("activation prerequisites must be nonempty")
+          ids, unmet = [], []
+          for item in prerequisites:
+              if (
+                  not isinstance(item, dict)
+                  or set(item) != {"id", "satisfied"}
+                  or type(item.get("satisfied")) is not bool
+                  or not isinstance(item.get("id"), str)
+              ):
+                  raise SystemExit("each prerequisite must have only id and boolean satisfied")
+              ids.append(item["id"])
+              if not item["satisfied"]:
+                  unmet.append(item["id"])
+          if tuple(ids) != PREREQUISITES or len(set(ids)) != len(PREREQUISITES):
+              raise SystemExit("prerequisites are not the exact unique closed set")
+
+          workflow_ref = os.environ["GITHUB_WORKFLOW_REF"]
+          prefix = os.environ["GITHUB_REPOSITORY"] + "/"
+          suffix = "@" + os.environ["GITHUB_REF"]
+          if not workflow_ref.startswith(prefix) or not workflow_ref.endswith(suffix):
+              raise SystemExit("caller workflow ref is not bound to this repository/ref")
+          workflow_path = workflow_ref[len(prefix):-len(suffix)]
+          if not re.fullmatch(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml", workflow_path):
+              raise SystemExit("caller workflow path is not canonical")
+          workflow_file = root / workflow_path
+          workflow_meta = workflow_file.lstat()
+          if stat.S_ISLNK(workflow_meta.st_mode) or not stat.S_ISREG(workflow_meta.st_mode):
+              raise SystemExit("caller workflow must be a regular non-symlink")
+          workflow_stage = subprocess.check_output(
+              ["git", "ls-files", "--stage", "--", workflow_path], text=True
+          ).split()
+          if len(workflow_stage) < 4 or workflow_stage[0] != "100644":
+              raise SystemExit("caller workflow must be a tracked mode-100644 blob")
+
+          enabled = config["enabled"] and not unmet
+          statement = {
+              "schema": "tinyland.gf-i09.publisher-statement-candidate/v1",
+              "activation_prerequisites": prerequisites,
+              "caller": {
+                  "repository": os.environ["GITHUB_REPOSITORY"],
+                  "repository_owner": os.environ["GITHUB_REPOSITORY_OWNER"],
+                  "commit_sha": os.environ["GITHUB_SHA"],
+                  "default_branch": os.environ["DEFAULT_BRANCH"],
+                  "workflow_ref": workflow_ref,
+                  "workflow_path": workflow_path,
+                  "workflow_sha256": digest(workflow_file.read_bytes()),
+              },
+              "config_sha256": digest(raw),
+              "evidence_kinds": config["evidence_kinds"],
+              "payload": {
+                  "kind": config["payload_kind"],
+                  "media_type": config["payload_media_type"],
+              },
+              "publication": {"repository": config["publication_repository"]},
+              "publisher_registration": {
+                  "certificate_identity": identity,
+                  "workflow_ref": config["publisher_workflow_ref"],
+              },
+              "run": {"id": os.environ["GITHUB_RUN_ID"], "attempt": 1},
+          }
+          candidate_bytes = canonical(statement)
+          candidate_path = handoff / "statement-candidate.json"
+          candidate_path.write_bytes(candidate_bytes)
+          candidate_meta = candidate_path.lstat()
+          if stat.S_ISLNK(candidate_meta.st_mode) or not stat.S_ISREG(candidate_meta.st_mode):
+              raise SystemExit("candidate must be a regular non-symlink file")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"enabled={'true' if enabled else 'false'}\n")
+              output.write(f"candidate_digest={digest(candidate_bytes)}\n")
+          if not enabled:
+              lines = ["### GF-I09 publication refused", ""]
+              if not config["enabled"]:
+                  lines.append("- reviewed publisher declaration is disabled")
+              lines.extend(f"- unsatisfied activation prerequisite: {item}" for item in unmet)
+              Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text(
+                  "\n".join(lines) + "\n", encoding="utf-8"
+              )
+          PY
+
+      - name: Prove fixed publisher source contract
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: nix develop . --command just gf-i09-publisher-check
+
+      - name: Assemble exact unpublished payload
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: nix develop . --command just gf-i09-publisher-assemble
+
+      - name: Freeze exact digest-bound handoff
+        id: freeze
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        env:
+          CANDIDATE_DIGEST: ${{ steps.gate.outputs.candidate_digest }}
+        run: |
+          set -euo pipefail
+          git diff --quiet
+          test -z "$(git status --porcelain --untracked-files=no)"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import stat
+          from pathlib import Path
+
+          def pairs(items):
+              value = {}
+              for key, item in items:
+                  if key in value:
+                      raise SystemExit(f"duplicate JSON key: {key}")
+                  value[key] = item
+              return value
+
+          def canonical(value):
+              return (
+                  json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                  + "\n"
+              ).encode()
+
+          def digest(data):
+              return "sha256:" + hashlib.sha256(data).hexdigest()
+
+          def strict_census(directory, expected):
+              metadata = directory.lstat()
+              if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                  raise SystemExit("handoff root must be a real directory")
+              entries = list(directory.iterdir())
+              if len(entries) != len(expected) or {entry.name for entry in entries} != expected:
+                  raise SystemExit("handoff entry census changed")
+              for entry in entries:
+                  entry_meta = entry.lstat()
+                  if stat.S_ISLNK(entry_meta.st_mode) or not stat.S_ISREG(entry_meta.st_mode):
+                      raise SystemExit(f"handoff entry is not a regular non-symlink: {entry.name}")
+
+          root = Path.cwd().resolve()
+          runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          handoff = runner_temp / "gf-i09-handoff"
+          handoff_meta = handoff.lstat()
+          if stat.S_ISLNK(handoff_meta.st_mode) or not stat.S_ISDIR(handoff_meta.st_mode):
+              raise SystemExit("fixed handoff path must be a real directory")
+          if handoff.resolve(strict=True).parent != runner_temp:
+              raise SystemExit("fixed handoff path escaped RUNNER_TEMP")
+
+          statement_path = handoff / "statement-candidate.json"
+          statement_meta = statement_path.lstat()
+          if stat.S_ISLNK(statement_meta.st_mode) or not stat.S_ISREG(statement_meta.st_mode):
+              raise SystemExit("candidate must be a regular non-symlink file")
+          candidate_bytes = statement_path.read_bytes()
+          if digest(candidate_bytes) != os.environ["CANDIDATE_DIGEST"]:
+              raise SystemExit("candidate bytes changed after the trusted gate")
+          statement = json.loads(candidate_bytes, object_pairs_hook=pairs)
+          if candidate_bytes != canonical(statement):
+              raise SystemExit("candidate lost canonical encoding")
+
+          config = root / ".github/gf-i09/publisher.json"
+          caller = root / statement["caller"]["workflow_path"]
+          if digest(config.read_bytes()) != statement["config_sha256"]:
+              raise SystemExit("publisher declaration changed after the gate")
+          if digest(caller.read_bytes()) != statement["caller"]["workflow_sha256"]:
+              raise SystemExit("caller workflow changed after the gate")
+
+          payload_path = root / "build/gf-i09/application-release.json"
+          metadata = payload_path.lstat()
+          if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+              raise SystemExit("payload must be a regular non-symlink file")
+          resolved_payload = payload_path.resolve(strict=True)
+          if root not in resolved_payload.parents:
+              raise SystemExit("payload escaped the caller checkout")
+          payload = payload_path.read_bytes()
+          if not 1 <= len(payload) <= 4 * 1024 * 1024:
+              raise SystemExit("payload size is outside 1..4194304 bytes")
+          parsed = json.loads(payload, object_pairs_hook=pairs)
+          if payload != canonical(parsed):
+              raise SystemExit("payload is not GF Canonical JSON v1")
+
+          payload_dest = handoff / "payload.json"
+          try:
+              payload_dest.lstat()
+          except FileNotFoundError:
+              pass
+          else:
+              raise SystemExit("payload destination was pre-created")
+          payload_dest.write_bytes(payload)
+          statement["payload"]["sha256"] = digest(payload)
+          statement["payload"]["size"] = len(payload)
+          final_statement = canonical(statement)
+          statement_path.write_bytes(final_statement)
+
+          strict_census(handoff, {"payload.json", "statement-candidate.json"})
+          frozen_payload = payload_dest.read_bytes()
+          frozen_statement = statement_path.read_bytes()
+          if frozen_payload != payload or frozen_statement != final_statement:
+              raise SystemExit("handoff bytes changed during freeze")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"payload_digest={digest(frozen_payload)}\n")
+              output.write(f"statement_digest={digest(frozen_statement)}\n")
+          PY
+
+      - name: Upload digest-bound unprivileged handoff
+        id: handoff
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gf-i09-handoff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gf-i09-handoff/
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 7
+
+  publish:
+    name: Sign and create immutable OCI artifacts
+    needs: prepare
+    if: needs.prepare.outputs.activation_enabled == 'true'
+    runs-on: tinyland-nix
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      packages: write
+    outputs:
+      published_reference: ${{ steps.oci.outputs.published_reference }}
+      payload_digest: ${{ steps.oci.outputs.payload_digest }}
+      descriptor_digest: ${{ steps.oci.outputs.descriptor_digest }}
+      receipt_descriptor_digest: ${{ steps.oci.outputs.receipt_descriptor_digest }}
+      receipt_digest: ${{ steps.oci.outputs.receipt_digest }}
+    steps:
+      - name: Install pinned ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: 1.3.4
+
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Download exact handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/gf-i09-publish
+          github-token: ${{ github.token }}
+
+      - name: Bind artifact bytes and both workflow identities
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HANDOFF_ID: ${{ needs.prepare.outputs.artifact_id }}
+          HANDOFF_DIGEST: ${{ needs.prepare.outputs.artifact_digest }}
+          CANDIDATE_DIGEST: ${{ needs.prepare.outputs.candidate_digest }}
+          PREPARE_PAYLOAD_DIGEST: ${{ needs.prepare.outputs.payload_digest }}
+          PREPARE_STATEMENT_DIGEST: ${{ needs.prepare.outputs.statement_digest }}
+          PUBLISH_DIR: ${{ runner.temp }}/gf-i09-publish
+        run: |
+          set +x
+          set -euo pipefail
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${HANDOFF_ID}")"
+          expected="${HANDOFF_DIGEST}"
+          case "${expected}" in sha256:*) ;; *) expected="sha256:${expected}" ;; esac
+          artifact_name="gf-i09-handoff-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq -e \
+            --argjson id "${HANDOFF_ID}" \
+            --arg digest "${expected}" \
+            --arg name "${artifact_name}" \
+            --argjson run_id "${GITHUB_RUN_ID}" '
+            .id == $id
+            and .name == $name
+            and .expired == false
+            and .digest == $digest
+            and .workflow_run.id == $run_id
+          ' <<<"${artifact_json}" >/dev/null
+
+          export TOKEN_PATH="${RUNNER_TEMP}/gf-i09-oidc.token"
+          export IDENTITY_PATH="${PUBLISH_DIR}/publisher-identity.json"
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import stat
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          def pairs(items):
+              value = {}
+              for key, item in items:
+                  if key in value:
+                      raise SystemExit(f"duplicate JSON key: {key}")
+                  value[key] = item
+              return value
+
+          def canonical(value):
+              return (
+                  json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                  + "\n"
+              ).encode()
+
+          def digest(data):
+              return "sha256:" + hashlib.sha256(data).hexdigest()
+
+          def strict_census(directory, expected):
+              metadata = directory.lstat()
+              if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                  raise SystemExit("handoff root must be a real directory")
+              entries = list(directory.iterdir())
+              if len(entries) != len(expected) or {entry.name for entry in entries} != expected:
+                  raise SystemExit("handoff entry census changed")
+              for entry in entries:
+                  entry_meta = entry.lstat()
+                  if stat.S_ISLNK(entry_meta.st_mode) or not stat.S_ISREG(entry_meta.st_mode):
+                      raise SystemExit(f"handoff entry is not a regular non-symlink: {entry.name}")
+
+          publish_dir = Path(os.environ["PUBLISH_DIR"])
+          strict_census(publish_dir, {"payload.json", "statement-candidate.json"})
+          payload_bytes = (publish_dir / "payload.json").read_bytes()
+          statement_bytes = (publish_dir / "statement-candidate.json").read_bytes()
+          if digest(payload_bytes) != os.environ["PREPARE_PAYLOAD_DIGEST"]:
+              raise SystemExit("downloaded payload differs from trusted prepare output")
+          if digest(statement_bytes) != os.environ["PREPARE_STATEMENT_DIGEST"]:
+              raise SystemExit("downloaded statement differs from trusted prepare output")
+          candidate = json.loads(statement_bytes, object_pairs_hook=pairs)
+          if statement_bytes != canonical(candidate):
+              raise SystemExit("downloaded statement lost canonical encoding")
+          if (
+              candidate.get("schema") != "tinyland.gf-i09.publisher-statement-candidate/v1"
+              or candidate.get("payload", {}).get("sha256") != digest(payload_bytes)
+              or candidate.get("payload", {}).get("size") != len(payload_bytes)
+          ):
+              raise SystemExit("downloaded statement does not bind the payload")
+          gate_candidate = dict(candidate)
+          gate_payload = dict(candidate["payload"])
+          if set(gate_payload) != {"kind", "media_type", "sha256", "size"}:
+              raise SystemExit("frozen candidate payload fields are not closed")
+          del gate_payload["sha256"]
+          del gate_payload["size"]
+          gate_candidate["payload"] = gate_payload
+          if digest(canonical(gate_candidate)) != os.environ["CANDIDATE_DIGEST"]:
+              raise SystemExit("frozen statement does not derive from the trusted gate candidate")
+
+          url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+          url += ("&" if "?" in url else "?") + urllib.parse.urlencode({"audience": "sigstore"})
+          request = urllib.request.Request(
+              url,
+              headers={"Authorization": "bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]},
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              token = json.load(response).get("value")
+          if not isinstance(token, str) or token.count(".") != 2:
+              raise SystemExit("OIDC endpoint did not return one JWT")
+          encoded = token.split(".")[1] + "==="
+          claims = json.loads(base64.urlsafe_b64decode(encoded))
+          expected = {
+              "iss": "https://token.actions.githubusercontent.com",
+              "aud": "sigstore",
+              "repository": candidate["caller"]["repository"],
+              "repository_owner": candidate["caller"]["repository_owner"],
+              "ref": "refs/heads/" + candidate["caller"]["default_branch"],
+              "sha": candidate["caller"]["commit_sha"],
+              "workflow_ref": candidate["caller"]["workflow_ref"],
+              "workflow_sha": candidate["caller"]["commit_sha"],
+              "event_name": "push",
+              "run_id": str(candidate["run"]["id"]),
+              "run_attempt": "1",
+              "runner_environment": "self-hosted",
+              "sub": candidate["publisher_registration"]["certificate_identity"],
+              "job_workflow_ref": candidate["publisher_registration"]["workflow_ref"],
+          }
+          for key, value in expected.items():
+              if str(claims.get(key)) != value:
+                  raise SystemExit(f"OIDC claim {key} did not equal the registered value")
+          called_sha = claims.get("job_workflow_sha")
+          if not isinstance(called_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", called_sha):
+              raise SystemExit("job_workflow_sha is not immutable")
+          Path(os.environ["TOKEN_PATH"]).write_text(token, encoding="utf-8")
+          os.chmod(os.environ["TOKEN_PATH"], 0o600)
+          identity = {
+              "certificate_identity": claims["sub"],
+              "issuer": claims["iss"],
+              "job_workflow_ref": claims["job_workflow_ref"],
+              "job_workflow_sha": called_sha,
+          }
+          Path(os.environ["IDENTITY_PATH"]).write_text(
+              json.dumps(identity, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          called_ref="$(jq -er .job_workflow_ref "${IDENTITY_PATH}")"
+          called_sha="$(jq -er .job_workflow_sha "${IDENTITY_PATH}")"
+          prefix="tinyland-inc/ci-templates/.github/workflows/gf-i09-release-publisher.yml@"
+          case "${called_ref}" in "${prefix}"*) ;; *) exit 2 ;; esac
+          immutable_ref="${called_ref#${prefix}}"
+          if [[ "${immutable_ref}" =~ ^[0-9a-f]{40}$ ]]; then
+            test "${immutable_ref}" = "${called_sha}"
+          elif [[ "${immutable_ref}" =~ ^refs/tags/(v[1-9][0-9]*\.[0-9]+\.[0-9]+)$ ]]; then
+            tag_name="${BASH_REMATCH[1]}"
+            tag_ref="$(gh api "repos/tinyland-inc/ci-templates/git/ref/tags/${tag_name}")"
+            test "$(jq -r .object.type <<<"${tag_ref}")" = "tag"
+            tag_json="$(gh api "repos/tinyland-inc/ci-templates/git/tags/$(jq -r .object.sha <<<"${tag_ref}")")"
+            jq -e --arg sha "${called_sha}" '
+              .verification.verified == true
+              and .verification.reason == "valid"
+              and .object.type == "commit"
+              and .object.sha == $sha
+            ' <<<"${tag_json}" >/dev/null
+          else
+            exit 2
+          fi
+          commit_json="$(gh api "repos/tinyland-inc/ci-templates/commits/${called_sha}")"
+          jq -e --arg sha "${called_sha}" '
+            .sha == $sha
+            and .commit.verification.verified == true
+            and .commit.verification.reason == "valid"
+          ' <<<"${commit_json}" >/dev/null
+          source_file="${RUNNER_TEMP}/gf-i09-called-workflow.yml"
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/tinyland-inc/ci-templates/contents/.github/workflows/gf-i09-release-publisher.yml?ref=${called_sha}" \
+            > "${source_file}"
+          source_digest="sha256:$(sha256sum "${source_file}" | cut -d' ' -f1)"
+          jq --arg digest "${source_digest}" '. + {workflow_source_sha256:$digest}' \
+            "${IDENTITY_PATH}" > "${IDENTITY_PATH}.new"
+          mv "${IDENTITY_PATH}.new" "${IDENTITY_PATH}"
+          rm -f "${source_file}"
+
+      - name: Sign exact bytes and create-only publish
+        id: oci
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_DIR: ${{ runner.temp }}/gf-i09-publish
+        run: |
+          set +x
+          set -euo pipefail
+          cd "${PUBLISH_DIR}"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          candidate = json.loads(Path("statement-candidate.json").read_text())
+          publisher = json.loads(Path("publisher-identity.json").read_text())
+          if set(publisher) != {
+              "certificate_identity", "issuer", "job_workflow_ref",
+              "job_workflow_sha", "workflow_source_sha256",
+          }:
+              raise SystemExit("publisher identity is not closed")
+          if publisher["job_workflow_ref"] != candidate["publisher_registration"]["workflow_ref"]:
+              raise SystemExit("called workflow ref changed")
+          if publisher["certificate_identity"] != candidate["publisher_registration"]["certificate_identity"]:
+              raise SystemExit("certificate identity changed")
+          candidate["schema"] = "tinyland.gf-i09.publisher-statement/v1"
+          candidate["publisher"] = publisher
+          Path("publisher-statement.json").write_text(
+              json.dumps(candidate, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          Path("publisher-identity.json").unlink()
+          PY
+
+          token="$(<"${RUNNER_TEMP}/gf-i09-oidc.token")"
+          COSIGN_YES=true cosign sign-blob --yes --identity-token "${token}" \
+            --bundle payload.sigstore.json payload.json
+          COSIGN_YES=true cosign sign-blob --yes --identity-token "${token}" \
+            --bundle statement.sigstore.json publisher-statement.json
+          unset token
+          rm -f "${RUNNER_TEMP}/gf-i09-oidc.token"
+          test -s payload.sigstore.json
+          test -s statement.sigstore.json
+
+          publication="$(jq -er .publication.repository publisher-statement.json)"
+          repository="${publication#oci://}"
+          case "${repository}" in "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/"*) ;; *) exit 2 ;; esac
+          printf '%s' "${GH_TOKEN}" | oras login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin >/dev/null
+          absent() {
+            local reference="$1" error_file="${RUNNER_TEMP}/gf-i09-absent.stderr"
+            if oras manifest fetch "${reference}" >/dev/null 2>"${error_file}"; then
+              echo "::error::create-only reference exists: ${reference}"
+              exit 2
+            fi
+            grep -Eiq 'not found|manifest unknown|manifest_unknown|404' "${error_file}" || exit 2
+            rm -f "${error_file}"
+          }
+
+          tag="gf-i09-${GITHUB_RUN_ID}-${GITHUB_SHA:0:12}"
+          absent "${repository}:${tag}"
+          media="$(jq -er .payload.media_type publisher-statement.json)"
+          descriptor="$(
+            oras push --artifact-type "${media}" --format go-template --template '{{.digest}}' \
+              "${repository}:${tag}" \
+              "payload.json:${media}" \
+              "publisher-statement.json:application/vnd.tinyland.gf.publisher-statement.v1+json" \
+              "payload.sigstore.json:application/vnd.dev.sigstore.bundle.v0.3+json" \
+              "statement.sigstore.json:application/vnd.dev.sigstore.bundle.v0.3+json"
+          )"
+          [[ "${descriptor}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(
+            oras manifest fetch "${repository}:${tag}" \
+              --format go-template --template '{{.digest}}'
+          )" = "${descriptor}"
+          export descriptor repository tag
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def digest(path):
+              return "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+          statement = json.loads(Path("publisher-statement.json").read_text())
+          receipt = {
+              "schema": "tinyland.gf-i09.publication-receipt/v1",
+              "caller": statement["caller"],
+              "descriptor_digest": os.environ["descriptor"],
+              "evidence_kinds": statement["evidence_kinds"],
+              "payload": statement["payload"],
+              "publication": {
+                  "repository": statement["publication"]["repository"],
+                  "reference": statement["publication"]["repository"] + "@" + os.environ["descriptor"],
+                  "tag": os.environ["tag"],
+              },
+              "publisher": statement["publisher"],
+              "run": statement["run"],
+              "signature_bundle_digests": {
+                  "payload": digest("payload.sigstore.json"),
+                  "statement": digest("statement.sigstore.json"),
+              },
+              "statement_digest": digest("publisher-statement.json"),
+          }
+          Path("publication-receipt.json").write_text(
+              json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          PY
+
+          receipt_tag="${tag}-receipt"
+          absent "${repository}:${receipt_tag}"
+          receipt_descriptor="$(
+            oras push \
+              --artifact-type application/vnd.tinyland.gf.publisher-receipt.v1+json \
+              --format go-template --template '{{.digest}}' \
+              "${repository}:${receipt_tag}" \
+              "publication-receipt.json:application/vnd.tinyland.gf.publisher-receipt.v1+json"
+          )"
+          [[ "${receipt_descriptor}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(
+            oras manifest fetch "${repository}:${receipt_tag}" \
+              --format go-template --template '{{.digest}}'
+          )" = "${receipt_descriptor}"
+          payload_digest="$(jq -er .payload.sha256 publisher-statement.json)"
+          receipt_digest="sha256:$(sha256sum publication-receipt.json | cut -d' ' -f1)"
+          {
+            echo "published_reference=oci://${repository}@${descriptor}"
+            echo "payload_digest=${payload_digest}"
+            echo "descriptor_digest=${descriptor}"
+            echo "receipt_descriptor_digest=${receipt_descriptor}"
+            echo "receipt_digest=${receipt_digest}"
+          } >> "${GITHUB_OUTPUT}"
+
+  verify:
+    name: Independently reread immutable publication
+    needs: [prepare, publish]
+    if: needs.publish.result == 'success'
+    runs-on: tinyland-nix
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    outputs:
+      published: ${{ steps.readback.outputs.published }}
+      published_reference: ${{ steps.readback.outputs.published_reference }}
+      payload_digest: ${{ steps.readback.outputs.payload_digest }}
+      descriptor_digest: ${{ steps.readback.outputs.descriptor_digest }}
+      receipt_descriptor_digest: ${{ steps.readback.outputs.receipt_descriptor_digest }}
+    steps:
+      - name: Install pinned ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: 1.3.4
+
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Download original handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/gf-i09-original
+          github-token: ${{ github.token }}
+
+      - name: Verify OCI bytes, receipt, and both signatures
+        id: readback
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HANDOFF_ID: ${{ needs.prepare.outputs.artifact_id }}
+          HANDOFF_DIGEST: ${{ needs.prepare.outputs.artifact_digest }}
+          CANDIDATE_DIGEST: ${{ needs.prepare.outputs.candidate_digest }}
+          PREPARE_PAYLOAD_DIGEST: ${{ needs.prepare.outputs.payload_digest }}
+          PREPARE_STATEMENT_DIGEST: ${{ needs.prepare.outputs.statement_digest }}
+          ORIGINAL: ${{ runner.temp }}/gf-i09-original
+          REFERENCE: ${{ needs.publish.outputs.published_reference }}
+          PAYLOAD_DIGEST: ${{ needs.publish.outputs.payload_digest }}
+          DESCRIPTOR: ${{ needs.publish.outputs.descriptor_digest }}
+          RECEIPT_DESCRIPTOR: ${{ needs.publish.outputs.receipt_descriptor_digest }}
+          RECEIPT_DIGEST: ${{ needs.publish.outputs.receipt_digest }}
+        run: |
+          set +x
+          set -euo pipefail
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${HANDOFF_ID}")"
+          expected="${HANDOFF_DIGEST}"
+          case "${expected}" in sha256:*) ;; *) expected="sha256:${expected}" ;; esac
+          artifact_name="gf-i09-handoff-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq -e \
+            --argjson id "${HANDOFF_ID}" \
+            --arg digest "${expected}" \
+            --arg name "${artifact_name}" \
+            --argjson run_id "${GITHUB_RUN_ID}" '
+            .id == $id
+            and .name == $name
+            and .expired == false
+            and .digest == $digest
+            and .workflow_run.id == $run_id
+          ' <<<"${artifact_json}" >/dev/null
+
+          [[ "${REFERENCE}" =~ ^oci://ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]
+          test "${REFERENCE##*@}" = "${DESCRIPTOR}"
+          test "${PREPARE_PAYLOAD_DIGEST}" = "${PAYLOAD_DIGEST}"
+          repository="${REFERENCE%@*}"
+          repository="${repository#oci://}"
+          printf '%s' "${GH_TOKEN}" | oras login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin >/dev/null
+          root="${RUNNER_TEMP}/gf-i09-readback"
+          mkdir -m 700 -p "${root}/main" "${root}/receipt"
+          oras pull --output "${root}/main" "${repository}@${DESCRIPTOR}" >/dev/null
+          oras pull --output "${root}/receipt" "${repository}@${RECEIPT_DESCRIPTOR}" >/dev/null
+          export root repository
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import stat
+          from pathlib import Path
+
+          def pairs(items):
+              value = {}
+              for key, item in items:
+                  if key in value:
+                      raise SystemExit(f"duplicate JSON key: {key}")
+                  value[key] = item
+              return value
+
+          def canonical(value):
+              return (
+                  json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                  + "\n"
+              ).encode()
+
+          def digest(data):
+              return "sha256:" + hashlib.sha256(data).hexdigest()
+
+          def file_digest(path):
+              return digest(Path(path).read_bytes())
+
+          def strict_census(directory, expected):
+              metadata = directory.lstat()
+              if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                  raise SystemExit("artifact root must be a real directory")
+              entries = list(directory.iterdir())
+              if len(entries) != len(expected) or {entry.name for entry in entries} != expected:
+                  raise SystemExit("artifact entry census changed")
+              for entry in entries:
+                  entry_meta = entry.lstat()
+                  if stat.S_ISLNK(entry_meta.st_mode) or not stat.S_ISREG(entry_meta.st_mode):
+                      raise SystemExit(f"artifact entry is not a regular non-symlink: {entry.name}")
+
+          original = Path(os.environ["ORIGINAL"])
+          root = Path(os.environ["root"])
+          main = root / "main"
+          receipt_dir = root / "receipt"
+          strict_census(original, {"payload.json", "statement-candidate.json"})
+          strict_census(
+              main,
+              {
+                  "payload.json", "payload.sigstore.json",
+                  "publisher-statement.json", "statement.sigstore.json",
+              },
+          )
+          strict_census(receipt_dir, {"publication-receipt.json"})
+
+          payload_bytes = (original / "payload.json").read_bytes()
+          statement_bytes = (original / "statement-candidate.json").read_bytes()
+          if digest(payload_bytes) != os.environ["PREPARE_PAYLOAD_DIGEST"]:
+              raise SystemExit("downloaded payload differs from trusted prepare output")
+          if digest(statement_bytes) != os.environ["PREPARE_STATEMENT_DIGEST"]:
+              raise SystemExit("downloaded statement differs from trusted prepare output")
+          candidate = json.loads(statement_bytes, object_pairs_hook=pairs)
+          if statement_bytes != canonical(candidate):
+              raise SystemExit("downloaded statement lost canonical encoding")
+          if (
+              candidate.get("schema") != "tinyland.gf-i09.publisher-statement-candidate/v1"
+              or candidate.get("payload", {}).get("sha256") != digest(payload_bytes)
+              or candidate.get("payload", {}).get("size") != len(payload_bytes)
+          ):
+              raise SystemExit("downloaded statement does not bind the payload")
+          gate_candidate = dict(candidate)
+          gate_payload = dict(candidate["payload"])
+          if set(gate_payload) != {"kind", "media_type", "sha256", "size"}:
+              raise SystemExit("frozen candidate payload fields are not closed")
+          del gate_payload["sha256"]
+          del gate_payload["size"]
+          gate_candidate["payload"] = gate_payload
+          if digest(canonical(gate_candidate)) != os.environ["CANDIDATE_DIGEST"]:
+              raise SystemExit("frozen statement does not derive from the trusted gate candidate")
+
+          if payload_bytes != (main / "payload.json").read_bytes():
+              raise SystemExit("published payload differs from handoff")
+          statement = json.loads(
+              (main / "publisher-statement.json").read_bytes(), object_pairs_hook=pairs
+          )
+          receipt = json.loads(
+              (receipt_dir / "publication-receipt.json").read_bytes(), object_pairs_hook=pairs
+          )
+          rebuilt = dict(statement)
+          publisher = rebuilt.pop("publisher", None)
+          rebuilt["schema"] = "tinyland.gf-i09.publisher-statement-candidate/v1"
+          if rebuilt != candidate or not isinstance(publisher, dict):
+              raise SystemExit("publisher changed candidate declaration")
+          if set(receipt) != {
+              "schema", "caller", "descriptor_digest", "evidence_kinds", "payload",
+              "publication", "publisher", "run", "signature_bundle_digests",
+              "statement_digest",
+          }:
+              raise SystemExit("receipt is not closed")
+          if (
+              receipt["schema"] != "tinyland.gf-i09.publication-receipt/v1"
+              or receipt["caller"] != statement["caller"]
+              or receipt["publisher"] != publisher
+              or receipt["evidence_kinds"] != statement["evidence_kinds"]
+              or receipt["payload"] != statement["payload"]
+              or receipt["run"] != statement["run"]
+              or receipt["descriptor_digest"] != os.environ["DESCRIPTOR"]
+              or receipt["payload"]["sha256"] != os.environ["PAYLOAD_DIGEST"]
+              or receipt["publication"]["reference"] != os.environ["REFERENCE"]
+              or receipt["statement_digest"] != file_digest(main / "publisher-statement.json")
+              or receipt["signature_bundle_digests"]["payload"] != file_digest(main / "payload.sigstore.json")
+              or receipt["signature_bundle_digests"]["statement"] != file_digest(main / "statement.sigstore.json")
+              or file_digest(receipt_dir / "publication-receipt.json") != os.environ["RECEIPT_DIGEST"]
+          ):
+              raise SystemExit("receipt does not bind reread immutable bytes")
+          PY
+          identity="$(jq -er .publisher_registration.certificate_identity "${ORIGINAL}/statement-candidate.json")"
+          cosign verify-blob --bundle "${root}/main/payload.sigstore.json" \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${root}/main/payload.json" >/dev/null
+          cosign verify-blob --bundle "${root}/main/statement.sigstore.json" \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${root}/main/publisher-statement.json" >/dev/null
+          {
+            echo "published=true"
+            echo "published_reference=${REFERENCE}"
+            echo "payload_digest=${PAYLOAD_DIGEST}"
+            echo "descriptor_digest=${DESCRIPTOR}"
+            echo "receipt_descriptor_digest=${RECEIPT_DESCRIPTOR}"
+          } >> "${GITHUB_OUTPUT}"
+
+  result:
+    name: Emit only verified truth
+    needs: [prepare, publish, verify]
+    if: ${{ always() }}
+    runs-on: tinyland-nix
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      activation_enabled: ${{ steps.truth.outputs.activation_enabled }}
+      published: ${{ steps.truth.outputs.published }}
+      published_reference: ${{ steps.truth.outputs.published_reference }}
+      payload_digest: ${{ steps.truth.outputs.payload_digest }}
+      descriptor_digest: ${{ steps.truth.outputs.descriptor_digest }}
+      receipt_descriptor_digest: ${{ steps.truth.outputs.receipt_descriptor_digest }}
+    steps:
+      - name: Emit only independently verified truth
+        id: truth
+        shell: bash
+        env:
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          ENABLED: ${{ needs.prepare.outputs.activation_enabled }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          VERIFIED: ${{ needs.verify.outputs.published }}
+          REFERENCE: ${{ needs.verify.outputs.published_reference }}
+          PAYLOAD_DIGEST: ${{ needs.verify.outputs.payload_digest }}
+          DESCRIPTOR: ${{ needs.verify.outputs.descriptor_digest }}
+          RECEIPT_DESCRIPTOR: ${{ needs.verify.outputs.receipt_descriptor_digest }}
+        run: |
+          set -euo pipefail
+          if [ "${PREPARE_RESULT}" = success ] && [ "${ENABLED}" = false ]; then
+            {
+              echo "activation_enabled=false"
+              echo "published=false"
+              echo "published_reference="
+              echo "payload_digest="
+              echo "descriptor_digest="
+              echo "receipt_descriptor_digest="
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          test "${PREPARE_RESULT}" = success
+          test "${ENABLED}" = true
+          test "${PUBLISH_RESULT}" = success
+          test "${VERIFY_RESULT}" = success
+          test "${VERIFIED}" = true
+          {
+            echo "activation_enabled=true"
+            echo "published=true"
+            echo "published_reference=${REFERENCE}"
+            echo "payload_digest=${PAYLOAD_DIGEST}"
+            echo "descriptor_digest=${DESCRIPTOR}"
+            echo "receipt_descriptor_digest=${RECEIPT_DESCRIPTOR}"
+          } >> "${GITHUB_OUTPUT}"
