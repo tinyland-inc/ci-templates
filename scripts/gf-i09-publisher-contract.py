@@ -59,7 +59,11 @@ REQUIRED = (
     "frozen statement does not derive from the trusted gate candidate",
     "Emit only independently verified truth",
 )
-FORBIDDEN = (
+FORBIDDEN_SOURCE = (
+    "create-only",
+    "refs/tags",
+)
+FORBIDDEN_EXECUTABLE = (
     "repository_dispatch",
     "workflow_dispatch",
     "kubectl ",
@@ -68,8 +72,6 @@ FORBIDDEN = (
     "opentofu ",
     "GF_I09_HANDOFF",
     "GITHUB_ENV",
-    "create-only",
-    "refs/tags",
     "rm -rf",
     "${HOME",
     "$HOME",
@@ -402,7 +404,9 @@ def verdict(source: str) -> list[str]:
 
     for marker in REQUIRED:
         require(marker in source, f"required marker missing: {marker}")
-    for marker in FORBIDDEN:
+    for marker in FORBIDDEN_SOURCE:
+        require(marker not in source, f"forbidden source claim appeared: {marker}")
+    for marker in FORBIDDEN_EXECUTABLE:
         require(marker not in executable, f"forbidden behavior appeared: {marker}")
     require(
         "${{ secrets." not in executable
