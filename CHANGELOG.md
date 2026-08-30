@@ -5,6 +5,58 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`gf-i09-release-publisher.yml` — the reusable shape of the release chain's
+  middle role** (MINOR — a new `workflow_call` surface; no existing consumer's
+  default execution path changes, because no existing consumer calls it). The
+  GF-I09 handoff needs a producer, a publisher, and a consumer. The producer is
+  structurally forbidden to authorize publication and the consumer never
+  receives payload bytes, so excluding the middle role from both ends left the
+  interface open in the middle — no further work on either end makes them meet.
+  This workflow is that middle role's shape; the instance (which application,
+  which tenant, which registration, which policy) stays in the owner overlay
+  that calls it by exact immutable pin.
+
+  Three properties are why it is centralized rather than copied:
+
+  - **Keyless identity.** The publisher signs with the run's own workload
+    identity; the claim tuple (issuer, repository, reference, workflow path) IS
+    the identity, verified downstream against a policy pinned by digest. The
+    workflow therefore accepts no secret input and mints no key — a shape that
+    took a signing key as an input would make every consumer of it a
+    key-custody problem.
+  - **Reread, never relay.** The caller's branch is reread from the forge and
+    compared to the checked-out commit before anything else runs. A triggering
+    event is a claim about the past and is never a fact source.
+  - **Fail-closed by conjunction, every refusal named.** Publication requires
+    the caller's reviewed activation state AND every named activation
+    prerequisite AND a fully resolved payload. There is deliberately no force,
+    override, or skip-verification input: a shape with an escape hatch is not a
+    fail-closed shape. An unmet term is written into the run's summary by name,
+    because a step that is merely skipped reports nothing at all.
+  - **The publisher declares; it never observes.** `declared_evidence_kinds_json`
+    states which evidence kinds the decision will demand — one verification per
+    request per kind, same-named as the request, conjunction required. What was
+    actually seen is authored by independent verifiers, and a shape that let
+    the publisher record it would make the producer of a claim its own
+    verifier.
+
+  The execution class is verdicted at run time in addition to the static scans,
+  because `runner_class` is caller data and a static scan of this repository
+  cannot see what a consumer passes.
+
+  `just gf-i09-publisher-contract-check` (new, in `just check`) holds the file
+  to each of those rulings, so they cannot drift out of the YAML while the
+  header comment still claims them. It also holds the shape to the estate's
+  projection-domain rules even though the shape does not project: it states no
+  instance fact (no namespace, registry coordinate, or media type — those are
+  the caller's single declaration and restating one here makes two authorities
+  that disagree the moment one moves), fans out over nothing, derives nothing
+  from an enrollment flag and never writes the caller's activation state, and
+  carries no pull-secret seam. Each of those is mutation-tested.
+
+
 ### Removed
 
 - **The dependency-free fallback validator is deleted** (TIN-4132, operator

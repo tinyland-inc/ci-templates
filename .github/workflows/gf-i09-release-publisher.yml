@@ -1,0 +1,287 @@
+name: gf-i09-release-publisher
+
+# The reusable SHAPE of the GF-I09 publisher, the middle role of the release
+# chain: producer, publisher, consumer. A producer emits payload bytes and is
+# structurally forbidden to authorize their publication; a consumer accepts or
+# refuses a pointer against evidence it did not author. Neither can reach the
+# other. This workflow is the thing that makes them touch.
+#
+# What lives here is the shape only. The instance -- which application, which
+# tenant, which contract document, which registration -- lives in the owner
+# overlay that calls this by exact immutable pin. Nothing here names a tenant,
+# a registry, a namespace, or a policy.
+#
+# Three properties are the whole point of centralizing this:
+#
+# 1. Keyless identity. The publisher signs with the run's own workload
+#    identity; the claim tuple (issuer, repository, reference, workflow path)
+#    IS the identity, verified downstream against a policy pinned by digest.
+#    This workflow therefore accepts no secret input and mints no key. A shape
+#    that took a signing key as an input would make every consumer of it a
+#    key-custody problem.
+#
+# 2. Reread, never relay. Every fact the publisher asserts is read at run time
+#    from a source of truth. The triggering event is a claim about the past and
+#    is never a fact source here -- the caller's branch is reread from the
+#    forge and compared to the checked-out commit before anything else runs.
+#
+# 3. Fail-closed by conjunction, with every refusal named. Publication requires
+#    the caller's reviewed activation state AND every named activation
+#    prerequisite AND a fully resolved payload. No term has a fallback, a
+#    default-on, or an override input; there is deliberately no force input,
+#    because a shape with an escape hatch is not a fail-closed shape. An unmet
+#    term is written into the run's summary by name, so an inert run reads as a
+#    refusal rather than as a step that quietly did not happen.
+#
+# 4. The publisher declares; it never observes. Evidence kinds are DECLARED
+#    here so the caller can state what the decision will demand. Recording what
+#    was seen belongs to independent verifiers, and a shape that let the
+#    publisher do it would make the producer of a claim its own verifier.
+on:
+  workflow_call:
+    inputs:
+      runner_class:
+        description: >-
+          Organization capability class the publisher runs on. Self-hosted
+          Flywheel classes only; there is no input value that selects a
+          forge-hosted fleet.
+        type: string
+        default: tinyland-nix
+      toolchain_command:
+        description: >-
+          Command prefix that attaches the caller's pinned toolchain. Every
+          step below enters the caller through this prefix and a Just recipe,
+          so this workflow carries no consumer path, tool, or raw invocation.
+        type: string
+        default: nix develop . --command
+      contract_path:
+        description: >-
+          Caller-relative publisher contract document: the frozen wire format
+          it publishes against, the identity policy it binds to, and the fields
+          the pinned consumer does not carry.
+        type: string
+        required: true
+      workflow_state_path:
+        description: >-
+          Caller-relative reviewed activation state. Publication is unreachable
+          while its enabled field is anything but true.
+        type: string
+        required: true
+      registration_source_path:
+        description: >-
+          Caller-relative document the registration identity is reread from.
+          The registration is declared data, never inferred from a runtime
+          registry, a runner label, or an event payload.
+        type: string
+        required: true
+      expected_workflow_path:
+        description: >-
+          Caller-relative path of the calling workflow, echoed into the
+          publication receipt as the workflow-path claim a verifier will hold
+          the signature to. A mismatch between this and the run's real workflow
+          is a refusal, not a warning.
+        type: string
+        required: true
+      declared_evidence_kinds_json:
+        description: >-
+          JSON array naming the evidence KINDS this operand demands. Each kind
+          binds one verification per request, same-named as the request, and
+          the decision requires the conjunction of all of them. This is a
+          declaration of what must exist, not a record of what was seen: the
+          publisher authors no observation, and a shape that let it do so would
+          make the producer of a claim its own verifier.
+        type: string
+        default: "[]"
+      check_recipe:
+        description: Just recipe proving the caller's publisher source contract.
+        type: string
+        default: release-publisher-check
+      assemble_recipe:
+        description: >-
+          Just recipe assembling the candidate payload from reread truth. It
+          must authorize nothing; it runs on every default-branch push.
+        type: string
+        default: release-publisher-assemble
+      sign_recipe:
+        description: >-
+          Just recipe signing the payload CONTENT with the run's workload
+          identity. Signing the fact of a run rather than the content of a
+          request would leave a replay indistinguishable from a publication, so
+          the caller's statement binds the payload digest and a
+          publisher-generated nonce. The publisher owns exactly one property
+          here -- nonce generation freshness. Refusing a nonce the cluster has
+          already accepted is the controller's typed refusal, backed by a
+          tenant-and-nonce-digest uniqueness index; a publisher cannot know
+          what was accepted before it ran.
+        type: string
+        default: release-publisher-sign
+      publish_recipe:
+        description: >-
+          Just recipe publishing the protected request immutably. Create-only;
+          a publisher that can update a published request has published
+          something mutable.
+        type: string
+        default: release-publisher-publish
+    outputs:
+      activation_enabled:
+        description: Whether the caller's reviewed activation state admitted publication.
+        value: ${{ jobs.publish.outputs.activation_enabled }}
+      published:
+        description: Whether this run performed a publication.
+        value: ${{ jobs.publish.outputs.published }}
+
+# Keyless: an identity token and read access, and nothing else. This workflow
+# reads no secret, and a caller cannot grant it one through an input.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Reread truth / assemble / fail-closed publication
+    runs-on: ${{ inputs.runner_class }}
+    timeout-minutes: 30
+    outputs:
+      activation_enabled: ${{ steps.gate.outputs.enabled }}
+      published: ${{ steps.publish.outcome == 'success' }}
+    steps:
+      - name: Refuse a forge-hosted execution class
+        shell: bash
+        env:
+          RUNNER_CLASS: ${{ inputs.runner_class }}
+        run: |
+          set -euo pipefail
+          # The class is caller data, so verdict it here rather than trusting
+          # that a static scan of the caller caught it.
+          lowered="$(printf '%s' "${RUNNER_CLASS}" | tr '[:upper:]' '[:lower:]')"
+          case "${lowered}" in
+            *ubuntu-*|*windows-*|*macos-*|self-hosted)
+              echo "::error::the publisher runs only on a Flywheel capability class"
+              exit 2
+              ;;
+          esac
+          test -n "${lowered}"
+
+      - name: Checkout the caller at its exact default-branch commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Reread branch truth and the reviewed activation state
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CONTRACT_PATH: ${{ inputs.contract_path }}
+          WORKFLOW_STATE_PATH: ${{ inputs.workflow_state_path }}
+          REGISTRATION_SOURCE_PATH: ${{ inputs.registration_source_path }}
+          EXPECTED_WORKFLOW_PATH: ${{ inputs.expected_workflow_path }}
+          DECLARED_EVIDENCE_KINDS_JSON: ${{ inputs.declared_evidence_kinds_json }}
+        run: |
+          set -euo pipefail
+
+          # Publication is a mechanical function of code being on the default
+          # branch. Everything below establishes that this run IS that, rather
+          # than accepting the event's word for it.
+          test "${GITHUB_RUN_ATTEMPT:-}" = "1"
+          test "${GITHUB_REF:-}" = "refs/heads/${DEFAULT_BRANCH}"
+          live_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${DEFAULT_BRANCH}" --jq .object.sha)"
+          test "${live_sha}" = "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          expected_workflow_ref="${GITHUB_REPOSITORY}/${EXPECTED_WORKFLOW_PATH}@${GITHUB_REF}"
+          test "${GITHUB_WORKFLOW_REF}" = "${expected_workflow_ref}"
+
+          for required in "${CONTRACT_PATH}" "${WORKFLOW_STATE_PATH}" "${REGISTRATION_SOURCE_PATH}" "${EXPECTED_WORKFLOW_PATH}"; do
+            if [ ! -f "${required}" ]; then
+              echo "::error::${required} is declared by the caller but absent from the checkout"
+              exit 2
+            fi
+          done
+
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          state_path = os.environ["WORKFLOW_STATE_PATH"]
+          kinds_raw = os.environ["DECLARED_EVIDENCE_KINDS_JSON"]
+
+          state = json.load(open(state_path, encoding="utf-8"))
+          if type(state.get("enabled")) is not bool:
+              sys.exit(f"{state_path}: enabled must be a boolean")
+          if state.get("publicationRequiresEveryPrerequisiteSatisfied") is not True:
+              sys.exit(f"{state_path}: publication must require every prerequisite")
+
+          kinds = json.loads(kinds_raw)
+          if not isinstance(kinds, list) or not all(isinstance(k, str) for k in kinds):
+              sys.exit("declared_evidence_kinds_json must be a JSON array of names")
+
+          unmet = [
+              str(item.get("id", "<unnamed>"))
+              for item in state.get("activationPrerequisites", [])
+              if item.get("satisfied") is not True
+          ]
+          enabled = "true" if state["enabled"] and not unmet else "false"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"enabled={enabled}\n")
+              handle.write(f"declared_evidence_kinds={json.dumps(kinds)}\n")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary and enabled != "true":
+              with open(summary, "a", encoding="utf-8") as handle:
+                  handle.write("### Publication refused\n\n")
+                  for name in unmet:
+                      handle.write(f"- unsatisfied activation prerequisite: {name}\n")
+                  if not state["enabled"]:
+                      handle.write("- the reviewed activation state is disabled\n")
+          for name in unmet:
+              print(f"::notice::unsatisfied activation prerequisite: {name}")
+          if enabled != "true":
+              print("::notice::publication is inert; this run signs and publishes nothing")
+          PY
+
+      - name: Declare the identity claims this publication will be held to
+        shell: bash
+        env:
+          EXPECTED_WORKFLOW_PATH: ${{ inputs.expected_workflow_path }}
+        run: |
+          set -euo pipefail
+          # The identity is the claim tuple, not a key. Recording it here makes
+          # the run's own account of itself comparable to what a verifier reads
+          # out of the signature, so a drifted policy shows up as a mismatch
+          # instead of as a silent acceptance.
+          {
+            echo "### Publisher identity claims"
+            echo
+            echo "- repository: \`${GITHUB_REPOSITORY}\`"
+            echo "- reference: \`${GITHUB_REF}\`"
+            echo "- workflow path: \`${EXPECTED_WORKFLOW_PATH}\`"
+            echo "- commit: \`${GITHUB_SHA}\`"
+            echo
+            echo "Verification is downstream and independent: an issuer and an"
+            echo "allowed claim tuple are supplied to the verifier by digest."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Prove the caller's publisher source contract
+        shell: bash
+        run: ${{ inputs.toolchain_command }} just ${{ inputs.check_recipe }}
+
+      - name: Assemble the candidate payload from reread truth
+        shell: bash
+        run: ${{ inputs.toolchain_command }} just ${{ inputs.assemble_recipe }}
+
+      # Publication authority begins here and is unreachable unless every term
+      # of the activation conjunction held above.
+
+      - name: Sign the publication statement with the run's workload identity
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: ${{ inputs.toolchain_command }} just ${{ inputs.sign_recipe }}
+
+      - name: Publish the protected request immutably
+        id: publish
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: ${{ inputs.toolchain_command }} just ${{ inputs.publish_recipe }}
