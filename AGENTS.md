@@ -71,9 +71,11 @@ exactly one abstract REAPI capability defined by GloriousFlywheel `Core.dhall`
 execution pool, resolved platform, endpoint, credential, upload posture, or
 provider concurrency.
 
-`spoke-ci-v4.yml` accepts one checked-in action name, checks out the exact
-pull-request head SHA when present (otherwise `github.sha`), then invokes the
-image-custodied compiled client:
+`spoke-ci-v4.yml` accepts one checked-in action name, checks out exactly
+`github.sha`, then invokes the image-custodied compiled client. For a
+`pull_request` event that is GitHub's synthetic merge commit. It is also the
+SHA GitHub signs into the job's OIDC token; accepting the caller-controlled
+head SHA instead would make source binding impossible:
 
 ```text
 /usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>

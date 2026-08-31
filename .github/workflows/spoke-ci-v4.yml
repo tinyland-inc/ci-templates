@@ -23,14 +23,17 @@ jobs:
       - name: Check out exact admitted source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # GitHub signs github.sha into the job's OIDC token. On a
+          # pull_request event this is the synthetic merge commit, not the
+          # untrusted head SHA. The resolver refuses any mismatch.
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Execute declared Bazel actions
         shell: bash
         env:
           ACTION_NAME: ${{ inputs.action_name }}
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           /usr/local/bin/gf-action-client run \

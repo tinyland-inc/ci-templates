@@ -12,6 +12,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
   exact-checkout, compiled-client dispatcher. The caller selects one named
   action from the checked-in `.github/lanes.json` plan, and the workflow invokes
   `/usr/local/bin/gf-action-client run` once with the admitted source SHA. The
+  admitted SHA is exactly `github.sha`, including GitHub's synthetic merge
+  commit on pull-request events, so the resolver can bind it to the OIDC
+  token's signed `sha` claim. The
   vendored schema is an exact
   projection of GloriousFlywheel `Core.dhall`: actions contain only Bazel
   command, finite targets, and exactly one abstract REAPI capability. Provider
