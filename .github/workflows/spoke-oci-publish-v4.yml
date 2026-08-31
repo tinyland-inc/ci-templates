@@ -127,6 +127,7 @@ jobs:
         with:
           remote_upload: ${{ steps.admission.outputs.remote_upload }}
           artifact_name: ${{ steps.admission.outputs.artifact_name }}
+          source_sha: ${{ steps.admission.outputs.source_sha }}
 
       - name: Upload exact inert OCI archive
         if: steps.admission.outputs.allowed == 'true'

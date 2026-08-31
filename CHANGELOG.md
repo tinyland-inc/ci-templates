@@ -37,9 +37,13 @@ Versioning: [SemVer 2.0](https://semver.org/).
   trusted same-repository PR heads or main pushes and derives the only legal
   GHCR repository/tag from that event. Its package-free build job invokes the
   fixed `//:oci_publish_bundle` through the executor profile, keeps PR cache
-  upload disabled, completely validates the OCI layout, and uploads one
-  deterministic inert archive. A fresh source-blind job is the sole
-  `packages: write` holder: it downloads by exact artifact ID without
+  upload disabled, and uses a root-owned workspace-status command to stamp the
+  admitted commit SHA and deterministic commit date only into the terminal OCI
+  config and labels. Source identity never enters global Bazel action
+  environment, so reusable build and layer actions retain source-derived cache
+  keys. The job completely validates the OCI layout and stamped provenance,
+  then uploads one deterministic inert archive. A fresh source-blind job is the
+  sole `packages: write` holder: it downloads by exact artifact ID without
   extraction, revalidates every descriptor/blob and identity, and uses only a
   root-custodied `skopeo` client. Same-digest re-entry is idempotent;
   different-digest or ambiguous registry state refuses; the output digest is
@@ -52,9 +56,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
   Removed the two obsolete lane-env workflows and their orphaned validator
   logic, plus the zero-caller superseded `spoke-public-preview.yml`, its orphan
   composite and schema, and their live documentation/ledger references. The
-  two v4 workflows total 455 lines against 550 removed workflow lines, so the
-  co-move is a 95-line workflow contraction; the central validator is a
-  15-line contraction against main after the narrow trust assertions.
+  two v4 workflows total 456 lines against 550 removed workflow lines, so the
+  co-move is a 94-line workflow contraction; the central validator is a
+  7-line contraction against main after the narrow trust assertions.
   V3 remains unmodified, and no release or runtime adoption is implied.
 
 ### Removed

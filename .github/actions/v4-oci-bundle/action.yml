@@ -11,6 +11,9 @@ inputs:
   artifact_name:
     description: Run-derived inert archive filename.
     required: true
+  source_sha:
+    description: Exact admitted source commit bound to the inert image artifact.
+    required: true
 
 outputs:
   artifact_path:
@@ -32,6 +35,7 @@ runs:
       env:
         ARTIFACT_NAME: ${{ inputs.artifact_name }}
         REMOTE_UPLOAD: ${{ inputs.remote_upload }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
         EVENT_NAME: ${{ github.event_name }}
         EVENT_REF: ${{ github.ref }}
         PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
@@ -99,6 +103,7 @@ runs:
         stage2_build() {
           isolation_root="${V4_ISOLATION_ROOT:?}"; exec_dir="$isolation_root/execution"
           REMOTE_UPLOAD="${V4_REMOTE_UPLOAD:?}"; ARTIFACT_NAME="${V4_ARTIFACT_NAME:?}"; RUNNER_TEMP="${V4_RUNNER_TEMP:?}"
+          SOURCE_SHA="${V4_SOURCE_SHA:?}"; BUILD_DATE="${V4_BUILD_DATE:?}"; SOURCE_REPOSITORY="${V4_SOURCE_REPOSITORY:?}"
           GITHUB_OUTPUT="${V4_GITHUB_OUTPUT:?}"; GITHUB_STEP_SUMMARY="${V4_GITHUB_STEP_SUMMARY:?}"
           [[ -d "$isolation_root" && ! -L "$isolation_root" && "$(stat -c '%u:%g:%a' "$isolation_root")" == 0:0:700 ]] || refuse "stage-2 custody directory is invalid"
           [[ "$(id -u)" == 0 && "$(awk '$1 == "NoNewPrivs:" { print $2 }' /proc/self/status)" == 1 ]] || refuse "stage 2 requires root with no-new-privileges"
@@ -106,6 +111,15 @@ runs:
           trap cleanup EXIT
           bwrap="$(custody_store_tool bwrap)"; [[ "$("$bwrap" --version)" == "bubblewrap 0.11.2" ]] || refuse "bubblewrap version disagrees with the image contract"
           launcher="$isolation_root/bazel"; [[ -f "$launcher" && ! -L "$launcher" && "$(stat -c '%u:%g:%a' "$launcher")" == 0:0:555 ]] || refuse "trusted Bazel launcher is invalid"
+          source_status="$isolation_root/source-status"
+          cat >"$source_status" <<EOF
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' \
+          'STABLE_BUILD_COMMIT_SHA ${SOURCE_SHA}' \
+          'STABLE_BUILD_DATE ${BUILD_DATE}'
+        EOF
+          chown root:root "$source_status"; chmod 0555 "$source_status"
           sandbox_script="$isolation_root/sandbox"; cat >"$sandbox_script" <<'V4_OCI_SANDBOX'
         #!/bin/bash
         set -euo pipefail
@@ -121,7 +135,8 @@ runs:
         : >/work/.v4-write && rm /work/.v4-write
         [[ -f /work/cell-token.jwt && ! -L /work/cell-token.jwt && "$(stat -c '%a' /work/cell-token.jwt)" == 600 ]] || refuse "scoped cell token is invalid"
         "$GF_VERIFY_BIN"
-        "$GF_BAZEL_WRAPPER" build --symlink_prefix=/work/symlinks/bazel- //:oci_publish_bundle //:oci_publish_bundle.digest --remote_download_outputs=all --lockfile_mode=error
+        "$GF_BAZEL_WRAPPER" build --symlink_prefix=/work/symlinks/bazel- //:oci_publish_bundle //:oci_publish_bundle.digest --remote_download_outputs=all --lockfile_mode=error \
+          --stamp --workspace_status_command=/trusted/source-status
         V4_OCI_SANDBOX
           chown root:root "$sandbox_script"; chmod 0555 "$sandbox_script"
           bwrap_args=(
@@ -129,7 +144,7 @@ runs:
             --tmpfs / --dir /bin --ro-bind /bin /bin --dir /sbin --ro-bind /sbin /sbin --dir /lib --ro-bind /lib /lib --dir /lib64 --ro-bind /lib64 /lib64 --dir /usr --ro-bind /usr /usr
             --dir /nix --dir /nix/store --ro-bind /nix/store /nix/store --dir /etc --ro-bind /etc/passwd /etc/passwd --ro-bind /etc/group /etc/group --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --dir /etc/ssl --ro-bind /etc/ssl/certs /etc/ssl/certs
             --proc /proc --tmpfs /dev --dev-bind /dev/null /dev/null --dev-bind /dev/zero /dev/zero --dev-bind /dev/random /dev/random --dev-bind /dev/urandom /dev/urandom --dir /dev/shm --chmod 1777 /dev/shm
-            --dir /work --bind "$exec_dir" /work --dir /tmp --bind "$exec_dir/tmp" /tmp --dir /workspace --ro-bind "$V4_WORKSPACE" /workspace --dir /trusted --ro-bind "$launcher" /trusted/bazel --ro-bind "$sandbox_script" /trusted/run
+            --dir /work --bind "$exec_dir" /work --dir /tmp --bind "$exec_dir/tmp" /tmp --dir /workspace --ro-bind "$V4_WORKSPACE" /workspace --dir /trusted --ro-bind "$launcher" /trusted/bazel --ro-bind "$source_status" /trusted/source-status --ro-bind "$sandbox_script" /trusted/run
             --uid 65534 --gid 65534 --chdir /workspace
             --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin --setenv HOME /work/home --setenv USER nobody --setenv LOGNAME nobody --setenv TMPDIR /tmp --setenv RUNNER_TEMP /tmp --setenv CI true --setenv GITHUB_ACTIONS true
             --setenv BAZEL_BIN /trusted/bazel --setenv BAZELISK_SKIP_WRAPPER 1 --setenv BAZEL_OUTPUT_BASE /work/output-base --setenv GF_FLYWHEEL_LOCAL_ENV_MODE forbid --setenv GF_BAZEL_JOBS 4 --setenv GF_BAZEL_REMOTE_UPLOAD "$REMOTE_UPLOAD" --setenv GF_BAZEL_REMOTE_EXECUTION_PLATFORM gloriousflywheel-rbe-linux-x86_64
@@ -146,6 +161,11 @@ runs:
         else
 
         [[ "$ARTIFACT_NAME" == "v4-oci-layout-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar" ]] || refuse "artifact filename is not the run-derived canonical name"
+        git_bin="$(command -v git)" || refuse "required preinstalled Git executable is absent"
+        [[ -x "$git_bin" ]] || refuse "required preinstalled Git executable is not executable"
+        [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$("$git_bin" rev-parse --verify 'HEAD^{commit}')" == "$SOURCE_SHA" ]] || refuse "OCI build source is not the exact admitted checkout"
+        build_date="$("$git_bin" show -s --format=%cI "$SOURCE_SHA")"
+        [[ "$build_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{2}:[0-9]{2}$ ]] || refuse "source commit date is not strict ISO-8601"
         case "$EVENT_NAME" in
           pull_request)
             [[ "$PR_HEAD_REPOSITORY" == "$GITHUB_REPOSITORY" ]] || refuse "fork pull requests cannot build a publication artifact"
@@ -240,6 +260,7 @@ runs:
         script_mode="$(stat -c '%a' "$script")"; (( (8#$script_mode & 8#022) == 0 )) || refuse "trusted re-entry script is writable outside root"
         exec /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin V4_BOUNDARY_STAGE=stage2 \
           V4_ISOLATION_ROOT="$isolation_root" V4_WORKSPACE="$GITHUB_WORKSPACE" V4_REMOTE_UPLOAD="$REMOTE_UPLOAD" V4_ARTIFACT_NAME="$ARTIFACT_NAME" V4_RUNNER_TEMP="$RUNNER_TEMP" \
+          V4_SOURCE_SHA="$SOURCE_SHA" V4_BUILD_DATE="$build_date" V4_SOURCE_REPOSITORY="$GITHUB_REPOSITORY" \
           V4_REMOTE_ENDPOINT="$remote_endpoint" V4_INSTANCE="$instance_name" V4_HELPER_SCOPE="$credential_scope" V4_CREDHELPER="$credhelper_bin" V4_VERIFIER="$flywheel_verify_bin" V4_WRAPPER="$gloriousflywheel_bazel_bin" \
           V4_GITHUB_OUTPUT="$GITHUB_OUTPUT" V4_GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" /bin/bash --noprofile --norc "$script"
         fi
@@ -255,7 +276,7 @@ runs:
         [[ -d "$layout" && ! -L "$layout" ]] || refuse "//:oci_publish_bundle output is not one OCI layout directory"
         [[ -f "$digest_file" && ! -L "$digest_file" ]] || refuse "//:oci_publish_bundle.digest output is not one regular file"
 
-        image_digest="$(LAYOUT="$layout" DIGEST_FILE="$digest_file" python3 - <<'PY'
+        image_digest="$(LAYOUT="$layout" DIGEST_FILE="$digest_file" SOURCE_SHA="$SOURCE_SHA" BUILD_DATE="$BUILD_DATE" SOURCE_REPOSITORY="$SOURCE_REPOSITORY" python3 - <<'PY'
         import hashlib
         import json
         import os
@@ -328,11 +349,33 @@ runs:
         ).read_text(encoding="utf-8"))
         if manifest.get("schemaVersion") != 2 or manifest.get("mediaType") != "application/vnd.oci.image.manifest.v1+json":
             raise SystemExit("image manifest has the wrong schema or media type")
-        descriptor_blob(
+        config_path = descriptor_blob(
             manifest.get("config"),
             "config",
             "application/vnd.oci.image.config.v1+json",
         )
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config_values = config.get("config")
+        if not isinstance(config_values, dict):
+            raise SystemExit("image config payload is not an object")
+        environment = config_values.get("Env")
+        if not isinstance(environment, list) or any(not isinstance(item, str) or "=" not in item for item in environment):
+            raise SystemExit("image runtime environment is malformed")
+        environment_pairs = [item.split("=", 1) for item in environment]
+        if len({key for key, _ in environment_pairs}) != len(environment_pairs):
+            raise SystemExit("image runtime environment contains duplicate keys")
+        runtime_env = dict(environment_pairs)
+        labels = config_values.get("Labels")
+        if not isinstance(labels, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in labels.items()):
+            raise SystemExit("image labels are malformed")
+        expected_sha = os.environ["SOURCE_SHA"]
+        expected_date = os.environ["BUILD_DATE"]
+        expected_ref = f"source-{expected_sha}"
+        expected_source = f"https://github.com/{os.environ['SOURCE_REPOSITORY']}"
+        if runtime_env.get("BUILD_COMMIT_SHA") != expected_sha or runtime_env.get("BUILD_COMMIT_REF") != expected_ref or runtime_env.get("BUILD_DATE") != expected_date:
+            raise SystemExit("image runtime provenance disagrees with the admitted source")
+        if labels.get("org.opencontainers.image.source") != expected_source or labels.get("org.opencontainers.image.revision") != expected_sha or labels.get("org.opencontainers.image.created") != expected_date:
+            raise SystemExit("image OCI provenance labels disagree with the admitted source")
         layers = manifest.get("layers")
         if not isinstance(layers, list):
             raise SystemExit("image manifest layers must be an array")

@@ -88,8 +88,13 @@ command and takes no caller input. It derives lowercase
 trusted same-repository pull request or `main-sha-<full-sha>` for a main push.
 Forks are recorded as skipped and expose no artifact or digest. The build job
 has no package authority: it checks out the exact admitted SHA, executes only
-the fixed `//:oci_publish_bundle` target through the executor client, disables
-remote cache writes on PRs, validates the complete OCI descriptor/blob closure,
+the fixed `//:oci_publish_bundle` target through the executor client, and
+supplies a root-owned workspace-status command that stamps the admitted commit
+SHA and deterministic commit date only into the terminal OCI config and
+labels. It does not inject source identity through global Bazel action
+environment, so reusable build and layer actions remain source-keyed and
+cacheable across workflow-only commits. The job disables remote cache writes on
+PRs, validates the complete OCI descriptor/blob closure and stamped provenance,
 and uploads one deterministic inert tar by exact artifact ID. A fresh
 `packages: write` job has no checkout, OIDC, or Bazel authority. It downloads
 without extracting, independently revalidates the archive and event identity,

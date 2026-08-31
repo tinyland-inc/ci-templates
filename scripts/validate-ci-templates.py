@@ -234,6 +234,7 @@ def check_v4_oci_trust_split() -> bool:
         "skip-decompress: true": "source-blind no-extraction download",
         "digest-mismatch: error": "artifact transport digest enforcement",
         "contents: none": "publisher source-read refusal",
+        'source_sha: ${{ steps.admission.outputs.source_sha }}': "exact source identity passed to the OCI builder",
     }
     for snippet, claim in required_workflow.items():
         require(workflow, snippet, claim)
@@ -274,6 +275,11 @@ def check_v4_oci_trust_split() -> bool:
         "//:oci_publish_bundle.digest": "fixed generated digest target",
         "--remote_download_outputs=all": "complete inert layout materialization",
         "--lockfile_mode=error": "caller lockfile-policy downgrade refusal",
+        "--stamp --workspace_status_command=/trusted/source-status": "terminal-only source provenance stamping",
+        "STABLE_BUILD_COMMIT_SHA": "exact source workspace-status key",
+        'build_date="$("$git_bin" show -s --format=%cI "$SOURCE_SHA")"': "deterministic commit-date provenance",
+        "image runtime provenance disagrees with the admitted source": "runtime source provenance validation",
+        "image OCI provenance labels disagree with the admitted source": "OCI label provenance validation",
         'bwrap="$(custody_store_tool bwrap)"': "image-custodied sandbox boundary",
         "exec /usr/bin/env -i": "raw OIDC-erasing stage-2 re-entry",
         "--unshare-user --unshare-pid --unshare-ipc --unshare-uts": "isolated execution namespaces",
@@ -282,6 +288,8 @@ def check_v4_oci_trust_split() -> bool:
     }
     for snippet, claim in required_bundle.items():
         require(bundle, snippet, claim)
+    if "--action_env=BUILD_COMMIT_" in bundle or "--action_env=BUILD_DATE" in bundle:
+        failures.append("v4 OCI provenance must not poison every Bazel action key")
     if any(term in bundle for term in ("--renew-background", "/usr/bin/setpriv", "/usr/bin/pkill")):
         failures.append("v4 OCI builder must not retain a renewer or host-UID process boundary")
 
