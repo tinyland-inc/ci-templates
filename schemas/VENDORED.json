@@ -73,13 +73,6 @@
       "sha256": "ad1d0de2af7b8fbee722831f9fced95fa04982ef00ed506fe81c28e6c3f07bec",
       "state": "unsourced",
       "state_note": "The $id names tinyland-inc/site.scaffold docs/schemas/blahaj-dispatch.schema.json, which returns 404 at source_revision (probed 2026-08-29). There is no upstream file to digest, so no drift claim is possible in either direction. Recorded rather than excluded because '$id names the authority' is the heuristic the rest of this file rests on, and here it is demonstrably unreliable -- that is a finding to keep visible, not a file to leave unpinned."
-    },
-    {
-      "vendored": "schemas/public-preview-dispatch.schema.json",
-      "source": "docs/schemas/public-preview-dispatch.schema.json",
-      "sha256": "f84b2020153477d39ee22b5bbbded3a31d1dfe296a564a98abea18291de9c8bf",
-      "state": "unsourced",
-      "state_note": "Same class as blahaj-dispatch: the $id names a site.scaffold path that 404s at source_revision (probed 2026-08-29). Its digest is pinned so a hand-edit is still caught; its provenance is an open question for the operator, not a silent omission."
     }
   ]
 }

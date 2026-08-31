@@ -80,27 +80,70 @@ runs:
           printf '%s\n' "$expected_bin"
         }
 
-        strict_wrapper_environment() {
-          unset BAZEL_BIN GF_BAZEL_LOCAL_PROOF GF_BAZEL_INJECT_REPOSITORIES
-          unset BAZEL_OUTPUT_USER_ROOT BAZEL_OUTPUT_BASE
-          unset BAZEL_REPOSITORY_CACHE BAZEL_DISTDIR
-          unset GF_BAZEL_REPOSITORY_DISABLE_DOWNLOAD
-          unset BAZEL_REMOTE_MAX_CONNECTIONS
-          unset BAZEL_REMOTE_HEADER BAZEL_REMOTE_CACHE_HEADER BAZEL_REMOTE_EXEC_HEADER
-          unset BAZELISK BAZEL_REAL BAZELISK_BASE_URL BAZELISK_CLEAN
-          unset BAZELISK_FORMAT_URL BAZELISK_GITHUB_TOKEN BAZELISK_HOME
-          unset BAZELISK_HOME_DARWIN BAZELISK_HOME_LINUX BAZELISK_HOME_WINDOWS
-          unset BAZELISK_INCOMPATIBLE_FLAGS BAZELISK_NOJDK
-          unset BAZELISK_SHOW_PROGRESS BAZELISK_SHUTDOWN
-          unset BAZELISK_SKIP_WRAPPER BAZELISK_USER_AGENT BAZELISK_VERIFY_SHA256
-          unset USE_BAZEL_FALLBACK_VERSION USE_BAZEL_VERSION
-          export BAZEL_BIN="$bazel_bin"
-          export BAZELISK_SKIP_WRAPPER=1
-          export GF_FLYWHEEL_LOCAL_ENV_MODE=forbid
-          export GF_BAZEL_JOBS=4
-          export GF_BAZEL_REMOTE_UPLOAD="$REMOTE_UPLOAD"
-          export GF_BAZEL_REMOTE_EXECUTION_PLATFORM=gloriousflywheel-rbe-linux-x86_64
+        system_tool() {
+          local path="$1" resolved mode
+          [[ -e "$path" && -x "$path" && "$(stat -c '%u:%g' "$path")" == 0:0 ]] || refuse "trusted system tool is absent or not root-owned: $path"
+          resolved="$(readlink -f "$path")"
+          [[ -f "$resolved" && "$(stat -c '%u:%g' "$resolved")" == 0:0 ]] || refuse "trusted system tool target is not root-owned: $path"
+          mode="$(stat -c '%a' "$resolved")"
+          (( (8#$mode & 8#022) == 0 )) || refuse "trusted system tool target is writable outside root: $path"
         }
+
+        cleanup() {
+          local status=$?
+          trap - EXIT
+          rm -rf -- "${isolation_root:-}" "${token_dir:-}"
+          exit "$status"
+        }
+
+        stage2_build() {
+          isolation_root="${V4_ISOLATION_ROOT:?}"; exec_dir="$isolation_root/execution"
+          REMOTE_UPLOAD="${V4_REMOTE_UPLOAD:?}"; ARTIFACT_NAME="${V4_ARTIFACT_NAME:?}"; RUNNER_TEMP="${V4_RUNNER_TEMP:?}"
+          GITHUB_OUTPUT="${V4_GITHUB_OUTPUT:?}"; GITHUB_STEP_SUMMARY="${V4_GITHUB_STEP_SUMMARY:?}"
+          [[ -d "$isolation_root" && ! -L "$isolation_root" && "$(stat -c '%u:%g:%a' "$isolation_root")" == 0:0:700 ]] || refuse "stage-2 custody directory is invalid"
+          [[ "$(id -u)" == 0 && "$(awk '$1 == "NoNewPrivs:" { print $2 }' /proc/self/status)" == 1 ]] || refuse "stage 2 requires root with no-new-privileges"
+          case "$REMOTE_UPLOAD" in true|false) ;; *) refuse "stage-2 cache posture is malformed" ;; esac
+          trap cleanup EXIT
+          bwrap="$(custody_store_tool bwrap)"; [[ "$("$bwrap" --version)" == "bubblewrap 0.11.2" ]] || refuse "bubblewrap version disagrees with the image contract"
+          launcher="$isolation_root/bazel"; [[ -f "$launcher" && ! -L "$launcher" && "$(stat -c '%u:%g:%a' "$launcher")" == 0:0:555 ]] || refuse "trusted Bazel launcher is invalid"
+          sandbox_script="$isolation_root/sandbox"; cat >"$sandbox_script" <<'V4_OCI_SANDBOX'
+        #!/bin/bash
+        set -euo pipefail
+        refuse() { echo "v4 OCI sandbox refused: $*" >&2; exit 1; }
+        [[ "$(id -u):$(id -g):$(id -G)" == 65534:65534:65534 ]] || refuse "sandbox identity is not isolated"
+        for environ in /proc/[0-9]*/environ; do
+          [[ -r "$environ" ]] || continue
+          while IFS= read -r -d '' entry; do case "${entry%%=*}" in ACTIONS_ID_TOKEN_REQUEST_URL|ACTIONS_ID_TOKEN_REQUEST_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITHUB_ENV|GITHUB_OUTPUT|GITHUB_PATH|GITHUB_STEP_SUMMARY) refuse "private proc exposed ambient authority" ;; esac; done <"$environ"
+        done
+        [[ ! -e /home && ! -e /root && ! -e /run && ! -e /var/run ]] || refuse "ambient runner paths entered the sandbox"
+        for name in ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN GITHUB_TOKEN GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STEP_SUMMARY; do [[ ! -v $name ]] || refuse "ambient authority variable survived: $name"; done
+        for path in /usr/.v4-write /nix/store/.v4-write /etc/.v4-write /trusted/.v4-write /workspace/.v4-write; do if (: >"$path") 2>/dev/null; then refuse "read-only mount accepted a write: $path"; fi; done
+        : >/work/.v4-write && rm /work/.v4-write
+        [[ -f /work/cell-token.jwt && ! -L /work/cell-token.jwt && "$(stat -c '%a' /work/cell-token.jwt)" == 600 ]] || refuse "scoped cell token is invalid"
+        "$GF_VERIFY_BIN"
+        "$GF_BAZEL_WRAPPER" build --symlink_prefix=/work/symlinks/bazel- //:oci_publish_bundle //:oci_publish_bundle.digest --remote_download_outputs=all --lockfile_mode=error
+        V4_OCI_SANDBOX
+          chown root:root "$sandbox_script"; chmod 0555 "$sandbox_script"
+          bwrap_args=(
+            --unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try --die-with-parent --new-session --cap-drop ALL --clearenv
+            --tmpfs / --dir /bin --ro-bind /bin /bin --dir /sbin --ro-bind /sbin /sbin --dir /lib --ro-bind /lib /lib --dir /lib64 --ro-bind /lib64 /lib64 --dir /usr --ro-bind /usr /usr
+            --dir /nix --dir /nix/store --ro-bind /nix/store /nix/store --dir /etc --ro-bind /etc/passwd /etc/passwd --ro-bind /etc/group /etc/group --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --dir /etc/ssl --ro-bind /etc/ssl/certs /etc/ssl/certs
+            --proc /proc --tmpfs /dev --dev-bind /dev/null /dev/null --dev-bind /dev/zero /dev/zero --dev-bind /dev/random /dev/random --dev-bind /dev/urandom /dev/urandom --dir /dev/shm --chmod 1777 /dev/shm
+            --dir /work --bind "$exec_dir" /work --dir /tmp --bind "$exec_dir/tmp" /tmp --dir /workspace --ro-bind "$V4_WORKSPACE" /workspace --dir /trusted --ro-bind "$launcher" /trusted/bazel --ro-bind "$sandbox_script" /trusted/run
+            --uid 65534 --gid 65534 --chdir /workspace
+            --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin --setenv HOME /work/home --setenv USER nobody --setenv LOGNAME nobody --setenv TMPDIR /tmp --setenv RUNNER_TEMP /tmp --setenv CI true --setenv GITHUB_ACTIONS true
+            --setenv BAZEL_BIN /trusted/bazel --setenv BAZELISK_SKIP_WRAPPER 1 --setenv BAZEL_OUTPUT_BASE /work/output-base --setenv GF_FLYWHEEL_LOCAL_ENV_MODE forbid --setenv GF_BAZEL_JOBS 4 --setenv GF_BAZEL_REMOTE_UPLOAD "$REMOTE_UPLOAD" --setenv GF_BAZEL_REMOTE_EXECUTION_PLATFORM gloriousflywheel-rbe-linux-x86_64
+            --setenv GF_FLYWHEEL_PROFILE_STATE executor-backed --setenv GF_BAZEL_SUBSTRATE_MODE executor-backed --setenv GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE /work/cell-token.jwt --setenv BAZEL_REMOTE_CACHE "$V4_REMOTE_ENDPOINT" --setenv BAZEL_REMOTE_EXECUTOR "$V4_REMOTE_ENDPOINT" --setenv BAZEL_REMOTE_INSTANCE_NAME "$V4_INSTANCE" --setenv BAZEL_CREDENTIAL_HELPER "$V4_HELPER_SCOPE=$V4_CREDHELPER"
+            --setenv GF_VERIFY_BIN "$V4_VERIFIER" --setenv GF_BAZEL_WRAPPER "$V4_WRAPPER" /trusted/run
+          )
+          IFS= read -r command_token </proc/sys/kernel/random/uuid; [[ "$command_token" =~ ^[0-9a-f-]{36}$ ]] || refuse "workflow-command stop token is unavailable"
+          printf '::stop-commands::%s\n' "$command_token"; if "$bwrap" "${bwrap_args[@]}"; then sandbox_status=0; else sandbox_status=$?; fi; printf '::%s::\n' "$command_token"
+          ((sandbox_status == 0)) || refuse "isolated OCI build session failed"
+        }
+
+        if [[ "${V4_BOUNDARY_STAGE:-}" == stage2 ]]; then
+          stage2_build
+        else
 
         [[ "$ARTIFACT_NAME" == "v4-oci-layout-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar" ]] || refuse "artifact filename is not the run-derived canonical name"
         case "$EVENT_NAME" in
@@ -113,6 +156,11 @@ runs:
             ;;
           *) refuse "unsupported build event: $EVENT_NAME" ;;
         esac
+        [[ "$(id -u)" == 0 ]] || refuse "v4 OCI construction requires a root runner boundary"
+        system_tool /usr/bin/env
+        system_tool /bin/bash
+        [[ "$(awk '$1 == "NoNewPrivs:" { print $2 }' /proc/self/status)" == 1 ]] || refuse "runner must enforce no-new-privileges"
+        trap cleanup EXIT
         for tool in jq stat wc id readlink mktemp rm mkdir find python3; do
           command -v "$tool" >/dev/null || refuse "required preinstalled tool is absent: $tool"
         done
@@ -139,6 +187,8 @@ runs:
         credhelper_bin="$(custody_store_tool gf-reapi-credhelper)"
         flywheel_verify_bin="$(custody_store_tool flywheel-verify)"
         gloriousflywheel_bazel_bin="$(custody_store_tool gloriousflywheel-bazel)"
+        bwrap_bin="$(custody_store_tool bwrap)"
+        [[ "$("$bwrap_bin" --version)" == "bubblewrap 0.11.2" ]] || refuse "bubblewrap version disagrees with the image contract"
         bazel_bin="$(read_root_receipt /etc/tinyland/ci-bazelisk-bin "runner image Bazelisk")"
         [[ "$bazel_bin" =~ ^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-bazelisk-[A-Za-z0-9][A-Za-z0-9._+~-]*/bin/bazelisk$ ]] || refuse "runner image Bazelisk receipt does not name the exact packaged /nix/store executable"
         [[ -f "$bazel_bin" && ! -L "$bazel_bin" && -x "$bazel_bin" ]] || refuse "runner image Bazelisk path is not a regular executable"
@@ -147,63 +197,61 @@ runs:
         (( (8#$bazel_bin_mode & 8#022) == 0 )) || refuse "runner image Bazelisk executable is group- or other-writable"
 
         umask 077
-        token_dir="$(mktemp -d "${RUNNER_TEMP:?}/gf-reapi-v4-oci-build.XXXXXX")"
+        isolation_root="$(mktemp -d "${RUNNER_TEMP:?}/v4-oci-isolation.XXXXXX")"
+        chmod 0700 "$isolation_root"
+        exec_dir="$isolation_root/execution"
+        install -d -o 65534 -g 65534 -m 0700 "$exec_dir" "$exec_dir/home" "$exec_dir/tmp" "$exec_dir/output-user-root" "$exec_dir/output-base" "$exec_dir/symlinks"
+        launcher="$isolation_root/bazel"
+        printf '#!/bin/bash\nexec %q --output_user_root=/work/output-user-root "$@"\n' "$bazel_bin" >"$launcher"
+        chmod 0555 "$launcher"
+        token_dir="$(mktemp -d "${RUNNER_TEMP}/gf-reapi-v4-oci-build.XXXXXX")"
         profile_file="$token_dir/profile.env"
-        oidc_outputs="$token_dir/oidc.outputs"
-        renewer_pid=""
-        cleanup() {
-          local status=$?
-          trap - EXIT
-          if [[ "$renewer_pid" =~ ^[1-9][0-9]*$ ]]; then
-            kill "$renewer_pid" >/dev/null 2>&1 || true
-            wait "$renewer_pid" 2>/dev/null || true
-          fi
-          rm -rf -- "$token_dir"
-          exit "$status"
-        }
-        trap cleanup EXIT
-
-        unset GF_FLYWHEEL_PROFILE_STATE GF_BAZEL_SUBSTRATE_MODE GF_BAZEL_LOCAL_PROOF
-        unset GF_FRONTDOOR_ENDPOINT
-        unset BAZEL_REMOTE_CACHE BAZEL_REMOTE_EXECUTOR BAZEL_REMOTE_INSTANCE_NAME
-        unset BAZEL_CREDENTIAL_HELPER GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE
-        unset BAZEL_REMOTE_HEADER BAZEL_REMOTE_CACHE_HEADER BAZEL_REMOTE_EXEC_HEADER
-        strict_wrapper_environment
+        unset GF_FLYWHEEL_PROFILE_STATE GF_BAZEL_SUBSTRATE_MODE GF_BAZEL_LOCAL_PROOF GF_FRONTDOOR_ENDPOINT
+        unset BAZEL_REMOTE_CACHE BAZEL_REMOTE_EXECUTOR BAZEL_REMOTE_INSTANCE_NAME BAZEL_CREDENTIAL_HELPER GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE
         "$oidc_profile_bin" \
           --request executor \
+          --ttl 1h \
           --frontdoor-endpoint "$GF_REAPI_CACHE_FRONTDOOR_ENDPOINT" \
           --credential-helper-bin "$credhelper_bin" \
           --token-dir "$token_dir" \
           --profile-out "$profile_file" \
-          --github-output "$oidc_outputs" \
-          --renew-background >/dev/null
-        renewer_pid="$(sed -n 's/^renewer_pid=//p' "$oidc_outputs")"
-        [[ "$renewer_pid" =~ ^[1-9][0-9]*$ ]] || refuse "OIDC profile helper did not return one background renewer PID"
-        unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
-        [[ -f "$profile_file" && ! -L "$profile_file" ]] || refuse "minted profile is absent or not a regular file"
-        [[ "$(stat -c '%u:%a' "$profile_file")" == "$(id -u):600" ]] || refuse "minted profile must be runner-owned mode 0600"
-        # shellcheck source=/dev/null
-        source "$profile_file"
-        [[ "${GF_FLYWHEEL_PROFILE_STATE:-}" == executor-backed ]] || refuse "minted profile state is not executor-backed"
-        [[ "${GF_BAZEL_SUBSTRATE_MODE:-}" == executor-backed ]] || refuse "minted Bazel mode is not executor-backed"
-        [[ -n "${BAZEL_REMOTE_CACHE:-}" && "$BAZEL_REMOTE_CACHE" == "${BAZEL_REMOTE_EXECUTOR:-}" ]] || refuse "executor profile must use one non-empty REAPI cache/executor authority"
-        [[ -n "${BAZEL_REMOTE_INSTANCE_NAME:-}" ]] || refuse "token exchange returned no tenant instance"
-        token_file="${GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE:-}"
-        [[ "$token_file" == "$token_dir/gf-reapi-cell-token.jwt" && -f "$token_file" && ! -L "$token_file" && -s "$token_file" ]] || refuse "credential-helper token file is absent or outside the minted profile directory"
-        [[ "$(stat -c '%u:%a' "$token_file")" == "$(id -u):600" ]] || refuse "credential-helper token file must be runner-owned mode 0600"
-        credential_helper="${BAZEL_CREDENTIAL_HELPER:-}"
-        [[ -n "$credential_helper" && "$credential_helper" != *$'\n'* && "$credential_helper" != *$'\r'* && "$credential_helper" == *=* ]] || refuse "minted profile must contain exactly one scoped credential-helper entry"
-        [[ "${credential_helper#*=}" == "$credhelper_bin" ]] || refuse "minted profile does not wire exactly the custody-validated gf-reapi-credhelper"
-        strict_wrapper_environment
-        "$flywheel_verify_bin"
+          --github-output "" >/dev/null
+        rm -f -- "$token_dir/github-oidc.curl" "$token_dir/github-oidc-response.json" "$token_dir/token-exchange.curl" "$token_dir/token-exchange-response.json"
+        for raw in github-oidc.curl github-oidc-response.json token-exchange.curl token-exchange-response.json; do
+          [[ ! -e "$token_dir/$raw" && ! -L "$token_dir/$raw" ]] || refuse "raw OIDC/exchange material survived mint"
+        done
+        summary_file="$token_dir/token-exchange-summary.json"
+        [[ -f "$profile_file" && ! -L "$profile_file" && "$(stat -c '%u:%a' "$profile_file")" == 0:600 && -f "$summary_file" && ! -L "$summary_file" ]] || refuse "minted profile custody is invalid"
+        remote_endpoint="$GF_REAPI_CACHE_FRONTDOOR_ENDPOINT"
+        [[ -n "$remote_endpoint" && "$remote_endpoint" != *$'\n'* && "$remote_endpoint" != *$'\r'* ]] || refuse "executor endpoint is malformed"
+        instance_name="$(jq -er '.instance_name | select(type=="string" and length>0)' "$summary_file")" || refuse "token exchange returned no tenant instance"
+        credential_helper="$(jq -er '.credential_helper | select(type=="string" and length>0)' "$summary_file")" || refuse "token exchange returned no credential helper"
+        credential_scope="${credential_helper%%=*}"
+        [[ -n "$credential_scope" && "$credential_helper" != *$'\n'* && "$credential_helper" != *$'\r'* && "${credential_helper#*=}" == "$credhelper_bin" ]] || refuse "minted credential helper is not custody-validated"
+        token_file="$token_dir/gf-reapi-cell-token.jwt"
+        [[ -f "$token_file" && ! -L "$token_file" ]] || refuse "minted cell token is outside its custody directory"
+        cell_token="$exec_dir/cell-token.jwt"
+        install -o 65534 -g 65534 -m 0600 "$token_file" "$cell_token"
+        rm -rf -- "$token_dir"
+        token_dir=""
 
-        "$gloriousflywheel_bazel_bin" build \
-          //:oci_publish_bundle \
-          //:oci_publish_bundle.digest \
-          --remote_download_outputs=all \
-          --lockfile_mode=error
-        layout="$(readlink -f bazel-bin/oci_publish_bundle)" || refuse "//:oci_publish_bundle did not produce bazel-bin/oci_publish_bundle"
-        digest_file="$(readlink -f bazel-bin/oci_publish_bundle.json.sha256)" || refuse "//:oci_publish_bundle.digest did not produce bazel-bin/oci_publish_bundle.json.sha256"
+        [[ -z "$(find "$GITHUB_WORKSPACE" -xdev ! -uid 0 -print -quit)" ]] || refuse "admitted source is not root-owned"
+        script="$0"; [[ -f "$script" && ! -L "$script" && "$(stat -c '%u:%g' "$script")" == 0:0 ]] || refuse "trusted re-entry script is invalid"
+        script_mode="$(stat -c '%a' "$script")"; (( (8#$script_mode & 8#022) == 0 )) || refuse "trusted re-entry script is writable outside root"
+        exec /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin V4_BOUNDARY_STAGE=stage2 \
+          V4_ISOLATION_ROOT="$isolation_root" V4_WORKSPACE="$GITHUB_WORKSPACE" V4_REMOTE_UPLOAD="$REMOTE_UPLOAD" V4_ARTIFACT_NAME="$ARTIFACT_NAME" V4_RUNNER_TEMP="$RUNNER_TEMP" \
+          V4_REMOTE_ENDPOINT="$remote_endpoint" V4_INSTANCE="$instance_name" V4_HELPER_SCOPE="$credential_scope" V4_CREDHELPER="$credhelper_bin" V4_VERIFIER="$flywheel_verify_bin" V4_WRAPPER="$gloriousflywheel_bazel_bin" \
+          V4_GITHUB_OUTPUT="$GITHUB_OUTPUT" V4_GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" /bin/bash --noprofile --norc "$script"
+        fi
+
+        bazel_bin_link="$exec_dir/symlinks/bazel-bin"; [[ -L "$bazel_bin_link" ]] || refuse "Bazel output link is absent"
+        bazel_bin_target="$(readlink "$bazel_bin_link")"
+        if [[ "$bazel_bin_target" == /work/* ]]; then bazel_bin_host="$exec_dir/${bazel_bin_target#/work/}"; elif [[ "$bazel_bin_target" != /* ]]; then bazel_bin_host="$(dirname "$bazel_bin_link")/$bazel_bin_target"; else refuse "Bazel output link escaped the sandbox output root"; fi
+        bazel_bin_host="$(readlink -f "$bazel_bin_host")" || refuse "Bazel output link did not resolve"
+        [[ "$bazel_bin_host" == "$exec_dir/output-base/"* ]] || refuse "Bazel output link resolved outside the isolated output base"
+        layout="$(readlink -f "$bazel_bin_host/oci_publish_bundle")" || refuse "//:oci_publish_bundle did not produce its fixed output"
+        digest_file="$(readlink -f "$bazel_bin_host/oci_publish_bundle.json.sha256")" || refuse "//:oci_publish_bundle.digest did not produce its fixed digest output"
+        [[ "$layout" == "$exec_dir/output-base/"* && "$digest_file" == "$exec_dir/output-base/"* ]] || refuse "OCI outputs resolved outside the isolated Bazel output base"
         [[ -d "$layout" && ! -L "$layout" ]] || refuse "//:oci_publish_bundle output is not one OCI layout directory"
         [[ -f "$digest_file" && ! -L "$digest_file" ]] || refuse "//:oci_publish_bundle.digest output is not one regular file"
 

@@ -118,12 +118,12 @@ jobs:
 
       - name: Validate sole attachment authority
         if: steps.admission.outputs.allowed == 'true'
-        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v4
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v4.0.0
 
       - name: Build fixed inert OCI archive
         if: steps.admission.outputs.allowed == 'true'
         id: bundle
-        uses: tinyland-inc/ci-templates/.github/actions/v4-oci-bundle@v4
+        uses: tinyland-inc/ci-templates/.github/actions/v4-oci-bundle@v4.0.0
         with:
           remote_upload: ${{ steps.admission.outputs.remote_upload }}
           artifact_name: ${{ steps.admission.outputs.artifact_name }}
@@ -166,7 +166,7 @@ jobs:
 
       - name: Publish inert bytes through the trusted image client
         id: publish
-        uses: tinyland-inc/ci-templates/.github/actions/v4-oci-publish@v4
+        uses: tinyland-inc/ci-templates/.github/actions/v4-oci-publish@v4.0.0
         with:
           artifact_path: ${{ runner.temp }}/v4-oci-download/${{ needs.build.outputs.artifact_name }}
           expected_artifact_sha256: ${{ needs.build.outputs.artifact_sha256 }}

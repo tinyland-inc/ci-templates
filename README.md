@@ -55,14 +55,15 @@ targets. V4 admits only `tinyland-nix`, requires the manifest to declare
 `executor-backed`, mints a short-lived GitHub-OIDC profile, and runs the
 preinstalled `gf-reapi-credhelper`, `flywheel-verify`, and
 `gloriousflywheel-bazel` path without a cache-only, downloaded-helper, or PATH
-fallback. The workflow verifies the root-owned OIDC helper against its image
-digest receipt and derives the other three client paths from their immutable
-Nix-store receipts. Each packaged-wrapper invocation forbids
-`.env.flywheel.local`, uses the immutable Bazelisk executable recorded by the
-runner image, and clears inherited output/external-input environment
-overrides. It parses the complete plan into readonly, non-exported shell arrays before the
-first repository-controlled action, then executes those in-memory entries
-sequentially with an exact planned/completed count. TIN-4026 comment
+fallback. The workflow verifies the root-owned OIDC helper and receipt-derived
+Nix-store clients, mints one non-renewing one-hour cell token, deletes the raw
+OIDC exchange material, and exposes only that cell token inside a
+receipt-pinned Bubblewrap boundary. Repository-controlled Bazel runs as
+UID/GID 65534 with all capabilities dropped, `no-new-privs`, a cleared
+environment, private PID/process/device views, read-only source, isolated
+outputs, no runner home/socket/cache mounts, and a shared network only for the
+fixed REAPI authorities. The root parent validates outputs only after the
+single sandbox session exits. TIN-4026 comment
 `a02a7948` P2d owns the explicit per-action `jobs=4` client cap until a
 fleet-published replacement; the gf-reapi-cell scheduler remains the actual
 per-tenant concurrency authority under GF-I11.
@@ -70,8 +71,8 @@ per-tenant concurrency authority under GF-I11.
 This is a held source foundation, not a release. Its vendored action-plan
 schema must name the exact durable site.scaffold source commit and byte digest
 before TIN-4248 can cut v4. TIN-4249 separately owns consumer adoption,
-including the manifest/caller co-move; no consumer should point at an unresolved
-`@v4` or treat this checkout as merge-ready runtime wiring.
+including the manifest/caller co-move; consumers use the exact `@v4.0.0`
+self-release transaction and must not treat this checkout as runtime wiring.
 
 The runner currently receipts Bazelisk, not an exact Bazel binary or offline
 external-input capsule. Clearing inherited Bazelisk environment overrides and
@@ -100,9 +101,10 @@ governance limit, not something this workflow claims.
 
 The expected consumer target is an `oci_image` named
 `//:oci_publish_bundle`; rules_oci supplies
-`//:oci_publish_bundle.digest`. The runner image does not yet carry the
-required root-custodied `skopeo` receipt, so TIN-4247 / GF#1711 is an explicit
-release dependency. This workflow never downloads or installs an image client.
+`//:oci_publish_bundle.digest`. The runner image must carry exact root-custodied
+Bubblewrap 0.11.2 and `skopeo` receipts; their GF image publication and rollout
+remain explicit release dependencies. These workflows never download or
+install either client.
 
 Your spoke needs `.github/lanes.json` validating against
 [`schemas/lanes.schema.json`](./schemas/lanes.schema.json). New spokes should
@@ -250,10 +252,9 @@ Set `attic-public-read: "true"` on any of the three to opt in. What flips:
 | `npm-publish.yml` | Pre-existing: Node package build + publish, callable only (no local tag/manual trigger). Ran GitHub-hosted until TIN-3914 moved all three jobs to `tinyland-nix`. |
 | **`rust-bazel-application.yml`** | Opt-in/default-off native Darwin/Linux Rust application validation with Bazel-only rustfmt, clippy, build, unit, integration, and package targets; cache reads are runtime-attached and writes require an explicitly enabled protected push ref. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
-| **`spoke-ci-v4.yml`** | Breaking executor-only action fabric: fixed `tinyland-nix` admission, manifest-authoritative attachment, OIDC profile mint, and complete Bazel-plan execution through preinstalled Flywheel tools. |
+| **`spoke-ci-v4.yml`** | Breaking executor-only action fabric: fixed `tinyland-nix` admission, manifest-authoritative attachment, and complete Bazel-plan execution as an isolated unprivileged identity. Its typed `refresh_module_lock` mode uses a private exact-head copy, accepts only the lock delta, uploads a rehashed identity receipt for one day, and then fails deliberately. |
 | **`spoke-oci-publish-v4.yml`** | Typed v4 GHCR publisher: no-package `//:oci_publish_bundle` build, exact inert-artifact transfer, source-blind root-custodied `skopeo`, and registry-derived digest output; forks produce no artifact. |
 | **`spoke-ci-restricted.yml`** | Explicit private-repo opt-in variant of `spoke-ci.yml`; every job requires an owner `-infra` runner group plus its reviewed capability label. |
-| **`spoke-public-preview.yml`** *(deprecated)* | Reusable public/client preview dispatcher for Cloudflare Access-gated aliases. The owner overlay is the preview producer now. |
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |
 | **`spoke-deploy-cloudflare-pages.yml`** | Sanctioned **opt-in** Cloudflare Pages deploy lane. Builds the adapter-static `build/` via `nix develop --command just setup/check/build`, then `wrangler pages deploy build`. Credential-skips when the org CF secrets are absent; PR events build only. Does **not** replace the scaffold default GitHub-Pages lane. |
 
@@ -293,7 +294,6 @@ What moved:
 | `npm-publish.yml` | `build-and-test`, `publish-gpr`, `publish-npm` | `ubuntu-latest` | `tinyland-nix` |
 | `rust-bazel-application.yml` | `trust-gate` | `ubuntu-24.04` | `tinyland-nix` |
 | `spoke-deploy-cloudflare-pages.yml` | `build` | `ubuntu-latest` | `tinyland-nix` |
-| `spoke-public-preview.yml` | `dispatch` | `ubuntu-latest` | `tinyland-nix` |
 
 Two `js-bazel-package.yml` input **values** are retired and now rejected with a
 migration error rather than silently re-routed: `runner_mode: hosted` and
@@ -628,9 +628,9 @@ pass — unread metadata in the exact field an operator reads to sequence a
 de-fork.
 
 `unsourced` is a real class here, not a placeholder:
-`blahaj-dispatch.schema.json` and `public-preview-dispatch.schema.json` carry
-`$id`s naming site.scaffold paths that **404** at the recorded revision. Their
-digests are still pinned, so a hand-edit is caught; what cannot be claimed is
+`blahaj-dispatch.schema.json` carries a `$id` naming a site.scaffold path that
+**404s** at the recorded revision. Its digest is still pinned, so a hand-edit is
+caught; what cannot be claimed is
 provenance. That also means the "`$id` names the authority" heuristic this file
 rests on is not by itself reliable, which is worth knowing before trusting it
 elsewhere.
@@ -675,13 +675,12 @@ vendored alongside is byte-identical to site.scaffold's (both blob
 `74c13a7a`, last changed there by `8659dcd`), and reconciling the v1 copies is a
 separate change to the vendored file, not to this router.
 
-`schemas/blahaj-dispatch.schema.json` and
-`schemas/public-preview-dispatch.schema.json` are retired-era historical
-artifacts: the merged scaffold #119 recut deleted their upstream sources
-from `site.scaffold/docs/schemas/`, so they no longer have a source of
-truth there. The vendored copies remain only because the deprecated
-Blahaj-dispatch composites above still validate against them; do not
-treat them as current contract surface.
+`schemas/blahaj-dispatch.schema.json` is a retired-era historical artifact:
+the merged scaffold #119 recut deleted its upstream source
+from `site.scaffold/docs/schemas/`, so it no longer has a source of
+truth there. The vendored copy remains only because the deprecated
+Blahaj-dispatch composite still validates against it; do not treat it as
+current contract surface.
 (`schemas/lane-ttl-reap-dispatch.schema.json` was removed with the
 `lane-ttl-reap` composite, its only consumer, on 2026-08-07.)
 

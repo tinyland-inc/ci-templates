@@ -61,7 +61,7 @@ runs:
           local receipt_stat receipt_newlines
           local -a receipt_lines=()
 
-          [[ -f "$receipt" && ! -L "$receipt" ]] || refuse "$label receipt is absent or not a regular file: $receipt (GF client-image dependency TIN-4247 / GF#1711)"
+          [[ -f "$receipt" && ! -L "$receipt" ]] || refuse "$label receipt is absent or not a regular file: $receipt (GF client-image dependency TIN-4247 / GF#1712)"
           receipt_stat="$(stat -c '%u:%g:%a' "$receipt")"
           [[ "$receipt_stat" == 0:0:444 ]] || refuse "$label receipt must be root:root mode 0444; got $receipt_stat"
           receipt_newlines="$(wc -l <"$receipt")"
@@ -255,7 +255,7 @@ runs:
         [[ "$archive_image_digest" == "$EXPECTED_IMAGE_DIGEST" ]] || refuse "archive descriptor digest disagrees with the build-job descriptor"
 
         # This is intentionally an unmet image dependency today. Do not fetch
-        # or install a client here: GF#1711 must bake and receipt it first.
+        # or install a client here: GF#1712 must bake and receipt it first.
         skopeo_bin="$(custody_store_tool skopeo)"
         image_digest="$($skopeo_bin inspect --format '{{.Digest}}' "oci-archive:$ARTIFACT_PATH")" || refuse "trusted skopeo could not inspect the inert OCI archive"
         [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || refuse "trusted skopeo returned a malformed image digest"

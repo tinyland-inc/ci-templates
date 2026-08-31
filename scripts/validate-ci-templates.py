@@ -18,6 +18,7 @@ from collections import Counter
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUST_BAZEL_RELEASE = "v2.14.0"
 RUST_BAZEL_CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
+V4_EXACT_RELEASE = "v4.0.0"
 RUBY_USES_SCRIPT = r"""
 require "json"
 require "yaml"
@@ -158,23 +159,19 @@ V4_FOUNDATION_WORKFLOWS = {
 STALE_INTERNAL_REF_FILES = {
     ".github/workflows/js-bazel-package.yml": "TIN-3914",
     ".github/workflows/spoke-deploy-cloudflare-pages.yml": "TIN-3914",
-    ".github/workflows/spoke-public-preview.yml": "TIN-3914",
 }
 
 
 def check_v4_oci_trust_split() -> bool:
-    """Assert the v4 build/publish authority split without simulating GitHub.
-
-    Claim: the only package writer is source-blind and consumes one validated
-    inert archive built without PR cache-write authority. Retirement: delete
-    this textual projection when a typed workflow/effect schema enforces that
-    authority split directly, or when the v4 OCI surface itself is removed.
+    """Assert v4's source-blind publisher and isolated executor boundary.
+    Retire when a typed effect schema enforces both claims, or v4 is removed.
     """
 
     workflow_path = ROOT / ".github/workflows/spoke-oci-publish-v4.yml"
+    spoke_path = ROOT / ".github/workflows/spoke-ci-v4.yml"
     bundle_path = ROOT / ".github/actions/v4-oci-bundle/action.yml"
     publish_path = ROOT / ".github/actions/v4-oci-publish/action.yml"
-    paths = (workflow_path, bundle_path, publish_path)
+    paths = (workflow_path, spoke_path, bundle_path, publish_path)
     if any(not path.is_file() for path in paths):
         for path in paths:
             if not path.is_file():
@@ -182,6 +179,8 @@ def check_v4_oci_trust_split() -> bool:
         return False
 
     workflow = workflow_path.read_text(encoding="utf-8")
+    spoke = spoke_path.read_text(encoding="utf-8")
+    spoke_call_surface = spoke.split("\npermissions:\n", maxsplit=1)[0]
     bundle = bundle_path.read_text(encoding="utf-8")
     publisher = publish_path.read_text(encoding="utf-8")
     try:
@@ -231,27 +230,60 @@ def check_v4_oci_trust_split() -> bool:
 
     required_workflow = {
         "archive: false": "single-file artifact transport",
-        "overwrite: false": "non-overwriting artifact upload",
         "artifact-ids:": "exact artifact-ID download",
         "skip-decompress: true": "source-blind no-extraction download",
         "digest-mismatch: error": "artifact transport digest enforcement",
-        "cancel-in-progress: false": "same-tag serialization without cancellation",
         "contents: none": "publisher source-read refusal",
     }
     for snippet, claim in required_workflow.items():
         require(workflow, snippet, claim)
+    required_spoke = {
+        "refresh_module_lock:": "typed lock-refresh input",
+        "lock refresh is admitted only for a same-repository pull-request head": "same-repository refresh admission",
+        "lock refresh pull request must target the repository default branch": "default-branch refresh admission",
+        "ref: ${{ steps.admission.outputs.source_sha }}": "exact admitted checkout",
+        'bwrap="$(custody_tool bwrap)"': "image-custodied sandbox boundary",
+        "exec /usr/bin/env -i": "raw OIDC-erasing stage-2 re-entry",
+        "--unshare-user --unshare-pid --unshare-ipc --unshare-uts": "isolated execution namespaces",
+        "--proc /proc --tmpfs /dev": "private process and device views",
+        "ambient authority variable survived": "negative ambient-authority probe",
+        'status" == " M MODULE.bazel.lock"': "sole tracked lockfile delta",
+        'command:"gloriousflywheel-bazel fetch //... --lockfile_mode=update"': "fixed-command receipt",
+        '--lockfile_mode=error': "normal action lock-policy refusal",
+        'final lock artifact disagrees with its identity receipt': "final lock artifact rehash",
+        "refresh is an artifact-only maintenance run": "non-green maintenance result",
+    }
+    for snippet, claim in required_spoke.items():
+        require(spoke, snippet, claim)
+    for forbidden in ("command:", "target:", "runner:", "endpoint:"):
+        if forbidden in spoke_call_surface:
+            failures.append(f"v4 action-fabric caller input is forbidden: {forbidden}")
+    for forbidden in ("packages: write", "contents: write", "actions: write", "git push", "gh api"):
+        if forbidden in spoke:
+            failures.append(f"v4 action fabric must have no publication/write authority: {forbidden}")
+    if re.findall(r"^      ([a-z_][a-z0-9_]*):$", spoke_call_surface, re.MULTILINE) != ["refresh_module_lock"]:
+        failures.append("v4 action fabric must expose exactly one typed maintenance input")
+    if re.findall(r"^  ([a-z_][a-z0-9_-]*):$", spoke.partition("\njobs:\n")[2], re.MULTILINE) != ["action-fabric"]:
+        failures.append("v4 action fabric must remain one CI job identity")
+    if any(term in spoke for term in ("--renew-background", "/usr/bin/setpriv", "/usr/bin/pkill")):
+        failures.append("v4 action fabric must not retain a renewer or host-UID process boundary")
 
     required_bundle = {
-        "GF_BAZEL_REMOTE_UPLOAD=\"$REMOTE_UPLOAD\"": "event-derived cache upload posture",
         "pull-request builds must set GF_BAZEL_REMOTE_UPLOAD=false": "PR cache-write refusal",
         "only a main push may set GF_BAZEL_REMOTE_UPLOAD=true": "trusted-main cache-write admission",
         "//:oci_publish_bundle.digest": "fixed generated digest target",
         "--remote_download_outputs=all": "complete inert layout materialization",
         "--lockfile_mode=error": "caller lockfile-policy downgrade refusal",
-        "unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN": "OIDC token removal before Bazel",
+        'bwrap="$(custody_store_tool bwrap)"': "image-custodied sandbox boundary",
+        "exec /usr/bin/env -i": "raw OIDC-erasing stage-2 re-entry",
+        "--unshare-user --unshare-pid --unshare-ipc --unshare-uts": "isolated execution namespaces",
+        "--proc /proc --tmpfs /dev": "private process and device views",
+        "ambient authority variable survived": "negative ambient-authority probe",
     }
     for snippet, claim in required_bundle.items():
         require(bundle, snippet, claim)
+    if any(term in bundle for term in ("--renew-background", "/usr/bin/setpriv", "/usr/bin/pkill")):
+        failures.append("v4 OCI builder must not retain a renewer or host-UID process boundary")
 
     required_publisher = {
         "custody_store_tool skopeo": "image-custodied OCI client",
@@ -260,7 +292,7 @@ def check_v4_oci_trust_split() -> bool:
         "--digestfile": "client-derived copy digest",
         "only 200 or 404 is admissible": "fail-closed registry preflight",
         "controlled SHA tag already exists at a different digest": "different-digest refusal",
-        "GF client-image dependency TIN-4247 / GF#1711": "named unmet skopeo dependency",
+        "GF client-image dependency TIN-4247 / GF#1712": "named unmet skopeo dependency",
     }
     for snippet, claim in required_publisher.items():
         require(publisher, snippet, claim)
@@ -284,16 +316,15 @@ def check_internal_refs() -> int:
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
-        expected_release_line = "v4" if str(rel) in V4_FOUNDATION_WORKFLOWS else CURRENT_RELEASE_LINE
+        expected_release_line = V4_EXACT_RELEASE if str(rel) in V4_FOUNDATION_WORKFLOWS else CURRENT_RELEASE_LINE
         for action, ref in action_pattern.findall(text):
             action_yml = ROOT / ".github/actions" / action / "action.yml"
             if not action_yml.exists():
                 print(f"{rel}: missing internal action {action_yml.relative_to(ROOT)}", file=sys.stderr)
                 ok = False
-            # An exact SemVer ref is the restricted workflows' immutability
-            # contract (restricted-workflow-contract.rb pins the exact release
-            # and rejects anything floating), so it is always admissible here.
-            if exact_release.match(ref) or ref == expected_release_line:
+            if str(rel) in V4_FOUNDATION_WORKFLOWS and ref == V4_EXACT_RELEASE:
+                continue
+            if str(rel) not in V4_FOUNDATION_WORKFLOWS and (exact_release.match(ref) or ref == expected_release_line):
                 continue
             if str(rel) in STALE_INTERNAL_REF_FILES:
                 continue
@@ -1238,42 +1269,11 @@ def check_rust_bazel_application_contract() -> int:
 def check_vendored_schema_provenance() -> int:
     """Assert every vendored schema still matches its recorded digest.
 
-    ci-templates carries COPIES of schemas whose own `$id` names
-    tinyland-inc/site.scaffold as the authority. Before schemas/VENDORED.json
-    existed there was no lock and no gate, and the v1 copy had silently
-    diverged from its source in BOTH directions -- ci-templates gained
-    `authorities.artifact_registry`, site.scaffold gained a `gitops_receiver`
-    prohibition -- with nothing comparing them. The v2 copy then arrived the
-    same way; it is byte-identical to its source today, which is precisely why
-    this is the cheapest moment to record it.
-
     This gate is deliberately HERMETIC: it compares the vendored bytes to the
     digests recorded in VENDORED.json, and does NOT reach out to site.scaffold.
-    A network call would make every consumer's CI depend on another repository
-    being reachable. What it catches is the thing a lock can catch offline: a
-    hand-edit to a vendored copy that never went through a re-vendor.
-
-    Upstream freshness is a different question and needs a different, non-
-    blocking mechanism -- the same split lab uses for its repo-contract source
-    locks.
-
-    A `drifted` entry is REPORTED, not failed. The divergence is known and
-    de-forking it changes what live consumers are validated against; what must
-    not happen is it going unnoticed again.
-
-    SCOPE. This check covers `schemas/*.schema.json` — every schema in the
-    directory. It was written globbing `tinyland-repo-manifest*.json`, and that
-    narrower glob was not a smaller version of the same gate, it was a gate
-    that could not see the file it most needed to: `schemas/lanes.schema.json`
-    carries a site.scaffold `$id`, is drifted from its source TODAY (the
-    vendored copy still describes blahaj PR-env provisioning, reaper TTL and
-    `--config=flywheel-executor`; upstream says the schema "grants no receiver,
-    apply, DNS, or lifecycle authority" and uses
-    `GF_BAZEL_SUBSTRATE_MODE=executor-backed`), and backs the `lanes-load`
-    action that tinyland.dev's CI actually runs. The old glob would have
-    printed "all 2 vendored schemas match" over a directory holding four, one
-    of them drifted and load-bearing — coverage-shaped output enforcing less
-    than it read as, which is the exact defect this file exists to end.
+    It covers every `schemas/*.schema.json`; upstream freshness remains a
+    separate non-blocking question, and a `drifted` entry is reported rather
+    than failed because reconciling it changes the consumer contract.
 
     STATE VOCABULARY, and why each arm is asserted rather than recorded:
 

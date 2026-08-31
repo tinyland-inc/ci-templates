@@ -73,10 +73,11 @@ preinstalled GitHub-OIDC/Flywheel tool chain. Every wrapper invocation forbids
 the workspace `.env.flywheel.local`, pins Bazelisk from the root-owned runner
 receipt, clears inherited output/external-input environment injection, and
 uses the digest-receipted OIDC helper plus receipt-derived Nix-store client
-executables.
-The complete plan is parsed into readonly, non-exported shell arrays before the
-first repository-controlled action, then held to an exact nonzero
-planned/executed count. TIN-4026 comment `a02a7948` P2d
+executables. One receipt-pinned Bubblewrap session runs verification and the
+complete plan as UID/GID 65534 with dropped capabilities, a cleared
+environment, private PID/process/device views, read-only source, isolated
+outputs, and no runner home/socket/cache mounts; root validates results only
+after that session exits. TIN-4026 comment `a02a7948` P2d
 owns the explicit `jobs=4` client cap; GF-I11 leaves actual per-tenant capacity
 with the cell scheduler. V4 has no cache-only, endpoint override/fallback,
 installer, hosted, or local fallback. Source is not release, adoption, apply,
@@ -99,8 +100,9 @@ controlled SHA tag, but GHCR package-level tag immutability remains external to
 this workflow. Forks are explicit no-artifact skips. There is no
 caller-selected command, target, runner, endpoint, tag, repository,
 Docker/daemon, hosted, local, or cache-only path. Publication remains release
-blocked until TIN-4247 / GF#1711 bakes and receipts `skopeo`; the workflow never
-fetches or installs it.
+blocked until GF#1712 publishes and rolls out
+an exact image carrying root-custodied Bubblewrap 0.11.2, Bazelisk 1.29.0, and
+`skopeo` receipts; the workflow never fetches or installs those clients.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 

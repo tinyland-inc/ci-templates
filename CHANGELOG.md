@@ -17,8 +17,22 @@ Versioning: [SemVer 2.0](https://semver.org/).
   verifies the root-owned OIDC helper and receipt-derived Nix-store clients,
   pins Bazelisk from the immutable runner receipt, clears inherited
   output/external-input environment injection, applies the TIN-4026 P2d
-  `jobs=4` client cap, and preloads the complete plan into readonly shell memory before
-  enforcing an exact nonzero planned/executed action count.
+  `jobs=4` client cap, and runs every repository-controlled Bazel action in one
+  receipt-pinned Bubblewrap 0.11.2 session as UID/GID 65534, with all
+  capabilities dropped, `no-new-privs`, a cleared environment, private
+  PID/process/device views, read-only source, isolated outputs, and no ambient
+  runner home/socket/cache mounts. One non-renewing one-hour token is copied
+  into the sandbox; raw OIDC/exchange material is deleted before an `env -i`
+  stage-2 re-entry, and root validates results only after the sandbox exits. Its one
+  default-off maintenance input is mutually exclusive with that plan:
+  `refresh_module_lock: true` admits only an exact same-repository PR head,
+  runs the fixed image-custodied
+  `gloriousflywheel-bazel fetch //... --lockfile_mode=update` operation in a
+  private exact-head copy with cache upload disabled, accepts only a tracked
+  regular `MODULE.bazel.lock` delta, rehashes the copied lock against its
+  identity receipt, uploads it for one day without overwrite, and then fails
+  deliberately. It exposes no caller command, target,
+  runner, endpoint, source write, publication, or green maintenance verdict.
   Added the separate typed `spoke-oci-publish-v4.yml` boundary: it admits only
   trusted same-repository PR heads or main pushes and derives the only legal
   GHCR repository/tag from that event. Its package-free build job invokes the
@@ -32,13 +46,16 @@ Versioning: [SemVer 2.0](https://semver.org/).
   read back from GHCR. Forks explicitly skip with no artifact. It exposes no
   command, target, runner, endpoint, destination, tag, Docker/Buildx/DinD,
   hosted, local, or cache-only escape. Publication remains blocked on the
-  TIN-4247 / GF#1711 `skopeo` image receipt and never installs a client.
+  exact GF runner-image publication and rollout carrying root-custodied
+  Bubblewrap 0.11.2 and `skopeo` receipts; the workflows never install a
+  client.
   Removed the two obsolete lane-env workflows and their orphaned validator
-  logic. The two v4 workflows total 435 lines against 456 removed workflow
-  lines, so the co-move remains a 21-line workflow contraction; the central
-  validator remains a 15-line contraction against main even after the narrow
-  trust-split assertion. V3 remains
-  unmodified, and no release or runtime adoption is implied.
+  logic, plus the zero-caller superseded `spoke-public-preview.yml`, its orphan
+  composite and schema, and their live documentation/ledger references. The
+  two v4 workflows total 455 lines against 550 removed workflow lines, so the
+  co-move is a 95-line workflow contraction; the central validator is a
+  15-line contraction against main after the narrow trust assertions.
+  V3 remains unmodified, and no release or runtime adoption is implied.
 
 ### Removed
 
@@ -122,9 +139,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
   consumer CI runs — a gate reading as coverage while enforcing less than it
   appears to, which is the standard this release is written against.
 
-  `blahaj-dispatch.schema.json` and `public-preview-dispatch.schema.json` remain
-  `unsourced`: their `$id`s name site.scaffold paths that **404** at the
-  recorded revision, so their digests are pinned but no provenance can be
+  `blahaj-dispatch.schema.json` remains `unsourced`: its `$id` names a
+  site.scaffold path that **404s** at the recorded revision, so its digest is
+  pinned but no provenance can be
   claimed. That also shows the "`$id` names the authority" heuristic this
   record rests on is not reliable on its own.
 
