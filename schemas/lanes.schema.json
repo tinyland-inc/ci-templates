@@ -29,7 +29,7 @@
 		},
 		"action": {
 			"type": "object",
-			"required": ["command", "targets", "capabilities"],
+			"required": ["command", "targets", "capability"],
 			"additionalProperties": false,
 			"properties": {
 				"command": {
@@ -49,13 +49,9 @@
 					},
 					"description": "Finite workspace-local Bazel labels passed verbatim to the compiled v4 action client. Flags and external-repository labels are not accepted."
 				},
-				"capabilities": {
-					"type": "array",
-					"minItems": 1,
-					"maxItems": 2,
-					"uniqueItems": true,
-					"items": { "$ref": "#/$defs/capability" },
-					"description": "Abstract execution requirements joined to provider supply by the GF controller."
+				"capability": {
+					"$ref": "#/$defs/capability",
+					"description": "The one abstract execution requirement joined to provider supply by the GF controller. One action resolves once and therefore cannot select mutually exclusive architectures."
 				}
 			}
 		}

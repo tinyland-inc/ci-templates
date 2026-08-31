@@ -14,10 +14,10 @@ Versioning: [SemVer 2.0](https://semver.org/).
   `/usr/local/bin/gf-action-client run` once with the admitted source SHA. The
   vendored schema is an exact
   projection of GloriousFlywheel `Core.dhall`: actions contain only Bazel
-  command, finite targets, and abstract REAPI capabilities. Provider pool,
-  runner, resolved platform, endpoint, profile, upload, and fixed concurrency
-  fields were removed from consumer manifests and plans. Inline OIDC, token,
-  proxy, sandbox, OCI, cleanup, and fallback orchestration was deleted rather
+  command, finite targets, and exactly one abstract REAPI capability. Provider
+  pool, runner, resolved platform, endpoint, profile, upload, and fixed
+  concurrency fields were removed from consumer manifests and plans. Inline
+  OIDC, token, proxy, sandbox, OCI, cleanup, and fallback orchestration was deleted rather
   than becoming a second scheduler/client implementation. The old lane-env and
   zero-caller public-preview surfaces remain deleted, and the existing central
   validator shrank with the public surface. V3 remains unmodified. This held

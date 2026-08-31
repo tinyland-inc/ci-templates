@@ -66,8 +66,8 @@ working-tree scan.
 
 The held v4 carrier is deliberately thin. `.github/lanes.json` declares named
 Bazel `build` or `test` actions, finite workspace labels, and only the
-abstract REAPI capabilities defined by GloriousFlywheel `Core.dhall`
-(`rbe-linux-x86_64` or `rbe-darwin-aarch64`). It never names a runner,
+exactly one abstract REAPI capability defined by GloriousFlywheel `Core.dhall`
+(`rbe-linux-x86_64` or `rbe-darwin-aarch64`) per action. It never names a runner,
 execution pool, resolved platform, endpoint, credential, upload posture, or
 provider concurrency.
 
