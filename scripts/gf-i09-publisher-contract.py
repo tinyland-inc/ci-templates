@@ -44,6 +44,11 @@ REQUIRED = (
     "workflow_source_sha256",
     "cosign sign-blob",
     "require_unoccupied_tag()",
+    'expected_caller = "Great-Falls-Tool-Bus/gftb-site"',
+    'expected_publication = "oci://ghcr.io/great-falls-tool-bus/gftb-site"',
+    'test "${publication}" = "oci://ghcr.io/great-falls-tool-bus/gftb-site"',
+    'test "${REFERENCE%@*}" = "oci://ghcr.io/great-falls-tool-bus/gftb-site"',
+    "called workflow source must be regular, non-symlink, and mode 0600",
     "oras manifest fetch",
     "oras pull --registry-config",
     "Remove publisher ephemeral authentication",
@@ -249,16 +254,19 @@ def verdict(source: str) -> list[str]:
     require(
         executable.count("gf-i09-publish-registry-config.json") >= 3
         and executable.count("gf-i09-verify-registry-config.json") >= 3
-        and executable.count("printf '{}\\n' > \"${registry_config}\"") == 2
-        and executable.count('chmod 0600 "${registry_config}"') == 2
+        and executable.count('handle.write(b"{}\\n")') == 2
+        and executable.count("registry config must be regular, non-symlink, and mode 0600") == 2
         and executable.count('stat -c \'%a\' -- "${registry_config}"') == 2,
-        "each privilege job must create and validate its own fixed 0600 registry config",
+        "each privilege job must exclusively create and validate its own fixed 0600 registry config",
     )
     require(
-        executable.count("os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW") == 1
-        and executable.count("os.replace(token_tmp, token_path)") == 1
+        executable.count("os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW") == 4,
+        "OIDC, workflow-source, and both registry temp files must use exclusive no-follow creation",
+    )
+    require(
+        executable.count("os.replace(token_tmp, token_path)") == 1
         and executable.count("stat.S_IMODE(token_meta.st_mode) != 0o600") == 1,
-        "OIDC token creation must be exclusive, atomic, non-symlink, and mode 0600",
+        "OIDC token creation must remain atomic, non-symlink, and mode 0600",
     )
     require(
         executable.count(
@@ -474,6 +482,16 @@ def self_test(source: str) -> int:
         "called identity dropped": source.replace(
             "job_workflow_sha", "called_sha", 1
         ),
+        "caller scope widened": source.replace(
+            'expected_caller = "Great-Falls-Tool-Bus/gftb-site"',
+            'expected_caller = os.environ["GITHUB_REPOSITORY"]',
+            1,
+        ),
+        "package scope widened": source.replace(
+            'expected_publication = "oci://ghcr.io/great-falls-tool-bus/gftb-site"',
+            'expected_publication = "oci://ghcr.io/" + os.environ["GITHUB_REPOSITORY"].lower()',
+            1,
+        ),
         "readback dropped": source.replace(
             'oras pull --registry-config "${registry_config}"',
             'true # oras pull --registry-config "${registry_config}"',
@@ -568,6 +586,12 @@ def self_test(source: str) -> int:
         ),
         "registry config isolation removed": source.replace(
             '--registry-config "${registry_config}"', "", 1
+        ),
+        "exclusive temp creation removed": source.replace(
+            "os.O_EXCL", "0"
+        ),
+        "no-follow temp creation removed": source.replace(
+            "os.O_NOFOLLOW", "0"
         ),
         "auth cleanup no longer unconditional": source.replace(
             "if: ${{ always() }}", "if: success()", 1

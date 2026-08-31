@@ -51,9 +51,17 @@ a fleet-wide change.
 ## Local validation
 
 ```bash
-just check                       # full suite
+just check                       # 26-target full suite; endpoint-free-check is #15
+just actionlint-check            # CT-01 future-gate/source contract
 nix develop --command just check # if tools are not on PATH
 ```
+
+CT-01 has no live `.github/workflows/validate.yml` while its runner-group and
+fork-isolation decision is on HOLD. `just actionlint-check` deliberately
+selects no runner: it validates the current 26-target census, self-tests the
+future workflow contract, and, once `validate.yml` exists, requires that
+workflow to run the complete `just check` and `just actionlint-check`
+entrypoints.
 
 `just check` parses all workflow/action YAML + JSON schemas, validates
 `tinyland.repo.json`, asserts internal action refs resolve, traverses the

@@ -8,6 +8,9 @@ root := justfile_directory()
 _default:
     @just --list --unsorted
 
+# CT-01 census at this carrier: 26 registered targets; endpoint-free-check is
+# target 15. actionlint remains a separate future PR-gate command so this
+# executable census stays truthful while the runner-group decision is on HOLD.
 # Run all repository-local validation.
 check: yaml-parse json-parse vendored-schema-provenance-check repo-manifest-validate manifest-validate-selftest internal-refs-check js-bazel-runner-contract-check rust-bazel-application-contract-check flywheel-reapi-proof-contract-check restricted-workflow-contract-check runner-group-contract-selftest runner-group-contract-check repo-role-census-contract-selftest repo-role-census-contract-check endpoint-free-check ci-cached-endpoint-free-check cache-backed-optin-contract-check cache-contract-selftest secrets-scan-dir lint-runs-on-selftest lint-runs-on-check no-hosted-runners-selftest no-hosted-runners-check lanes-schema-runner-class-check gf-i09-publisher-contract-check gf-i09-publisher-contract-selftest
     @echo "ci-templates checks passed."
@@ -51,6 +54,14 @@ no-hosted-runners-selftest:
 # spelling fails even if it never writes a hosted label down.
 lanes-schema-runner-class-check:
     cd {{ root }} && python3 scripts/validate-ci-templates.py lanes-schema-runner-class
+
+# CT-01 future PR-gate contract. This deliberately chooses no runner group.
+# Until validate.yml exists, it proves the 26-target/#15 census and its own
+# hostile fixtures, then reports the explicit runner-selection HOLD.
+actionlint-check:
+    cd {{ root }} && actionlint -config-file .github/actionlint.yaml -ignore 'property "labels" is not defined' -ignore 'SC2086:info:8:38: Double quote to prevent globbing and word splitting'
+    cd {{ root }} && python3 scripts/ct-01-validation-contract.py
+    cd {{ root }} && python3 scripts/ct-01-validation-contract.py --self-test
 
 # GF-I09 publisher-only workflow: structural contract plus hostile mutation oracles.
 gf-i09-publisher-contract-check:

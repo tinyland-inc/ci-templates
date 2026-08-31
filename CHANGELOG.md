@@ -113,6 +113,15 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ### Added
 
+- **CT-01 truth and future-gate contract.** The repository-local `just check`
+  census is now documented as 26 executable targets, with
+  `endpoint-free-check` at position 15. `actionlint` is present in the Nix
+  shell and exposed through `just actionlint-check`; that recipe also proves a
+  hostile-mutation static contract requiring any future `validate.yml` to run
+  the complete registered `just check` plus `just actionlint-check`. The
+  workflow itself remains absent while the runner-group/fork-isolation choice
+  is on HOLD; this change selects no runner or environment.
+
 - **GF-I09 release publisher successor.** Adds a new default-off reusable
   workflow with no inputs or secrets. A protected, signed caller push supplies
   one fixed tracked canonical declaration and two fixed Just recipes; caller
@@ -138,7 +147,10 @@ Versioning: [SemVer 2.0](https://semver.org/).
   Sigstore bundles, and is the only source of `published=true`. The verified
   protected caller is the trusted producer; these bindings are not described as
   a sandbox against hostile same-job persistence, which would require a
-  stronger sandbox/RBE producer contract. The runner is the fixed
+  stronger sandbox/RBE producer contract. Caller and publication scope are
+  closed to `Great-Falls-Tool-Bus/gftb-site` and
+  `ghcr.io/great-falls-tool-bus/gftb-site`; OIDC, workflow-source, and registry
+  temporary files use exclusive no-follow creation. The runner is the fixed
   `tinyland-nix` capability class. Registered structural and hostile-mutation
   checks run in `just check`. This is publisher-only: no apply, plan, state
   mutation, controller, endpoint, caller-supplied or durable credential,

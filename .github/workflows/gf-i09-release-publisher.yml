@@ -5,6 +5,10 @@ name: gf-i09-release-publisher
 # without OIDC or package authority. Publish never checks out caller code.
 # Verify has package-read only and is the sole source of published=true.
 #
+# Scope: this carrier accepts only Great-Falls-Tool-Bus/gftb-site and publishes
+# only oci://ghcr.io/great-falls-tool-bus/gftb-site. Overlay publication and
+# independent verification remain separate HOLDs.
+#
 # Threat boundary: the verified protected caller commit is the trusted producer.
 # These digest bindings are not a sandbox against hostile same-job persistence;
 # they make every post-freeze byte change fail independently in both privileged
@@ -153,15 +157,12 @@ jobs:
               raise SystemExit("enabled must be boolean")
           if config["payload_kind"] != "application-release" or config["payload_media_type"] != MEDIA:
               raise SystemExit("payload declaration is not the GF-I09 application release")
-          owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
-          repo_re = re.compile(
-              rf"^oci://ghcr\.io/{re.escape(owner)}/"
-              r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$"
-          )
-          if not isinstance(config["publication_repository"], str) or not repo_re.fullmatch(
-              config["publication_repository"]
-          ):
-              raise SystemExit("publication repository must be tag-free GHCR under the caller owner")
+          expected_caller = "Great-Falls-Tool-Bus/gftb-site"
+          expected_publication = "oci://ghcr.io/great-falls-tool-bus/gftb-site"
+          if os.environ["GITHUB_REPOSITORY"] != expected_caller:
+              raise SystemExit("caller repository is outside the fixed application-publisher scope")
+          if config["publication_repository"] != expected_publication:
+              raise SystemExit("publication repository is outside the fixed application-publisher scope")
           if not isinstance(config["publisher_workflow_ref"], str) or not REF_RE.fullmatch(
               config["publisher_workflow_ref"]
           ):
@@ -619,9 +620,37 @@ jobs:
             and .commit.verification.reason == "valid"
           ' <<<"${commit_json}" >/dev/null
           source_file="${RUNNER_TEMP}/gf-i09-called-workflow.yml"
+          test ! -e "${source_file}"
+          test ! -L "${source_file}"
           gh api -H "Accept: application/vnd.github.raw+json" \
-            "repos/tinyland-inc/ci-templates/contents/.github/workflows/gf-i09-release-publisher.yml?ref=${called_sha}" \
-            > "${source_file}"
+            "repos/tinyland-inc/ci-templates/contents/.github/workflows/gf-i09-release-publisher.yml?ref=${called_sha}" |
+            python3 -c '
+          import os
+          import stat
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          data = sys.stdin.buffer.read()
+          descriptor = os.open(
+              path,
+              os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+              0o600,
+          )
+          with os.fdopen(descriptor, "wb") as handle:
+              handle.write(data)
+              handle.flush()
+              os.fsync(handle.fileno())
+          metadata = path.lstat()
+          if (
+              stat.S_ISLNK(metadata.st_mode)
+              or not stat.S_ISREG(metadata.st_mode)
+              or stat.S_IMODE(metadata.st_mode) != 0o600
+          ):
+              raise SystemExit("called workflow source must be regular, non-symlink, and mode 0600")
+          ' "${source_file}"
+          test -s "${source_file}"
+          test "$(dirname -- "$(realpath -e -- "${source_file}")")" = "$(realpath -e -- "${RUNNER_TEMP}")"
           source_digest="sha256:$(sha256sum "${source_file}" | cut -d' ' -f1)"
           jq --arg digest "${source_digest}" '. + {workflow_source_sha256:$digest}' \
             "${IDENTITY_PATH}" > "${IDENTITY_PATH}.new"
@@ -672,15 +701,38 @@ jobs:
           test -s statement.sigstore.json
 
           publication="$(jq -er .publication.repository publisher-statement.json)"
+          test "${publication}" = "oci://ghcr.io/great-falls-tool-bus/gftb-site"
           repository="${publication#oci://}"
-          case "${repository}" in "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/"*) ;; *) exit 2 ;; esac
+          test "${repository}" = "ghcr.io/great-falls-tool-bus/gftb-site"
           runner_temp="$(realpath -e -- "${RUNNER_TEMP}")"
           registry_config="${runner_temp}/gf-i09-publish-registry-config.json"
           test ! -e "${registry_config}"
           test ! -L "${registry_config}"
-          umask 077
-          printf '{}\n' > "${registry_config}"
-          chmod 0600 "${registry_config}"
+          export GF_I09_REGISTRY_CONFIG="${registry_config}"
+          python3 - <<'PY'
+          import os
+          import stat
+          from pathlib import Path
+
+          path = Path(os.environ["GF_I09_REGISTRY_CONFIG"])
+          descriptor = os.open(
+              path,
+              os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+              0o600,
+          )
+          with os.fdopen(descriptor, "wb") as handle:
+              handle.write(b"{}\n")
+              handle.flush()
+              os.fsync(handle.fileno())
+          metadata = path.lstat()
+          if (
+              stat.S_ISLNK(metadata.st_mode)
+              or not stat.S_ISREG(metadata.st_mode)
+              or stat.S_IMODE(metadata.st_mode) != 0o600
+          ):
+              raise SystemExit("registry config must be regular, non-symlink, and mode 0600")
+          PY
+          unset GF_I09_REGISTRY_CONFIG
           test -f "${registry_config}"
           test ! -L "${registry_config}"
           test "$(dirname -- "$(realpath -e -- "${registry_config}")")" = "${runner_temp}"
@@ -887,6 +939,7 @@ jobs:
           ' <<<"${artifact_json}" >/dev/null
 
           [[ "${REFERENCE}" =~ ^oci://ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]
+          test "${REFERENCE%@*}" = "oci://ghcr.io/great-falls-tool-bus/gftb-site"
           test "${REFERENCE##*@}" = "${DESCRIPTOR}"
           test "${PREPARE_PAYLOAD_DIGEST}" = "${PAYLOAD_DIGEST}"
           repository="${REFERENCE%@*}"
@@ -899,9 +952,31 @@ jobs:
           esac
           test ! -e "${registry_config}"
           test ! -L "${registry_config}"
-          umask 077
-          printf '{}\n' > "${registry_config}"
-          chmod 0600 "${registry_config}"
+          export GF_I09_REGISTRY_CONFIG="${registry_config}"
+          python3 - <<'PY'
+          import os
+          import stat
+          from pathlib import Path
+
+          path = Path(os.environ["GF_I09_REGISTRY_CONFIG"])
+          descriptor = os.open(
+              path,
+              os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+              0o600,
+          )
+          with os.fdopen(descriptor, "wb") as handle:
+              handle.write(b"{}\n")
+              handle.flush()
+              os.fsync(handle.fileno())
+          metadata = path.lstat()
+          if (
+              stat.S_ISLNK(metadata.st_mode)
+              or not stat.S_ISREG(metadata.st_mode)
+              or stat.S_IMODE(metadata.st_mode) != 0o600
+          ):
+              raise SystemExit("registry config must be regular, non-symlink, and mode 0600")
+          PY
+          unset GF_I09_REGISTRY_CONFIG
           test -f "${registry_config}"
           test ! -L "${registry_config}"
           test "$(dirname -- "$(realpath -e -- "${registry_config}")")" = "${runner_temp}"
