@@ -24,8 +24,8 @@
 	},
 	"$defs": {
 		"capability": {
-			"enum": ["rbe-linux-x86_64", "rbe-darwin-aarch64"],
-			"description": "Abstract REAPI capability from GloriousFlywheel Core.dhall. The provider resolves it to a concrete platform and worker supply; this value is never a runner label or resolved gloriousflywheel-rbe-* platform identity."
+			"const": "rbe-linux-x86_64",
+			"description": "The sole GloriousFlywheel v4 REAPI capability implemented by the current resolver and action client. The provider resolves it to concrete platform and worker supply; this value is never a runner label or resolved gloriousflywheel-rbe-* platform identity. Darwin becomes schema-admissible only with its own worker, route, client support, and canary."
 		},
 		"action": {
 			"type": "object",

@@ -42,7 +42,7 @@
     "stay separate, advisory, non-blocking questions."
   ],
   "source_repository": "tinyland-inc/site.scaffold",
-  "source_revision": "b7fea3a3ef5e5a59f1f6bd83153ca6cf98aa6f7f",
+  "source_revision": "17343b0d4e12ded065717ba56cc591c8435378b8",
   "source_revision_note": "Exact held site.scaffold TIN-2130 v4 source commit. This provenance records source identity only; it does not authorize the ci-templates v4 release or site adoption.",
   "files": [
     {
@@ -63,8 +63,8 @@
     {
       "vendored": "schemas/lanes.schema.json",
       "source": "docs/schemas/lanes.schema.json",
-      "sha256": "1c4b99e6b6580e242c1d5b1ee2bf97f345d1e188760d0ee2aeceb722a1bbe92e",
-      "upstream_sha256": "1c4b99e6b6580e242c1d5b1ee2bf97f345d1e188760d0ee2aeceb722a1bbe92e",
+      "sha256": "fdce825085f588cc28b91e583df8c24a9be305c8666338a18c5426a91cd490d0",
+      "upstream_sha256": "fdce825085f588cc28b91e583df8c24a9be305c8666338a18c5426a91cd490d0",
       "state": "identical"
     },
     {

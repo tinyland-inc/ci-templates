@@ -67,9 +67,10 @@ working-tree scan.
 The held v4 carrier is deliberately thin. `.github/lanes.json` declares named
 Bazel `build` or `test` actions, finite workspace labels, and only the
 exactly one abstract REAPI capability defined by GloriousFlywheel `Core.dhall`
-(`rbe-linux-x86_64` or `rbe-darwin-aarch64`) per action. It never names a runner,
-execution pool, resolved platform, endpoint, credential, upload posture, or
-provider concurrency.
+(`rbe-linux-x86_64`) per action. Darwin is not part of the first executable v4
+surface: it becomes admissible only with its own worker, route, client support,
+and canary. The plan never names a runner, execution pool, resolved platform,
+endpoint, credential, upload posture, or provider concurrency.
 
 `spoke-ci-v4.yml` accepts one checked-in action name, checks out exactly
 `github.sha`, then invokes the image-custodied compiled client. For a

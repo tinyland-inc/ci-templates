@@ -17,9 +17,11 @@ Versioning: [SemVer 2.0](https://semver.org/).
   token's signed `sha` claim. The
   vendored schema is an exact
   projection of GloriousFlywheel `Core.dhall`: actions contain only Bazel
-  command, finite targets, and exactly one abstract REAPI capability. Provider
-  pool, runner, resolved platform, endpoint, profile, upload, and fixed
-  concurrency fields were removed from consumer manifests and plans. Inline
+  command, finite targets, and the one currently executable abstract REAPI
+  capability (`rbe-linux-x86_64`). Darwin remains schema-inadmissible until its
+  worker, provider route, client support, and canary exist. Provider pool,
+  runner, resolved platform, endpoint, profile, upload, and fixed concurrency
+  fields were removed from consumer manifests and plans. Inline
   OIDC, token, proxy, sandbox, OCI, cleanup, and fallback orchestration was deleted rather
   than becoming a second scheduler/client implementation. The old lane-env and
   zero-caller public-preview surfaces remain deleted, and the existing central

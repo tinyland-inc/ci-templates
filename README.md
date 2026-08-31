@@ -47,14 +47,16 @@ jobs:
 The held v4 source has no caller-selected runner, execution pool, resolved
 platform, endpoint, profile, upload authority, concurrency cap, or fallback.
 `.github/lanes.json` declares named Bazel commands and finite targets with only
-the abstract `rbe-linux-x86_64` or `rbe-darwin-aarch64` capabilities from
-GloriousFlywheel `Core.dhall`. Consumer overlays declare that demand; the
+the currently executable abstract `rbe-linux-x86_64` capability from
+GloriousFlywheel `Core.dhall`. Darwin is deliberately absent until its worker,
+route, client support, and canary exist. Consumer overlays declare demand; the
 provider resolves private supply.
 
 `spoke-ci-v4.yml` is a thin dispatcher. The caller selects one checked-in
-action name, the workflow checks out the exact pull-request head SHA when
-present (otherwise `github.sha`), and it invokes the compiled client already
-custodied by the v4 runner image:
+action name, the workflow checks out `github.sha`, and it invokes the compiled
+client already custodied by the v4 runner image. For `pull_request`, GitHub
+defines that SHA as the synthetic merge commit; the caller workflow context and
+OIDC `sha` claim describe that same executed source:
 
 ```text
 /usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>

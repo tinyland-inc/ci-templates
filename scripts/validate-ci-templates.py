@@ -174,8 +174,8 @@ def check_v4_action_client_surface() -> bool:
     failures: list[str] = []
 
     required = {
-        "ref: ${{ github.event.pull_request.head.sha || github.sha }}": "exact source checkout",
-        "SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}": "exact source identity",
+        "ref: ${{ github.sha }}": "exact caller-context source checkout",
+        "SOURCE_SHA: ${{ github.sha }}": "exact caller-context source identity",
         "ACTION_NAME: ${{ inputs.action_name }}": "caller-selected action identity",
         "/usr/local/bin/gf-action-client run": "compiled action client",
         "--plan .github/lanes.json": "canonical action plan",
