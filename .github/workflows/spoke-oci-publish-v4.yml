@@ -1,0 +1,175 @@
+name: spoke-oci-publish-v4
+
+# TIN-2130 v4 separates repository-controlled image construction from registry
+# authority. The build job can only produce an inert OCI archive. A fresh,
+# source-blind job is the only packages:write holder and publishes those bytes
+# with an image-custodied client.
+
+on:
+  workflow_call:
+    outputs:
+      published:
+        description: "true only when the event-derived tag resolves to the built digest."
+        value: ${{ jobs.publish.outputs.published || jobs.build.outputs.published }}
+      image_ref:
+        description: Registry-derived digest-qualified reference; empty for a fork skip.
+        value: ${{ jobs.publish.outputs.image_ref }}
+      digest:
+        description: Registry-derived sha256 digest; empty for a fork skip.
+        value: ${{ jobs.publish.outputs.digest }}
+
+permissions:
+  contents: read
+
+# One event-derived tag has one publisher at a time. Re-runs wait rather than
+# cancel a push that may already have committed its manifest.
+concurrency:
+  group: v4-oci-${{ github.repository_id }}-${{ github.event.pull_request.number || 'main' }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: tinyland-nix
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      allowed: ${{ steps.admission.outputs.allowed }}
+      published: ${{ steps.admission.outputs.published }}
+      source_sha: ${{ steps.admission.outputs.source_sha }}
+      artifact_name: ${{ steps.admission.outputs.artifact_name }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_sha256: ${{ steps.bundle.outputs.artifact_sha256 }}
+      image_digest: ${{ steps.bundle.outputs.image_digest }}
+    env:
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    steps:
+      - name: Derive one build and publication identity
+        id: admission
+        shell: bash
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          refuse() { echo "::error::v4 OCI publication refused: $*" >&2; exit 1; }
+          [[ -n "$CALLER_REPOSITORY" && "$CALLER_REPOSITORY" != *$'\r'* && "$CALLER_REPOSITORY" != *$'\n'* ]] || refuse "calling repository is empty or contains CR/LF"
+          lowercase_repository="$(printf '%s' "$CALLER_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          image_repository="ghcr.io/$lowercase_repository"
+          [[ "$image_repository" =~ ^ghcr\.io/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$ ]] || refuse "calling repository cannot form one lowercase GHCR repository"
+
+          source_sha=""
+          image_tag=""
+          remote_upload=false
+          case "$EVENT_NAME" in
+            pull_request)
+              if [[ "$PR_HEAD_REPOSITORY" != "$CALLER_REPOSITORY" ]]; then
+                {
+                  echo "allowed=false"
+                  echo "published=false"
+                  echo "source_sha="
+                  echo "artifact_name="
+                } >>"$GITHUB_OUTPUT"
+                {
+                  echo "### V4 OCI publication skipped"
+                  echo
+                  echo "Fork pull requests receive neither executor work nor package authority and produced no artifact."
+                } >>"$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || refuse "pull-request number is malformed"
+              source_sha="$PR_HEAD_SHA"
+              image_tag="pr-${PR_NUMBER}-sha-${source_sha}"
+              ;;
+            push)
+              [[ "$EVENT_REF" == refs/heads/main ]] || refuse "push publication is admitted only from refs/heads/main"
+              source_sha="$EVENT_SHA"
+              image_tag="main-sha-${source_sha}"
+              remote_upload=true
+              ;;
+            *)
+              refuse "event $EVENT_NAME is not a same-repository pull_request or main push"
+              ;;
+          esac
+
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || refuse "publication source is not one exact commit SHA"
+          [[ "$image_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || refuse "derived image tag is not one legal OCI tag"
+          {
+            echo "allowed=true"
+            echo "published=false"
+            echo "source_sha=$source_sha"
+            echo "remote_upload=$remote_upload"
+            echo "artifact_name=v4-oci-layout-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Check out exact admitted source
+        if: steps.admission.outputs.allowed == 'true'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ steps.admission.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Validate sole attachment authority
+        if: steps.admission.outputs.allowed == 'true'
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v4
+
+      - name: Build fixed inert OCI archive
+        if: steps.admission.outputs.allowed == 'true'
+        id: bundle
+        uses: tinyland-inc/ci-templates/.github/actions/v4-oci-bundle@v4
+        with:
+          remote_upload: ${{ steps.admission.outputs.remote_upload }}
+          artifact_name: ${{ steps.admission.outputs.artifact_name }}
+
+      - name: Upload exact inert OCI archive
+        if: steps.admission.outputs.allowed == 'true'
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ steps.bundle.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+          archive: false
+
+  publish:
+    needs: build
+    if: needs.build.outputs.allowed == 'true'
+    runs-on: tinyland-nix
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: none
+      packages: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      image_ref: ${{ steps.publish.outputs.image_ref }}
+      digest: ${{ steps.publish.outputs.digest }}
+    env:
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    steps:
+      # Deliberately no checkout and no OIDC/Bazel authority in this job.
+      - name: Download exact inert OCI archive by artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/v4-oci-download
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Publish inert bytes through the trusted image client
+        id: publish
+        uses: tinyland-inc/ci-templates/.github/actions/v4-oci-publish@v4
+        with:
+          artifact_path: ${{ runner.temp }}/v4-oci-download/${{ needs.build.outputs.artifact_name }}
+          expected_artifact_sha256: ${{ needs.build.outputs.artifact_sha256 }}
+          transport_artifact_sha256: ${{ needs.build.outputs.artifact_digest }}
+          expected_image_digest: ${{ needs.build.outputs.image_digest }}
+          registry_token: ${{ github.token }}

@@ -1,0 +1,354 @@
+name: v4-oci-bundle
+description: |
+  Build the fixed //:oci_publish_bundle target through the authenticated v4
+  executor profile and package its validated OCI layout as one inert tar. This
+  action has no package token, destination, tag, command, target, or fallback.
+
+inputs:
+  remote_upload:
+    description: "false for same-repository pull requests; true only for main."
+    required: true
+  artifact_name:
+    description: Run-derived inert archive filename.
+    required: true
+
+outputs:
+  artifact_path:
+    description: Exact inert OCI-layout tar path under RUNNER_TEMP.
+    value: ${{ steps.bundle.outputs.artifact_path }}
+  artifact_sha256:
+    description: SHA-256 of the exact inert archive bytes.
+    value: ${{ steps.bundle.outputs.artifact_sha256 }}
+  image_digest:
+    description: Descriptor-validated OCI image digest.
+    value: ${{ steps.bundle.outputs.image_digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build and validate canonical inert OCI layout
+      id: bundle
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        REMOTE_UPLOAD: ${{ inputs.remote_upload }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_REF: ${{ github.ref }}
+        PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+      run: |
+        set -euo pipefail
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        refuse() { echo "::error::v4 OCI bundle refused: $*" >&2; exit 1; }
+
+        read_root_receipt() {
+          local receipt="$1"
+          local label="$2"
+          local receipt_stat receipt_newlines
+          local -a receipt_lines=()
+
+          [[ -f "$receipt" && ! -L "$receipt" ]] || refuse "$label receipt is absent or not a regular file: $receipt"
+          receipt_stat="$(stat -c '%u:%g:%a' "$receipt")"
+          [[ "$receipt_stat" == 0:0:444 ]] || refuse "$label receipt must be root:root mode 0444; got $receipt_stat"
+          receipt_newlines="$(wc -l <"$receipt")"
+          ((receipt_newlines == 1)) || refuse "$label receipt must contain one newline-terminated line"
+          mapfile -t receipt_lines <"$receipt"
+          ((${#receipt_lines[@]} == 1)) || refuse "$label receipt must contain exactly one line"
+          printf '%s\n' "${receipt_lines[0]}"
+        }
+
+        custody_store_tool() {
+          local command_name="$1"
+          local receipt="/etc/tinyland/gf-client-${command_name}-store"
+          local store_path expected_bin public_link gcroot store_mode
+
+          store_path="$(read_root_receipt "$receipt" "$command_name store")"
+          [[ "$store_path" =~ ^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || refuse "$command_name receipt does not name one immutable Nix store output"
+          [[ -d "$store_path" && ! -L "$store_path" ]] || refuse "$command_name receipt store is absent or not a directory"
+          [[ "$(stat -c '%u:%g' "$store_path")" == 0:0 ]] || refuse "$command_name receipt store is not root:root-owned"
+          store_mode="$(stat -c '%a' "$store_path")"
+          (( (8#$store_mode & 8#022) == 0 )) || refuse "$command_name receipt store is group- or other-writable"
+          expected_bin="$store_path/bin/$command_name"
+          [[ -f "$expected_bin" && -x "$expected_bin" ]] || refuse "$command_name receipt does not contain its executable"
+          [[ "$(readlink -f "$expected_bin")" == /nix/store/* ]] || refuse "$command_name executable resolves outside /nix/store"
+          public_link="/usr/local/bin/$command_name"
+          [[ -L "$public_link" ]] || refuse "$command_name public image path is not a symlink"
+          [[ "$(stat -c '%u:%g' "$public_link")" == 0:0 ]] || refuse "$command_name public image symlink is not root:root-owned"
+          [[ "$(readlink "$public_link")" == "$expected_bin" ]] || refuse "$command_name public image symlink disagrees with its receipt"
+          gcroot="/nix/var/nix/gcroots/tinyland-gf-client-$command_name"
+          [[ -L "$gcroot" && "$(readlink -f "$gcroot")" == "$store_path" ]] || refuse "$command_name GC root disagrees with its receipt"
+          [[ "$(stat -c '%u:%g' "$gcroot")" == 0:0 ]] || refuse "$command_name GC root is not root:root-owned"
+          printf '%s\n' "$expected_bin"
+        }
+
+        strict_wrapper_environment() {
+          unset BAZEL_BIN GF_BAZEL_LOCAL_PROOF GF_BAZEL_INJECT_REPOSITORIES
+          unset BAZEL_OUTPUT_USER_ROOT BAZEL_OUTPUT_BASE
+          unset BAZEL_REPOSITORY_CACHE BAZEL_DISTDIR
+          unset GF_BAZEL_REPOSITORY_DISABLE_DOWNLOAD
+          unset BAZEL_REMOTE_MAX_CONNECTIONS
+          unset BAZEL_REMOTE_HEADER BAZEL_REMOTE_CACHE_HEADER BAZEL_REMOTE_EXEC_HEADER
+          unset BAZELISK BAZEL_REAL BAZELISK_BASE_URL BAZELISK_CLEAN
+          unset BAZELISK_FORMAT_URL BAZELISK_GITHUB_TOKEN BAZELISK_HOME
+          unset BAZELISK_HOME_DARWIN BAZELISK_HOME_LINUX BAZELISK_HOME_WINDOWS
+          unset BAZELISK_INCOMPATIBLE_FLAGS BAZELISK_NOJDK
+          unset BAZELISK_SHOW_PROGRESS BAZELISK_SHUTDOWN
+          unset BAZELISK_SKIP_WRAPPER BAZELISK_USER_AGENT BAZELISK_VERIFY_SHA256
+          unset USE_BAZEL_FALLBACK_VERSION USE_BAZEL_VERSION
+          export BAZEL_BIN="$bazel_bin"
+          export BAZELISK_SKIP_WRAPPER=1
+          export GF_FLYWHEEL_LOCAL_ENV_MODE=forbid
+          export GF_BAZEL_JOBS=4
+          export GF_BAZEL_REMOTE_UPLOAD="$REMOTE_UPLOAD"
+          export GF_BAZEL_REMOTE_EXECUTION_PLATFORM=gloriousflywheel-rbe-linux-x86_64
+        }
+
+        [[ "$ARTIFACT_NAME" == "v4-oci-layout-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar" ]] || refuse "artifact filename is not the run-derived canonical name"
+        case "$EVENT_NAME" in
+          pull_request)
+            [[ "$PR_HEAD_REPOSITORY" == "$GITHUB_REPOSITORY" ]] || refuse "fork pull requests cannot build a publication artifact"
+            [[ "$REMOTE_UPLOAD" == false ]] || refuse "pull-request builds must set GF_BAZEL_REMOTE_UPLOAD=false"
+            ;;
+          push)
+            [[ "$EVENT_REF" == refs/heads/main && "$REMOTE_UPLOAD" == true ]] || refuse "only a main push may set GF_BAZEL_REMOTE_UPLOAD=true"
+            ;;
+          *) refuse "unsupported build event: $EVENT_NAME" ;;
+        esac
+        for tool in jq stat wc id readlink mktemp rm mkdir find python3; do
+          command -v "$tool" >/dev/null || refuse "required preinstalled tool is absent: $tool"
+        done
+        [[ -x /usr/bin/sha256sum ]] || refuse "required system SHA-256 executable is absent: /usr/bin/sha256sum"
+        [[ -x /usr/bin/tar ]] || refuse "required system tar executable is absent: /usr/bin/tar"
+        /usr/bin/tar --version | grep -q 'GNU tar' || refuse "deterministic archive creation requires image-supplied GNU tar"
+        [[ -f tinyland.repo.json && ! -L tinyland.repo.json ]] || refuse "tinyland.repo.json is absent or not a regular file"
+        [[ "$(jq -er '.enrollment.executionPool' tinyland.repo.json)" == tinyland-nix ]] || refuse "tinyland.repo.json enrollment.executionPool must be tinyland-nix"
+        [[ "$(jq -er '.enrollment.substrateMode' tinyland.repo.json)" == executor-backed ]] || refuse "tinyland.repo.json enrollment.substrateMode must be executor-backed"
+        [[ ! -e .env.flywheel.local && ! -L .env.flywheel.local ]] || refuse "v4 forbids the workspace .env.flywheel.local fallback fixture"
+        [[ -n "${GF_REAPI_TOKEN_EXCHANGE_ENDPOINT:-}" ]] || refuse "runtime token-exchange authority is absent"
+        [[ -n "${GF_REAPI_CACHE_FRONTDOOR_ENDPOINT:-}" ]] || refuse "runtime executor front-door authority is absent"
+        [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]] || refuse "GitHub OIDC environment is absent; permissions.id-token must remain write"
+
+        oidc_profile_bin=/usr/local/bin/flywheel-github-oidc-profile
+        [[ -f "$oidc_profile_bin" && ! -L "$oidc_profile_bin" && -x "$oidc_profile_bin" ]] || refuse "OIDC profile helper is absent or not the regular image-installed executable"
+        [[ "$(stat -c '%u:%g:%a' "$oidc_profile_bin")" == 0:0:555 ]] || refuse "OIDC profile helper must be root:root mode 0555"
+        oidc_profile_sha256="$(read_root_receipt /etc/tinyland/gf-client-flywheel-github-oidc-profile-sha256 "OIDC profile helper")"
+        [[ "$oidc_profile_sha256" =~ ^[0-9a-f]{64}$ ]] || refuse "OIDC profile helper receipt is not one lowercase SHA-256 digest"
+        oidc_profile_sha256_record="$(/usr/bin/sha256sum "$oidc_profile_bin")" || refuse "OIDC profile helper could not be hashed"
+        [[ "${oidc_profile_sha256_record%% *}" == "$oidc_profile_sha256" ]] || refuse "OIDC profile helper digest disagrees with its image receipt"
+        client_source_hash="$(read_root_receipt /etc/tinyland/gf-client-tools-source-nar-hash "client-tools source")"
+        [[ "$client_source_hash" =~ ^sha256-[A-Za-z0-9+/]{43}=$ ]] || refuse "client-tools source receipt is not one SHA-256 SRI hash"
+        credhelper_bin="$(custody_store_tool gf-reapi-credhelper)"
+        flywheel_verify_bin="$(custody_store_tool flywheel-verify)"
+        gloriousflywheel_bazel_bin="$(custody_store_tool gloriousflywheel-bazel)"
+        bazel_bin="$(read_root_receipt /etc/tinyland/ci-bazelisk-bin "runner image Bazelisk")"
+        [[ "$bazel_bin" =~ ^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-bazelisk-[A-Za-z0-9][A-Za-z0-9._+~-]*/bin/bazelisk$ ]] || refuse "runner image Bazelisk receipt does not name the exact packaged /nix/store executable"
+        [[ -f "$bazel_bin" && ! -L "$bazel_bin" && -x "$bazel_bin" ]] || refuse "runner image Bazelisk path is not a regular executable"
+        [[ "$(stat -c '%u:%g' "$bazel_bin")" == 0:0 ]] || refuse "runner image Bazelisk executable is not root:root-owned"
+        bazel_bin_mode="$(stat -c '%a' "$bazel_bin")"
+        (( (8#$bazel_bin_mode & 8#022) == 0 )) || refuse "runner image Bazelisk executable is group- or other-writable"
+
+        umask 077
+        token_dir="$(mktemp -d "${RUNNER_TEMP:?}/gf-reapi-v4-oci-build.XXXXXX")"
+        profile_file="$token_dir/profile.env"
+        oidc_outputs="$token_dir/oidc.outputs"
+        renewer_pid=""
+        cleanup() {
+          local status=$?
+          trap - EXIT
+          if [[ "$renewer_pid" =~ ^[1-9][0-9]*$ ]]; then
+            kill "$renewer_pid" >/dev/null 2>&1 || true
+            wait "$renewer_pid" 2>/dev/null || true
+          fi
+          rm -rf -- "$token_dir"
+          exit "$status"
+        }
+        trap cleanup EXIT
+
+        unset GF_FLYWHEEL_PROFILE_STATE GF_BAZEL_SUBSTRATE_MODE GF_BAZEL_LOCAL_PROOF
+        unset GF_FRONTDOOR_ENDPOINT
+        unset BAZEL_REMOTE_CACHE BAZEL_REMOTE_EXECUTOR BAZEL_REMOTE_INSTANCE_NAME
+        unset BAZEL_CREDENTIAL_HELPER GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE
+        unset BAZEL_REMOTE_HEADER BAZEL_REMOTE_CACHE_HEADER BAZEL_REMOTE_EXEC_HEADER
+        strict_wrapper_environment
+        "$oidc_profile_bin" \
+          --request executor \
+          --frontdoor-endpoint "$GF_REAPI_CACHE_FRONTDOOR_ENDPOINT" \
+          --credential-helper-bin "$credhelper_bin" \
+          --token-dir "$token_dir" \
+          --profile-out "$profile_file" \
+          --github-output "$oidc_outputs" \
+          --renew-background >/dev/null
+        renewer_pid="$(sed -n 's/^renewer_pid=//p' "$oidc_outputs")"
+        [[ "$renewer_pid" =~ ^[1-9][0-9]*$ ]] || refuse "OIDC profile helper did not return one background renewer PID"
+        unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+        [[ -f "$profile_file" && ! -L "$profile_file" ]] || refuse "minted profile is absent or not a regular file"
+        [[ "$(stat -c '%u:%a' "$profile_file")" == "$(id -u):600" ]] || refuse "minted profile must be runner-owned mode 0600"
+        # shellcheck source=/dev/null
+        source "$profile_file"
+        [[ "${GF_FLYWHEEL_PROFILE_STATE:-}" == executor-backed ]] || refuse "minted profile state is not executor-backed"
+        [[ "${GF_BAZEL_SUBSTRATE_MODE:-}" == executor-backed ]] || refuse "minted Bazel mode is not executor-backed"
+        [[ -n "${BAZEL_REMOTE_CACHE:-}" && "$BAZEL_REMOTE_CACHE" == "${BAZEL_REMOTE_EXECUTOR:-}" ]] || refuse "executor profile must use one non-empty REAPI cache/executor authority"
+        [[ -n "${BAZEL_REMOTE_INSTANCE_NAME:-}" ]] || refuse "token exchange returned no tenant instance"
+        token_file="${GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE:-}"
+        [[ "$token_file" == "$token_dir/gf-reapi-cell-token.jwt" && -f "$token_file" && ! -L "$token_file" && -s "$token_file" ]] || refuse "credential-helper token file is absent or outside the minted profile directory"
+        [[ "$(stat -c '%u:%a' "$token_file")" == "$(id -u):600" ]] || refuse "credential-helper token file must be runner-owned mode 0600"
+        credential_helper="${BAZEL_CREDENTIAL_HELPER:-}"
+        [[ -n "$credential_helper" && "$credential_helper" != *$'\n'* && "$credential_helper" != *$'\r'* && "$credential_helper" == *=* ]] || refuse "minted profile must contain exactly one scoped credential-helper entry"
+        [[ "${credential_helper#*=}" == "$credhelper_bin" ]] || refuse "minted profile does not wire exactly the custody-validated gf-reapi-credhelper"
+        strict_wrapper_environment
+        "$flywheel_verify_bin"
+
+        "$gloriousflywheel_bazel_bin" build \
+          //:oci_publish_bundle \
+          //:oci_publish_bundle.digest \
+          --remote_download_outputs=all \
+          --lockfile_mode=error
+        layout="$(readlink -f bazel-bin/oci_publish_bundle)" || refuse "//:oci_publish_bundle did not produce bazel-bin/oci_publish_bundle"
+        digest_file="$(readlink -f bazel-bin/oci_publish_bundle.json.sha256)" || refuse "//:oci_publish_bundle.digest did not produce bazel-bin/oci_publish_bundle.json.sha256"
+        [[ -d "$layout" && ! -L "$layout" ]] || refuse "//:oci_publish_bundle output is not one OCI layout directory"
+        [[ -f "$digest_file" && ! -L "$digest_file" ]] || refuse "//:oci_publish_bundle.digest output is not one regular file"
+
+        image_digest="$(LAYOUT="$layout" DIGEST_FILE="$digest_file" python3 - <<'PY'
+        import hashlib
+        import json
+        import os
+        import re
+        import stat
+        from pathlib import Path
+
+        layout = Path(os.environ["LAYOUT"])
+        digest_file = Path(os.environ["DIGEST_FILE"])
+        digest_re = re.compile(r"sha256:[0-9a-f]{64}")
+
+        for root, dirs, files in os.walk(layout, followlinks=False):
+            for name in dirs + files:
+                path = Path(root, name)
+                mode = path.lstat().st_mode
+                if stat.S_ISLNK(mode) or not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+                    raise SystemExit(f"OCI layout contains a symlink or special file: {path.relative_to(layout)}")
+
+        def read_json(path: Path):
+            if not path.is_file() or path.is_symlink():
+                raise SystemExit(f"missing regular OCI JSON file: {path.relative_to(layout)}")
+            return json.loads(path.read_text(encoding="utf-8"))
+
+        if read_json(layout / "oci-layout") != {"imageLayoutVersion": "1.0.0"}:
+            raise SystemExit("oci-layout must be exactly OCI layout 1.0.0")
+        index = read_json(layout / "index.json")
+        manifests = index.get("manifests")
+        if index.get("schemaVersion") != 2 or not isinstance(manifests, list) or len(manifests) != 1:
+            raise SystemExit("OCI index must carry exactly one manifest")
+
+        referenced = set()
+
+        def descriptor_blob(descriptor, label, expected_media_type=None, layer=False):
+            if not isinstance(descriptor, dict):
+                raise SystemExit(f"{label} descriptor is not an object")
+            digest = descriptor.get("digest")
+            size = descriptor.get("size")
+            media_type = descriptor.get("mediaType")
+            if not isinstance(digest, str) or digest_re.fullmatch(digest) is None:
+                raise SystemExit(f"{label} descriptor digest is malformed")
+            if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+                raise SystemExit(f"{label} descriptor size is malformed")
+            if expected_media_type is not None and media_type != expected_media_type:
+                raise SystemExit(f"{label} descriptor has the wrong media type")
+            if layer and media_type not in {
+                "application/vnd.oci.image.layer.v1.tar",
+                "application/vnd.oci.image.layer.v1.tar+gzip",
+                "application/vnd.oci.image.layer.v1.tar+zstd",
+            }:
+                raise SystemExit(f"{label} descriptor has a non-OCI layer media type")
+            path = layout / "blobs" / "sha256" / digest.removeprefix("sha256:")
+            if not path.is_file() or path.is_symlink():
+                raise SystemExit(f"{label} descriptor blob is absent or not regular")
+            hasher = hashlib.sha256()
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            if path.stat().st_size != size or hasher.hexdigest() != digest.removeprefix("sha256:"):
+                raise SystemExit(f"{label} descriptor bytes disagree with size/digest")
+            referenced.add(path.relative_to(layout).as_posix())
+            return path
+
+        manifest_descriptor = manifests[0]
+        if manifest_descriptor.get("mediaType") != "application/vnd.oci.image.manifest.v1+json":
+            raise SystemExit("OCI index must reference one OCI image manifest")
+        manifest = json.loads(descriptor_blob(
+            manifest_descriptor,
+            "manifest",
+            "application/vnd.oci.image.manifest.v1+json",
+        ).read_text(encoding="utf-8"))
+        if manifest.get("schemaVersion") != 2 or manifest.get("mediaType") != "application/vnd.oci.image.manifest.v1+json":
+            raise SystemExit("image manifest has the wrong schema or media type")
+        descriptor_blob(
+            manifest.get("config"),
+            "config",
+            "application/vnd.oci.image.config.v1+json",
+        )
+        layers = manifest.get("layers")
+        if not isinstance(layers, list):
+            raise SystemExit("image manifest layers must be an array")
+        for index_number, layer in enumerate(layers):
+            descriptor_blob(layer, f"layer[{index_number}]", layer=True)
+
+        actual_blobs = {
+            path.relative_to(layout).as_posix()
+            for path in (layout / "blobs" / "sha256").iterdir()
+            if path.is_file() and not path.is_symlink()
+        }
+        if actual_blobs != referenced:
+            raise SystemExit("OCI layout contains unreferenced or missing blobs")
+        allowed_files = {"oci-layout", "index.json"} | referenced
+        actual_files = {
+            path.relative_to(layout).as_posix()
+            for path in layout.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        }
+        if actual_files != allowed_files:
+            raise SystemExit("OCI layout contains an unexpected file")
+        actual_dirs = {
+            path.relative_to(layout).as_posix()
+            for path in layout.rglob("*")
+            if path.is_dir() and not path.is_symlink()
+        }
+        if actual_dirs != {"blobs", "blobs/sha256"}:
+            raise SystemExit("OCI layout contains an unexpected directory")
+
+        image_digest = manifest_descriptor["digest"]
+        recorded = digest_file.read_text(encoding="utf-8").strip()
+        if recorded != image_digest:
+            raise SystemExit("generated .digest target disagrees with the validated OCI descriptor")
+        print(image_digest)
+        PY
+        )" || refuse "//:oci_publish_bundle failed complete OCI descriptor validation"
+        [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || refuse "validated OCI image digest is malformed"
+
+        artifact_path="${RUNNER_TEMP}/${ARTIFACT_NAME}"
+        [[ ! -e "$artifact_path" && ! -L "$artifact_path" ]] || refuse "canonical artifact path already exists"
+        TZ=UTC /usr/bin/tar \
+          --sort=name \
+          --mtime='@0' \
+          --owner=0 \
+          --group=0 \
+          --numeric-owner \
+          --format=gnu \
+          -C "$layout" \
+          -cf "$artifact_path" .
+        [[ -f "$artifact_path" && ! -L "$artifact_path" && -s "$artifact_path" ]] || refuse "deterministic OCI archive was not created"
+        artifact_sha256="$(/usr/bin/sha256sum "$artifact_path")"
+        artifact_sha256="${artifact_sha256%% *}"
+        [[ "$artifact_sha256" =~ ^[0-9a-f]{64}$ ]] || refuse "OCI archive SHA-256 is malformed"
+        {
+          echo "artifact_path=$artifact_path"
+          echo "artifact_sha256=sha256:$artifact_sha256"
+          echo "image_digest=$image_digest"
+        } >>"$GITHUB_OUTPUT"
+        {
+          echo "### V4 inert OCI bundle"
+          echo
+          echo "- Target: \`//:oci_publish_bundle\`"
+          echo "- Manifest: \`$image_digest\`"
+          echo "- Archive: \`sha256:$artifact_sha256\`"
+          echo "- Cache upload: \`$REMOTE_UPLOAD\`"
+          echo "- Registry authority: none"
+        } >>"$GITHUB_STEP_SUMMARY"

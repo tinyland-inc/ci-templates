@@ -17,6 +17,10 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
   Playwright) via `spoke-ci.yml` reusable workflow.
 - **Breaking v4 action-fabric CI** via `spoke-ci-v4.yml`: one canonical repo
   manifest, one executable action plan, and a fail-closed executor profile.
+- **Typed v4 OCI publication** via `spoke-oci-publish-v4.yml`: one canonical
+  inert `//:oci_publish_bundle` layout, an event-derived caller repository/tag,
+  and a source-blind image-custodied publisher; no Docker/Buildx/DinD or
+  arbitrary command surface.
 - **Static projection snapshot refresh** via `spoke-pulse-ingest.yml`.
 - **GloriousFlywheel REAPI binding** via the `flywheel-bazel` composite
   action.
@@ -76,6 +80,29 @@ setting `BAZELISK_SKIP_WRAPPER` prevents an inherited launcher or repository
 and the `.bazelversion`-selected cold Bazel fetch remain unresolved input
 surfaces. The carrier's no-downloader condition therefore remains a TIN-4248
 release blocker; source validation here must not be read as closing it.
+
+OCI publication is a separate reusable workflow rather than an action-plan
+command and takes no caller input. It derives lowercase
+`ghcr.io/<github.repository>` plus `pr-<number>-sha-<full-head-sha>` for a
+trusted same-repository pull request or `main-sha-<full-sha>` for a main push.
+Forks are recorded as skipped and expose no artifact or digest. The build job
+has no package authority: it checks out the exact admitted SHA, executes only
+the fixed `//:oci_publish_bundle` target through the executor client, disables
+remote cache writes on PRs, validates the complete OCI descriptor/blob closure,
+and uploads one deterministic inert tar by exact artifact ID. A fresh
+`packages: write` job has no checkout, OIDC, or Bazel authority. It downloads
+without extracting, independently revalidates the archive and event identity,
+then uses the root-custodied `skopeo` client to create or idempotently confirm
+the controlled SHA tag. A different existing digest, registry ambiguity, or
+missing client is a refusal. The returned digest comes from a post-publication
+GHCR Registry v2 response. GHCR tag immutability itself is an external package
+governance limit, not something this workflow claims.
+
+The expected consumer target is an `oci_image` named
+`//:oci_publish_bundle`; rules_oci supplies
+`//:oci_publish_bundle.digest`. The runner image does not yet carry the
+required root-custodied `skopeo` receipt, so TIN-4247 / GF#1711 is an explicit
+release dependency. This workflow never downloads or installs an image client.
 
 Your spoke needs `.github/lanes.json` validating against
 [`schemas/lanes.schema.json`](./schemas/lanes.schema.json). New spokes should
@@ -224,6 +251,7 @@ Set `attic-public-read: "true"` on any of the three to opt in. What flips:
 | **`rust-bazel-application.yml`** | Opt-in/default-off native Darwin/Linux Rust application validation with Bazel-only rustfmt, clippy, build, unit, integration, and package targets; cache reads are runtime-attached and writes require an explicitly enabled protected push ref. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
 | **`spoke-ci-v4.yml`** | Breaking executor-only action fabric: fixed `tinyland-nix` admission, manifest-authoritative attachment, OIDC profile mint, and complete Bazel-plan execution through preinstalled Flywheel tools. |
+| **`spoke-oci-publish-v4.yml`** | Typed v4 GHCR publisher: no-package `//:oci_publish_bundle` build, exact inert-artifact transfer, source-blind root-custodied `skopeo`, and registry-derived digest output; forks produce no artifact. |
 | **`spoke-ci-restricted.yml`** | Explicit private-repo opt-in variant of `spoke-ci.yml`; every job requires an owner `-infra` runner group plus its reviewed capability label. |
 | **`spoke-public-preview.yml`** *(deprecated)* | Reusable public/client preview dispatcher for Cloudflare Access-gated aliases. The owner overlay is the preview producer now. |
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |

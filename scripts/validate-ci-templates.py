@@ -143,7 +143,10 @@ def validate_manifest() -> int:
 # fixed and v3.0.0 shipped. The fix reached nobody. The check below used to
 # discard the ref entirely (`for action, _ref in …`), so nothing said so.
 CURRENT_RELEASE_LINE = "v3"
-V4_FOUNDATION_WORKFLOW = ".github/workflows/spoke-ci-v4.yml"
+V4_FOUNDATION_WORKFLOWS = {
+    ".github/workflows/spoke-ci-v4.yml",
+    ".github/workflows/spoke-oci-publish-v4.yml",
+}
 
 # Files still on the previous line, with the ticket that unfreezes them. This is
 # a debt ledger, not a permanent exemption: an entry means "known stale", and a
@@ -159,8 +162,119 @@ STALE_INTERNAL_REF_FILES = {
 }
 
 
+def check_v4_oci_trust_split() -> bool:
+    """Assert the v4 build/publish authority split without simulating GitHub.
+
+    Claim: the only package writer is source-blind and consumes one validated
+    inert archive built without PR cache-write authority. Retirement: delete
+    this textual projection when a typed workflow/effect schema enforces that
+    authority split directly, or when the v4 OCI surface itself is removed.
+    """
+
+    workflow_path = ROOT / ".github/workflows/spoke-oci-publish-v4.yml"
+    bundle_path = ROOT / ".github/actions/v4-oci-bundle/action.yml"
+    publish_path = ROOT / ".github/actions/v4-oci-publish/action.yml"
+    paths = (workflow_path, bundle_path, publish_path)
+    if any(not path.is_file() for path in paths):
+        for path in paths:
+            if not path.is_file():
+                print(f"{path.relative_to(ROOT)}: missing v4 OCI trust-split surface", file=sys.stderr)
+        return False
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+    bundle = bundle_path.read_text(encoding="utf-8")
+    publisher = publish_path.read_text(encoding="utf-8")
+    try:
+        build_job = workflow.split("\n  build:\n", maxsplit=1)[1].split(
+            "\n  publish:\n", maxsplit=1
+        )[0]
+        publish_job = workflow.split("\n  publish:\n", maxsplit=1)[1]
+        call_surface = workflow.split("\npermissions:\n", maxsplit=1)[0]
+    except IndexError:
+        print(f"{workflow_path.relative_to(ROOT)}: build/publish job split is absent", file=sys.stderr)
+        return False
+
+    failures: list[str] = []
+
+    def require(document: str, snippet: str, claim: str) -> None:
+        if snippet not in document:
+            failures.append(f"missing {claim}")
+
+    if "inputs:" in call_surface:
+        failures.append("workflow_call must expose no caller-selected repository, tag, or target input")
+    if workflow.count("packages: write") != 1 or "packages: write" not in publish_job:
+        failures.append("packages:write must occur exactly once and only in the publisher job")
+    if "packages:" in build_job:
+        failures.append("build job must have no packages permission")
+    if workflow.count("id-token: write") != 1 or "id-token: write" not in build_job:
+        failures.append("id-token:write must occur exactly once and only in the build job")
+    for forbidden in (
+        "actions/checkout@",
+        "repo-manifest-validate",
+        "v4-oci-bundle",
+        "id-token: write",
+    ):
+        if forbidden in publish_job:
+            failures.append(f"publisher job must not carry source/build authority: {forbidden}")
+    for forbidden in (
+        "gloriousflywheel-bazel",
+        "ACTIONS_ID_TOKEN",
+        "oidc_profile_bin",
+        "flywheel_verify_bin",
+        "bazelisk",
+    ):
+        if forbidden in publisher:
+            failures.append(f"publisher composite must remain source-blind and Bazel-free: {forbidden}")
+    for forbidden in ("image_repository:", "image_tag:", "remote_tags", "oci_push"):
+        if forbidden in call_surface or forbidden in publisher.split("outputs:", maxsplit=1)[0]:
+            failures.append(f"caller-selected publication routing is forbidden: {forbidden}")
+
+    required_workflow = {
+        "archive: false": "single-file artifact transport",
+        "overwrite: false": "non-overwriting artifact upload",
+        "artifact-ids:": "exact artifact-ID download",
+        "skip-decompress: true": "source-blind no-extraction download",
+        "digest-mismatch: error": "artifact transport digest enforcement",
+        "cancel-in-progress: false": "same-tag serialization without cancellation",
+        "contents: none": "publisher source-read refusal",
+    }
+    for snippet, claim in required_workflow.items():
+        require(workflow, snippet, claim)
+
+    required_bundle = {
+        "GF_BAZEL_REMOTE_UPLOAD=\"$REMOTE_UPLOAD\"": "event-derived cache upload posture",
+        "pull-request builds must set GF_BAZEL_REMOTE_UPLOAD=false": "PR cache-write refusal",
+        "only a main push may set GF_BAZEL_REMOTE_UPLOAD=true": "trusted-main cache-write admission",
+        "//:oci_publish_bundle.digest": "fixed generated digest target",
+        "--remote_download_outputs=all": "complete inert layout materialization",
+        "--lockfile_mode=error": "caller lockfile-policy downgrade refusal",
+        "unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN": "OIDC token removal before Bazel",
+    }
+    for snippet, claim in required_bundle.items():
+        require(bundle, snippet, claim)
+
+    required_publisher = {
+        "custody_store_tool skopeo": "image-custodied OCI client",
+        "oci-archive:$ARTIFACT_PATH": "non-executed inert archive source",
+        "--preserve-digests": "digest-preserving registry copy",
+        "--digestfile": "client-derived copy digest",
+        "only 200 or 404 is admissible": "fail-closed registry preflight",
+        "controlled SHA tag already exists at a different digest": "different-digest refusal",
+        "GF client-image dependency TIN-4247 / GF#1711": "named unmet skopeo dependency",
+    }
+    for snippet, claim in required_publisher.items():
+        require(publisher, snippet, claim)
+
+    if failures:
+        for failure in failures:
+            print(f"{workflow_path.relative_to(ROOT)}: {failure}", file=sys.stderr)
+        return False
+    print("v4 OCI build/publish trust split is source-blind and fail-closed")
+    return True
+
+
 def check_internal_refs() -> int:
-    ok = True
+    ok = check_v4_oci_trust_split()
     action_pattern = re.compile(
         r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@([^\s#]+)"
     )
@@ -170,7 +284,7 @@ def check_internal_refs() -> int:
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
-        expected_release_line = "v4" if str(rel) == V4_FOUNDATION_WORKFLOW else CURRENT_RELEASE_LINE
+        expected_release_line = "v4" if str(rel) in V4_FOUNDATION_WORKFLOWS else CURRENT_RELEASE_LINE
         for action, ref in action_pattern.findall(text):
             action_yml = ROOT / ".github/actions" / action / "action.yml"
             if not action_yml.exists():

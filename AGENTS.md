@@ -64,8 +64,8 @@ working-tree scan.
 
 ## V4 source foundation (TIN-2130)
 
-TIN-2130 comment `a7fb6f87-5d45-45a6-bd99-136c4f461fbd` authorizes exactly one
-new `spoke-ci-v4.yml` together with deletion of both obsolete lane-env
+TIN-2130 comment `a7fb6f87-5d45-45a6-bd99-136c4f461fbd` authorizes the
+`spoke-ci-v4.yml` foundation together with deletion of both obsolete lane-env
 workflows and their orphaned validator logic. V4 fixes forge admission at
 `tinyland-nix`, reads attachment intent only from `tinyland.repo.json`, accepts
 only `executor-backed`, and executes the complete action map through the
@@ -83,6 +83,24 @@ installer, hosted, or local fallback. Source is not release, adoption, apply,
 or RBE proof; only
 independently joined nonzero remote-action evidence supports a remote-execution
 claim.
+
+The held #156 source co-move keeps OCI publication outside that build/test
+plan. `spoke-oci-publish-v4.yml` derives the caller's own GHCR repository and
+one SHA-qualified tag from a same-repository pull request or exact main push;
+the caller supplies neither. Its no-package build job materializes only the
+fixed `//:oci_publish_bundle` OCI layout through the executor profile (PR cache
+upload false; trusted main true), validates every descriptor/blob, and uploads
+one deterministic inert tar. A fresh job with no checkout, OIDC, or Bazel
+authority is the sole `packages: write` holder. It downloads that exact
+artifact ID without decompression, revalidates the archive, and uses only the
+root-custodied `skopeo` client. An existing equal digest is idempotent; an
+existing different digest refuses. GitHub concurrency serializes the
+controlled SHA tag, but GHCR package-level tag immutability remains external to
+this workflow. Forks are explicit no-artifact skips. There is no
+caller-selected command, target, runner, endpoint, tag, repository,
+Docker/daemon, hosted, local, or cache-only path. Publication remains release
+blocked until TIN-4247 / GF#1711 bakes and receipts `skopeo`; the workflow never
+fetches or installs it.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 

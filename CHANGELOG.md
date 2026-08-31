@@ -19,8 +19,25 @@ Versioning: [SemVer 2.0](https://semver.org/).
   output/external-input environment injection, applies the TIN-4026 P2d
   `jobs=4` client cap, and preloads the complete plan into readonly shell memory before
   enforcing an exact nonzero planned/executed action count.
+  Added the separate typed `spoke-oci-publish-v4.yml` boundary: it admits only
+  trusted same-repository PR heads or main pushes and derives the only legal
+  GHCR repository/tag from that event. Its package-free build job invokes the
+  fixed `//:oci_publish_bundle` through the executor profile, keeps PR cache
+  upload disabled, completely validates the OCI layout, and uploads one
+  deterministic inert archive. A fresh source-blind job is the sole
+  `packages: write` holder: it downloads by exact artifact ID without
+  extraction, revalidates every descriptor/blob and identity, and uses only a
+  root-custodied `skopeo` client. Same-digest re-entry is idempotent;
+  different-digest or ambiguous registry state refuses; the output digest is
+  read back from GHCR. Forks explicitly skip with no artifact. It exposes no
+  command, target, runner, endpoint, destination, tag, Docker/Buildx/DinD,
+  hosted, local, or cache-only escape. Publication remains blocked on the
+  TIN-4247 / GF#1711 `skopeo` image receipt and never installs a client.
   Removed the two obsolete lane-env workflows and their orphaned validator
-  logic, so the v4 co-move is a net workflow/validation contraction. V3 remains
+  logic. The two v4 workflows total 435 lines against 456 removed workflow
+  lines, so the co-move remains a 21-line workflow contraction; the central
+  validator remains a 15-line contraction against main even after the narrow
+  trust-split assertion. V3 remains
   unmodified, and no release or runtime adoption is implied.
 
 ### Removed

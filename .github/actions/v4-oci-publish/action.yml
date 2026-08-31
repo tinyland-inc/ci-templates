@@ -1,0 +1,374 @@
+name: v4-oci-publish
+description: |
+  Publish one already-built inert OCI archive with the image-custodied skopeo
+  client. This action never checks out or executes caller source and has no
+  Bazel, command, target, runner, endpoint, destination, tag, or fallback input.
+
+inputs:
+  artifact_path:
+    description: Run-derived downloaded OCI archive path under RUNNER_TEMP.
+    required: true
+  expected_artifact_sha256:
+    description: Build-job SHA-256 for the exact inert archive bytes.
+    required: true
+  transport_artifact_sha256:
+    description: Bare artifact-service SHA-256 for the transported bytes.
+    required: true
+  expected_image_digest:
+    description: Descriptor-validated image digest emitted by the build job.
+    required: true
+  registry_token:
+    description: Job-scoped GitHub token carrying packages:write.
+    required: true
+
+outputs:
+  published:
+    description: "true only when the event-derived tag resolves to the built digest."
+    value: ${{ steps.publish.outputs.published }}
+  image_ref:
+    description: Registry-derived digest-qualified immutable GHCR reference.
+    value: ${{ steps.publish.outputs.image_ref }}
+  digest:
+    description: Registry-derived sha256 digest.
+    value: ${{ steps.publish.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate and publish inert OCI bytes
+      id: publish
+      shell: bash
+      env:
+        ARTIFACT_PATH: ${{ inputs.artifact_path }}
+        EXPECTED_ARTIFACT_SHA256: ${{ inputs.expected_artifact_sha256 }}
+        TRANSPORT_ARTIFACT_SHA256: ${{ inputs.transport_artifact_sha256 }}
+        EXPECTED_IMAGE_DIGEST: ${{ inputs.expected_image_digest }}
+        REGISTRY_TOKEN: ${{ inputs.registry_token }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_REF: ${{ github.ref }}
+        EVENT_SHA: ${{ github.sha }}
+        PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        refuse() { echo "::error::v4 OCI publication refused: $*" >&2; exit 1; }
+
+        read_root_receipt() {
+          local receipt="$1"
+          local label="$2"
+          local receipt_stat receipt_newlines
+          local -a receipt_lines=()
+
+          [[ -f "$receipt" && ! -L "$receipt" ]] || refuse "$label receipt is absent or not a regular file: $receipt (GF client-image dependency TIN-4247 / GF#1711)"
+          receipt_stat="$(stat -c '%u:%g:%a' "$receipt")"
+          [[ "$receipt_stat" == 0:0:444 ]] || refuse "$label receipt must be root:root mode 0444; got $receipt_stat"
+          receipt_newlines="$(wc -l <"$receipt")"
+          ((receipt_newlines == 1)) || refuse "$label receipt must contain one newline-terminated line"
+          mapfile -t receipt_lines <"$receipt"
+          ((${#receipt_lines[@]} == 1)) || refuse "$label receipt must contain exactly one line"
+          printf '%s\n' "${receipt_lines[0]}"
+        }
+
+        custody_store_tool() {
+          local command_name="$1"
+          local receipt="/etc/tinyland/gf-client-${command_name}-store"
+          local store_path expected_bin public_link gcroot store_mode
+
+          store_path="$(read_root_receipt "$receipt" "$command_name store")"
+          [[ "$store_path" =~ ^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || refuse "$command_name receipt does not name one immutable Nix store output"
+          [[ -d "$store_path" && ! -L "$store_path" ]] || refuse "$command_name receipt store is absent or not a directory"
+          [[ "$(stat -c '%u:%g' "$store_path")" == 0:0 ]] || refuse "$command_name receipt store is not root:root-owned"
+          store_mode="$(stat -c '%a' "$store_path")"
+          (( (8#$store_mode & 8#022) == 0 )) || refuse "$command_name receipt store is group- or other-writable"
+          expected_bin="$store_path/bin/$command_name"
+          [[ -f "$expected_bin" && -x "$expected_bin" ]] || refuse "$command_name receipt does not contain its executable"
+          [[ "$(readlink -f "$expected_bin")" == /nix/store/* ]] || refuse "$command_name executable resolves outside /nix/store"
+          public_link="/usr/local/bin/$command_name"
+          [[ -L "$public_link" ]] || refuse "$command_name public image path is not a symlink"
+          [[ "$(stat -c '%u:%g' "$public_link")" == 0:0 ]] || refuse "$command_name public image symlink is not root:root-owned"
+          [[ "$(readlink "$public_link")" == "$expected_bin" ]] || refuse "$command_name public image symlink disagrees with its receipt"
+          gcroot="/nix/var/nix/gcroots/tinyland-gf-client-$command_name"
+          [[ -L "$gcroot" && "$(readlink -f "$gcroot")" == "$store_path" ]] || refuse "$command_name GC root disagrees with its receipt"
+          [[ "$(stat -c '%u:%g' "$gcroot")" == 0:0 ]] || refuse "$command_name GC root is not root:root-owned"
+          printf '%s\n' "$expected_bin"
+        }
+
+        for tool in jq stat wc readlink mktemp rm tr curl base64 python3; do
+          command -v "$tool" >/dev/null || refuse "required preinstalled tool is absent: $tool"
+        done
+        [[ -x /usr/bin/sha256sum ]] || refuse "required system SHA-256 executable is absent: /usr/bin/sha256sum"
+        [[ -n "$REGISTRY_TOKEN" && "$REGISTRY_TOKEN" != *$'\r'* && "$REGISTRY_TOKEN" != *$'\n'* ]] || refuse "job-scoped registry token is absent or malformed"
+        [[ -n "${GITHUB_ACTOR:-}" && "$GITHUB_ACTOR" != *:* && "$GITHUB_ACTOR" != *$'\r'* && "$GITHUB_ACTOR" != *$'\n'* ]] || refuse "GitHub actor is absent or malformed"
+        [[ "$EXPECTED_ARTIFACT_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]] || refuse "build-job archive SHA-256 is malformed"
+        [[ "$TRANSPORT_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]] || refuse "artifact-service SHA-256 is malformed"
+        [[ "$EXPECTED_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || refuse "build-job image digest is malformed"
+
+        lowercase_repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+        image_repository="ghcr.io/$lowercase_repository"
+        [[ "$image_repository" =~ ^ghcr\.io/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$ ]] || refuse "calling repository cannot form one lowercase GHCR repository"
+        source_sha=""
+        image_tag=""
+        case "$EVENT_NAME" in
+          pull_request)
+            [[ "$PR_HEAD_REPOSITORY" == "$GITHUB_REPOSITORY" ]] || refuse "fork pull requests cannot enter the publisher"
+            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || refuse "pull-request number is malformed"
+            source_sha="$PR_HEAD_SHA"
+            image_tag="pr-${PR_NUMBER}-sha-${source_sha}"
+            ;;
+          push)
+            [[ "$EVENT_REF" == refs/heads/main ]] || refuse "push publication is admitted only from refs/heads/main"
+            source_sha="$EVENT_SHA"
+            image_tag="main-sha-${source_sha}"
+            ;;
+          *) refuse "unsupported publication event: $EVENT_NAME" ;;
+        esac
+        [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || refuse "publication source is not one exact commit SHA"
+        [[ "$image_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || refuse "derived image tag is not one legal OCI tag"
+
+        expected_path="${RUNNER_TEMP:?}/v4-oci-download/v4-oci-layout-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar"
+        [[ "$ARTIFACT_PATH" == "$expected_path" ]] || refuse "downloaded artifact path is not the run-derived canonical path"
+        [[ -f "$ARTIFACT_PATH" && ! -L "$ARTIFACT_PATH" && -s "$ARTIFACT_PATH" ]] || refuse "downloaded OCI archive is absent, empty, special, or a symlink"
+        artifact_sha256="$(/usr/bin/sha256sum "$ARTIFACT_PATH")"
+        artifact_sha256="${artifact_sha256%% *}"
+        [[ "sha256:$artifact_sha256" == "$EXPECTED_ARTIFACT_SHA256" ]] || refuse "downloaded bytes disagree with the build-job SHA-256"
+        [[ "$artifact_sha256" == "$TRANSPORT_ARTIFACT_SHA256" ]] || refuse "downloaded bytes disagree with the artifact-service SHA-256"
+
+        # Revalidate the archive without extracting it. This closes the
+        # validate-to-tar boundary: every member, descriptor, size, digest,
+        # media type, and reference is checked again in the packages job.
+        archive_image_digest="$(ARCHIVE="$ARTIFACT_PATH" python3 - <<'PY'
+        import hashlib
+        import json
+        import os
+        import re
+        import tarfile
+        from pathlib import PurePosixPath
+
+        archive = os.environ["ARCHIVE"]
+        digest_re = re.compile(r"sha256:[0-9a-f]{64}")
+
+        def normalize(name):
+            while name.startswith("./"):
+                name = name[2:]
+            if name == ".":
+                name = ""
+            path = PurePosixPath(name)
+            if path.is_absolute() or ".." in path.parts:
+                raise SystemExit(f"OCI archive contains an unsafe path: {name}")
+            return path.as_posix() if name else ""
+
+        with tarfile.open(archive, mode="r:") as tar:
+            members = {}
+            directories = set()
+            for member in tar.getmembers():
+                name = normalize(member.name)
+                if name in members or name in directories:
+                    raise SystemExit(f"OCI archive contains a duplicate member: {name}")
+                if member.isdir():
+                    directories.add(name)
+                elif member.isfile():
+                    members[name] = member
+                else:
+                    raise SystemExit(f"OCI archive contains a link or special member: {name}")
+            if directories != {"", "blobs", "blobs/sha256"}:
+                raise SystemExit("OCI archive contains an unexpected directory")
+
+            def regular_bytes(name):
+                member = members.get(name)
+                if member is None:
+                    raise SystemExit(f"OCI archive is missing {name}")
+                stream = tar.extractfile(member)
+                if stream is None:
+                    raise SystemExit(f"OCI archive member cannot be read: {name}")
+                return stream.read()
+
+            if json.loads(regular_bytes("oci-layout")) != {"imageLayoutVersion": "1.0.0"}:
+                raise SystemExit("archive oci-layout must be exactly OCI layout 1.0.0")
+            index = json.loads(regular_bytes("index.json"))
+            manifests = index.get("manifests")
+            if index.get("schemaVersion") != 2 or not isinstance(manifests, list) or len(manifests) != 1:
+                raise SystemExit("archive OCI index must carry exactly one manifest")
+            referenced = set()
+
+            def descriptor_bytes(descriptor, label, expected_media_type=None, layer=False):
+                if not isinstance(descriptor, dict):
+                    raise SystemExit(f"archive {label} descriptor is not an object")
+                digest = descriptor.get("digest")
+                size = descriptor.get("size")
+                media_type = descriptor.get("mediaType")
+                if not isinstance(digest, str) or digest_re.fullmatch(digest) is None:
+                    raise SystemExit(f"archive {label} digest is malformed")
+                if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+                    raise SystemExit(f"archive {label} size is malformed")
+                if expected_media_type is not None and media_type != expected_media_type:
+                    raise SystemExit(f"archive {label} has the wrong media type")
+                if layer and media_type not in {
+                    "application/vnd.oci.image.layer.v1.tar",
+                    "application/vnd.oci.image.layer.v1.tar+gzip",
+                    "application/vnd.oci.image.layer.v1.tar+zstd",
+                }:
+                    raise SystemExit(f"archive {label} has a non-OCI layer media type")
+                name = "blobs/sha256/" + digest.removeprefix("sha256:")
+                member = members.get(name)
+                if member is None or member.size != size:
+                    raise SystemExit(f"archive {label} blob is absent or has the wrong size")
+                stream = tar.extractfile(member)
+                if stream is None:
+                    raise SystemExit(f"archive {label} blob cannot be read")
+                hasher = hashlib.sha256()
+                chunks = [] if label == "manifest" else None
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+                    if chunks is not None:
+                        chunks.append(chunk)
+                if hasher.hexdigest() != digest.removeprefix("sha256:"):
+                    raise SystemExit(f"archive {label} blob disagrees with its digest")
+                referenced.add(name)
+                return b"".join(chunks) if chunks is not None else b""
+
+            manifest_descriptor = manifests[0]
+            manifest = json.loads(descriptor_bytes(
+                manifest_descriptor,
+                "manifest",
+                "application/vnd.oci.image.manifest.v1+json",
+            ))
+            if manifest.get("schemaVersion") != 2 or manifest.get("mediaType") != "application/vnd.oci.image.manifest.v1+json":
+                raise SystemExit("archive image manifest has the wrong schema or media type")
+            descriptor_bytes(
+                manifest.get("config"),
+                "config",
+                "application/vnd.oci.image.config.v1+json",
+            )
+            layers = manifest.get("layers")
+            if not isinstance(layers, list):
+                raise SystemExit("archive image manifest layers must be an array")
+            for index_number, layer_descriptor in enumerate(layers):
+                descriptor_bytes(layer_descriptor, f"layer[{index_number}]", layer=True)
+            expected_members = {"oci-layout", "index.json"} | referenced
+            if set(members) != expected_members:
+                raise SystemExit("OCI archive contains an unexpected or unreferenced file")
+            print(manifest_descriptor["digest"])
+        PY
+        )" || refuse "downloaded archive failed complete OCI descriptor validation"
+        [[ "$archive_image_digest" == "$EXPECTED_IMAGE_DIGEST" ]] || refuse "archive descriptor digest disagrees with the build-job descriptor"
+
+        # This is intentionally an unmet image dependency today. Do not fetch
+        # or install a client here: GF#1711 must bake and receipt it first.
+        skopeo_bin="$(custody_store_tool skopeo)"
+        image_digest="$($skopeo_bin inspect --format '{{.Digest}}' "oci-archive:$ARTIFACT_PATH")" || refuse "trusted skopeo could not inspect the inert OCI archive"
+        [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || refuse "trusted skopeo returned a malformed image digest"
+        [[ "$image_digest" == "$EXPECTED_IMAGE_DIGEST" ]] || refuse "trusted-client image digest disagrees with the build-job descriptor"
+
+        umask 077
+        state_dir="$(mktemp -d "${RUNNER_TEMP}/v4-oci-publish.XXXXXX")"
+        cleanup() {
+          local status=$?
+          trap - EXIT
+          rm -rf -- "$state_dir"
+          exit "$status"
+        }
+        trap cleanup EXIT
+        authfile="$state_dir/registry-auth.json"
+        printf '%s' "$REGISTRY_TOKEN" | "$skopeo_bin" login \
+          --authfile "$authfile" \
+          --username "$GITHUB_ACTOR" \
+          --password-stdin ghcr.io >/dev/null
+        [[ -f "$authfile" && ! -L "$authfile" ]] || refuse "trusted skopeo did not materialize a registry auth file"
+
+        basic="$(printf '%s' "$GITHUB_ACTOR:$REGISTRY_TOKEN" | base64 | tr -d '\r\n')"
+        [[ "$basic" =~ ^[A-Za-z0-9+/]+=*$ ]] || refuse "registry basic credential could not be encoded"
+        basic_config="$state_dir/ghcr-basic.curl"
+        printf 'header = "Authorization: Basic %s"\n' "$basic" >"$basic_config"
+        registry_repository="${image_repository#ghcr.io/}"
+        token_response="$state_dir/ghcr-token.json"
+        curl -fsS \
+          --config "$basic_config" \
+          --get \
+          --data-urlencode "service=ghcr.io" \
+          --data-urlencode "scope=repository:${registry_repository}:pull,push" \
+          --output "$token_response" \
+          https://ghcr.io/token
+        bearer="$(jq -er '(.token // .access_token) | select(type == "string" and length > 0)' "$token_response")" || refuse "GHCR token exchange returned no bearer"
+        [[ "$bearer" != *$'\r'* && "$bearer" != *$'\n'* ]] || refuse "GHCR bearer contains CR/LF"
+        bearer_config="$state_dir/ghcr-bearer.curl"
+        printf 'header = "Authorization: Bearer %s"\n' "$bearer" >"$bearer_config"
+        printf '%s\n' 'header = "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json"' >>"$bearer_config"
+        unset REGISTRY_TOKEN basic bearer
+
+        registry_digest() {
+          local headers="$1"
+          python3 - "$headers" <<'PY'
+        import re
+        import sys
+        from pathlib import Path
+
+        values = []
+        for line in Path(sys.argv[1]).read_text(encoding="iso-8859-1").splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key.lower() == "docker-content-digest":
+                values.append(value.strip())
+        if len(values) != 1 or re.fullmatch(r"sha256:[0-9a-f]{64}", values[0]) is None:
+            raise SystemExit("registry response did not contain exactly one valid Docker-Content-Digest")
+        print(values[0])
+        PY
+        }
+
+        manifest_headers="$state_dir/manifest.headers"
+        status="$(curl -sS \
+          --config "$bearer_config" \
+          --head \
+          --dump-header "$manifest_headers" \
+          --output /dev/null \
+          --write-out '%{http_code}' \
+          "https://ghcr.io/v2/${registry_repository}/manifests/${image_tag}")" || refuse "GHCR exact-tag probe failed"
+        publish_state=created
+        case "$status" in
+          200)
+            existing_digest="$(registry_digest "$manifest_headers")" || refuse "GHCR exact-tag digest is malformed"
+            [[ "$existing_digest" == "$image_digest" ]] || refuse "controlled SHA tag already exists at a different digest ($existing_digest)"
+            publish_state=idempotent
+            ;;
+          404)
+            push_digest="$state_dir/push.digest"
+            "$skopeo_bin" copy \
+              --dest-authfile "$authfile" \
+              --preserve-digests \
+              --digestfile "$push_digest" \
+              "oci-archive:$ARTIFACT_PATH" \
+              "docker://${image_repository}:${image_tag}"
+            [[ -f "$push_digest" && ! -L "$push_digest" ]] || refuse "trusted skopeo did not emit a push digest"
+            copied_digest="$(tr -d '\r\n' <"$push_digest")"
+            [[ "$copied_digest" == "$image_digest" ]] || refuse "trusted skopeo copied a digest other than the inert archive"
+            ;;
+          *) refuse "GHCR exact-tag probe returned HTTP $status (only 200 or 404 is admissible)" ;;
+        esac
+
+        : >"$manifest_headers"
+        status="$(curl -sS \
+          --config "$bearer_config" \
+          --head \
+          --dump-header "$manifest_headers" \
+          --output /dev/null \
+          --write-out '%{http_code}' \
+          "https://ghcr.io/v2/${registry_repository}/manifests/${image_tag}")" || refuse "post-publication GHCR exact-tag probe failed"
+        [[ "$status" == 200 ]] || refuse "post-publication GHCR exact tag returned HTTP $status"
+        digest="$(registry_digest "$manifest_headers")" || refuse "post-publication GHCR digest is malformed"
+        [[ "$digest" == "$image_digest" ]] || refuse "registry-derived digest disagrees with the inert OCI archive"
+        image_ref="$image_repository@$digest"
+        {
+          echo "published=true"
+          echo "image_ref=$image_ref"
+          echo "digest=$digest"
+        } >>"$GITHUB_OUTPUT"
+        {
+          echo "### V4 OCI publication"
+          echo
+          echo "- Source: \`$GITHUB_REPOSITORY@$source_sha\`"
+          echo "- Target: \`//:oci_publish_bundle\`"
+          echo "- Tag: \`$image_repository:$image_tag\`"
+          echo "- Digest: \`$image_ref\`"
+          echo "- Registry transition: \`$publish_state\`"
+          echo "- Publisher: source-blind, image-custodied skopeo"
+        } >>"$GITHUB_STEP_SUMMARY"
