@@ -1,0 +1,260 @@
+name: spoke-ci-v4
+
+# Source-only breaking contract authorized by TIN-2130 comment
+# a7fb6f87-5d45-45a6-bd99-136c4f461fbd. Publishing or adopting it is a
+# separate operator transaction.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  action-fabric:
+    # GitHub chooses a runner before checkout. This scalar capability is fixed
+    # forge admission only; tinyland.repo.json must declare the same pool.
+    runs-on: tinyland-nix
+    timeout-minutes: 45
+    env:
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Validate sole attachment authority
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v4
+
+      - name: Load complete executable action plan
+        id: plan
+        uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v4
+
+      - name: Mint executor profile and execute complete plan
+        shell: bash
+        env:
+          PLAN_SCHEMA_VERSION: ${{ steps.plan.outputs.schema_version }}
+          PLAN_ACTIONS_PATH: ${{ steps.plan.outputs.actions_path }}
+        run: |
+          set -euo pipefail
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          refuse() { echo "::error::v4 action fabric refused: $*" >&2; exit 1; }
+
+          read_root_receipt() {
+            local receipt="$1"
+            local label="$2"
+            local receipt_stat receipt_newlines
+            local -a receipt_lines=()
+
+            [[ -f "$receipt" && ! -L "$receipt" ]] || refuse "$label receipt is absent or not a regular file: $receipt"
+            receipt_stat="$(stat -c '%u:%g:%a' "$receipt")"
+            [[ "$receipt_stat" == 0:0:444 ]] || refuse "$label receipt must be root:root mode 0444; got $receipt_stat"
+            receipt_newlines="$(wc -l <"$receipt")"
+            ((receipt_newlines == 1)) || refuse "$label receipt must contain one newline-terminated line"
+            mapfile -t receipt_lines <"$receipt"
+            ((${#receipt_lines[@]} == 1)) || refuse "$label receipt must contain exactly one line"
+            printf '%s\n' "${receipt_lines[0]}"
+          }
+
+          custody_store_tool() {
+            local command_name="$1"
+            local receipt="/etc/tinyland/gf-client-${command_name}-store"
+            local store_path expected_bin public_link gcroot
+            local store_mode
+
+            store_path="$(read_root_receipt "$receipt" "$command_name store")"
+            [[ "$store_path" =~ ^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || refuse "$command_name receipt does not name one immutable Nix store output"
+            [[ -d "$store_path" && ! -L "$store_path" ]] || refuse "$command_name receipt store is absent or not a directory"
+            [[ "$(stat -c '%u:%g' "$store_path")" == 0:0 ]] || refuse "$command_name receipt store is not root:root-owned"
+            store_mode="$(stat -c '%a' "$store_path")"
+            (( (8#$store_mode & 8#022) == 0 )) || refuse "$command_name receipt store is group- or other-writable"
+
+            expected_bin="$store_path/bin/$command_name"
+            [[ -f "$expected_bin" && -x "$expected_bin" ]] || refuse "$command_name receipt does not contain its executable"
+            [[ "$(readlink -f "$expected_bin")" == /nix/store/* ]] || refuse "$command_name executable resolves outside /nix/store"
+
+            public_link="/usr/local/bin/$command_name"
+            [[ -L "$public_link" ]] || refuse "$command_name public image path is not a symlink"
+            [[ "$(stat -c '%u:%g' "$public_link")" == 0:0 ]] || refuse "$command_name public image symlink is not root:root-owned"
+            [[ "$(readlink "$public_link")" == "$expected_bin" ]] || refuse "$command_name public image symlink disagrees with its receipt"
+
+            gcroot="/nix/var/nix/gcroots/tinyland-gf-client-$command_name"
+            [[ -L "$gcroot" && "$(readlink -f "$gcroot")" == "$store_path" ]] || refuse "$command_name GC root disagrees with its receipt"
+            [[ "$(stat -c '%u:%g' "$gcroot")" == 0:0 ]] || refuse "$command_name GC root is not root:root-owned"
+            printf '%s\n' "$expected_bin"
+          }
+
+          [[ "$PLAN_SCHEMA_VERSION" == 2 ]] || refuse "action-plan schema version must be 2"
+          for tool in jq stat wc id readlink mktemp rm; do
+            command -v "$tool" >/dev/null || refuse "required preinstalled tool is absent: $tool"
+          done
+          [[ -x /usr/bin/sha256sum ]] || refuse "required system SHA-256 executable is absent: /usr/bin/sha256sum"
+          [[ "$PLAN_ACTIONS_PATH" == "${RUNNER_TEMP:?}"/tinyland-v4-actions.*.json ]] || refuse "validated action snapshot is outside RUNNER_TEMP"
+          [[ -f "$PLAN_ACTIONS_PATH" && ! -L "$PLAN_ACTIONS_PATH" ]] || refuse "validated action snapshot is absent or not a regular file"
+          plan_snapshot_stat="$(stat -c '%u:%a' "$PLAN_ACTIONS_PATH")"
+          [[ "$plan_snapshot_stat" == "$(id -u):444" ]] || refuse "validated action snapshot must be runner-owned mode 0444; got $plan_snapshot_stat"
+          declared_pool="$(jq -er '.enrollment.executionPool' tinyland.repo.json)"
+          declared_mode="$(jq -er '.enrollment.substrateMode' tinyland.repo.json)"
+          [[ "$declared_pool" == tinyland-nix ]] || refuse "tinyland.repo.json enrollment.executionPool must be tinyland-nix"
+          [[ "$declared_mode" == executor-backed ]] || refuse "tinyland.repo.json enrollment.substrateMode must be executor-backed"
+
+          [[ -n "${GF_REAPI_TOKEN_EXCHANGE_ENDPOINT:-}" ]] || refuse "runtime token-exchange authority is absent"
+          [[ -n "${GF_REAPI_CACHE_FRONTDOOR_ENDPOINT:-}" ]] || refuse "runtime executor front-door authority is absent"
+          [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]] || refuse "GitHub OIDC environment is absent; permissions.id-token must remain write"
+
+          oidc_profile_bin=/usr/local/bin/flywheel-github-oidc-profile
+          [[ -f "$oidc_profile_bin" && ! -L "$oidc_profile_bin" && -x "$oidc_profile_bin" ]] || refuse "OIDC profile helper is absent or not the regular image-installed executable"
+          [[ "$(stat -c '%u:%g:%a' "$oidc_profile_bin")" == 0:0:555 ]] || refuse "OIDC profile helper must be root:root mode 0555"
+          oidc_profile_sha256="$(read_root_receipt /etc/tinyland/gf-client-flywheel-github-oidc-profile-sha256 "OIDC profile helper")"
+          [[ "$oidc_profile_sha256" =~ ^[0-9a-f]{64}$ ]] || refuse "OIDC profile helper receipt is not one lowercase SHA-256 digest"
+          oidc_profile_sha256_record="$(/usr/bin/sha256sum "$oidc_profile_bin")" || refuse "OIDC profile helper could not be hashed"
+          oidc_profile_actual_sha256="${oidc_profile_sha256_record%% *}"
+          [[ "$oidc_profile_actual_sha256" == "$oidc_profile_sha256" ]] || refuse "OIDC profile helper digest disagrees with its image receipt"
+
+          client_source_hash="$(read_root_receipt /etc/tinyland/gf-client-tools-source-nar-hash "client-tools source")"
+          [[ "$client_source_hash" =~ ^sha256-[A-Za-z0-9+/]{43}=$ ]] || refuse "client-tools source receipt is not one SHA-256 SRI hash"
+          credhelper_bin="$(custody_store_tool gf-reapi-credhelper)"
+          flywheel_verify_bin="$(custody_store_tool flywheel-verify)"
+          gloriousflywheel_bazel_bin="$(custody_store_tool gloriousflywheel-bazel)"
+
+          umask 077
+          token_dir="$(mktemp -d "${RUNNER_TEMP:?}/gf-reapi-v4.XXXXXX")"
+          profile_file="$token_dir/profile.env"
+          bazel_receipt=/etc/tinyland/ci-bazelisk-bin
+
+          [[ -f "$bazel_receipt" && ! -L "$bazel_receipt" ]] || refuse "runner image Bazelisk receipt is absent or not a regular file: $bazel_receipt"
+          receipt_stat="$(stat -c '%u:%g:%a' "$bazel_receipt")"
+          [[ "$receipt_stat" == 0:0:444 ]] || refuse "runner image Bazelisk receipt must be root:root mode 0444; got $receipt_stat"
+          receipt_newlines="$(wc -l <"$bazel_receipt")"
+          ((receipt_newlines == 1)) || refuse "runner image Bazelisk receipt must contain one newline-terminated line"
+          mapfile -t bazel_receipt_lines <"$bazel_receipt"
+          ((${#bazel_receipt_lines[@]} == 1)) || refuse "runner image Bazelisk receipt must contain exactly one line"
+          bazel_bin="${bazel_receipt_lines[0]}"
+          [[ "$bazel_bin" =~ ^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-bazelisk-[A-Za-z0-9][A-Za-z0-9._+~-]*/bin/bazelisk$ ]] || refuse "runner image Bazelisk receipt does not name the exact packaged /nix/store executable"
+          [[ -f "$bazel_bin" && ! -L "$bazel_bin" && -x "$bazel_bin" ]] || refuse "runner image Bazelisk path is not a regular executable"
+          bazel_bin_owner="$(stat -c '%u:%g' "$bazel_bin")"
+          bazel_bin_mode="$(stat -c '%a' "$bazel_bin")"
+          [[ "$bazel_bin_owner" == 0:0 ]] || refuse "runner image Bazelisk executable is not root:root-owned"
+          (( (8#$bazel_bin_mode & 8#022) == 0 )) || refuse "runner image Bazelisk executable is group- or other-writable"
+
+          strict_wrapper_environment() {
+            # No inherited caller environment may select local proof, a Bazel
+            # binary, output tree, or external-input override for this call.
+            unset BAZEL_BIN GF_BAZEL_LOCAL_PROOF GF_BAZEL_INJECT_REPOSITORIES
+            unset BAZEL_OUTPUT_USER_ROOT BAZEL_OUTPUT_BASE
+            unset BAZEL_REPOSITORY_CACHE BAZEL_DISTDIR
+            unset GF_BAZEL_REPOSITORY_DISABLE_DOWNLOAD
+            unset BAZEL_REMOTE_MAX_CONNECTIONS
+            unset BAZEL_REMOTE_HEADER BAZEL_REMOTE_CACHE_HEADER BAZEL_REMOTE_EXEC_HEADER
+            unset BAZELISK BAZEL_REAL BAZELISK_BASE_URL BAZELISK_CLEAN
+            unset BAZELISK_FORMAT_URL BAZELISK_GITHUB_TOKEN BAZELISK_HOME
+            unset BAZELISK_HOME_DARWIN BAZELISK_HOME_LINUX BAZELISK_HOME_WINDOWS
+            unset BAZELISK_INCOMPATIBLE_FLAGS BAZELISK_NOJDK
+            unset BAZELISK_SHOW_PROGRESS BAZELISK_SHUTDOWN
+            unset BAZELISK_SKIP_WRAPPER BAZELISK_USER_AGENT BAZELISK_VERIFY_SHA256
+            unset USE_BAZEL_FALLBACK_VERSION USE_BAZEL_VERSION
+            export BAZEL_BIN="$bazel_bin"
+            export BAZELISK_SKIP_WRAPPER=1
+            export GF_FLYWHEEL_LOCAL_ENV_MODE=forbid
+            export GF_BAZEL_JOBS=4
+            export GF_BAZEL_REMOTE_UPLOAD=false
+            export GF_BAZEL_REMOTE_EXECUTION_PLATFORM=gloriousflywheel-rbe-linux-x86_64
+          }
+
+          # Discard runner-at-rest attachment state. The only accepted build
+          # profile is the short-lived executor profile minted below.
+          unset GF_FLYWHEEL_PROFILE_STATE GF_BAZEL_SUBSTRATE_MODE GF_BAZEL_LOCAL_PROOF
+          unset GF_FRONTDOOR_ENDPOINT
+          unset BAZEL_REMOTE_CACHE BAZEL_REMOTE_EXECUTOR BAZEL_REMOTE_INSTANCE_NAME
+          unset BAZEL_CREDENTIAL_HELPER GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE
+          unset BAZEL_REMOTE_HEADER BAZEL_REMOTE_CACHE_HEADER BAZEL_REMOTE_EXEC_HEADER
+          strict_wrapper_environment
+          [[ ! -f .env.flywheel.local ]] || refuse "v4 forbids the workspace .env.flywheel.local fallback fixture"
+
+          "$oidc_profile_bin" \
+            --request executor \
+            --frontdoor-endpoint "$GF_REAPI_CACHE_FRONTDOOR_ENDPOINT" \
+            --credential-helper-bin "$credhelper_bin" \
+            --token-dir "$token_dir" \
+            --profile-out "$profile_file" \
+            --github-output "" \
+            --renew-background
+
+          [[ -f "$profile_file" && ! -L "$profile_file" ]] || refuse "minted profile is absent or not a regular file"
+          [[ "$(stat -c '%u:%a' "$profile_file")" == "$(id -u):600" ]] || refuse "minted profile must be runner-owned mode 0600"
+          # shellcheck source=/dev/null
+          source "$profile_file"
+          [[ "${GF_FLYWHEEL_PROFILE_STATE:-}" == executor-backed ]] || refuse "minted profile state is not executor-backed"
+          [[ "${GF_BAZEL_SUBSTRATE_MODE:-}" == executor-backed ]] || refuse "minted Bazel mode is not executor-backed"
+          [[ -n "${BAZEL_REMOTE_CACHE:-}" && "$BAZEL_REMOTE_CACHE" == "${BAZEL_REMOTE_EXECUTOR:-}" ]] || refuse "executor profile must use one non-empty REAPI cache/executor authority"
+          [[ -n "${BAZEL_REMOTE_INSTANCE_NAME:-}" ]] || refuse "token exchange returned no tenant instance"
+          token_file="${GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE:-}"
+          [[ "$token_file" == "$token_dir/gf-reapi-cell-token.jwt" && -f "$token_file" && ! -L "$token_file" && -s "$token_file" ]] || refuse "credential-helper token file is absent or outside the minted profile directory"
+          [[ "$(stat -c '%u:%a' "$token_file")" == "$(id -u):600" ]] || refuse "credential-helper token file must be runner-owned mode 0600"
+          credential_helper="${BAZEL_CREDENTIAL_HELPER:-}"
+          [[ -n "$credential_helper" && "$credential_helper" != *$'\n'* && "$credential_helper" != *$'\r'* && "$credential_helper" == *=* ]] || refuse "minted profile must contain exactly one scoped credential-helper entry"
+          credential_scope="${credential_helper%%=*}"
+          credential_helper_path="${credential_helper#*=}"
+          [[ -n "$credential_scope" && "$credential_helper_path" == "$credhelper_bin" ]] || refuse "minted profile does not wire exactly the custody-validated gf-reapi-credhelper"
+          strict_wrapper_environment
+
+          "$flywheel_verify_bin"
+
+          expected_count="$(jq -er 'if type == "object" and length > 0 then length else error("v4 action plan must be a non-empty object") end' "$PLAN_ACTIONS_PATH")" || refuse "action-plan snapshot is malformed or empty"
+          actions_file="$token_dir/actions.jsonl"
+          if ! jq -cer 'to_entries[]' "$PLAN_ACTIONS_PATH" >"$actions_file"; then
+            refuse "action-plan snapshot could not be materialized"
+          fi
+          materialized_count="$(jq -ser 'length' "$actions_file")" || refuse "materialized action plan is malformed"
+          [[ "$materialized_count" == "$expected_count" ]] || refuse "materialized $materialized_count of $expected_count planned actions"
+
+          # Finish parsing the complete validated plan before repository code
+          # can run. These arrays are shell-local and made readonly; no later
+          # action or target is read from a runner-writable file after the
+          # first Bazel invocation begins.
+          mapfile -t materialized_actions <"$actions_file"
+          ((${#materialized_actions[@]} == expected_count)) || refuse "loaded ${#materialized_actions[@]} of $expected_count materialized actions"
+          declare -a planned_names=()
+          declare -a planned_commands=()
+          declare -a planned_target_offsets=()
+          declare -a planned_target_counts=()
+          declare -a planned_targets=()
+          targets_file="$token_dir/action-targets.txt"
+          for action in "${materialized_actions[@]}"; do
+            name="$(jq -er '.key' <<<"$action")"
+            command="$(jq -er '.value.command' <<<"$action")"
+            expected_target_count="$(jq -er '.value.targets | if type == "array" and length > 0 then length else error("action targets must be a non-empty array") end' <<<"$action")" || refuse "action $name has malformed or empty targets"
+            if ! jq -er '.value.targets[]' <<<"$action" >"$targets_file"; then
+              refuse "action $name targets could not be materialized"
+            fi
+            mapfile -t action_targets <"$targets_file"
+            ((${#action_targets[@]} == expected_target_count)) || refuse "materialized ${#action_targets[@]} of $expected_target_count targets for action $name"
+            planned_names+=("$name")
+            planned_commands+=("$command")
+            planned_target_offsets+=("${#planned_targets[@]}")
+            planned_target_counts+=("$expected_target_count")
+            planned_targets+=("${action_targets[@]}")
+          done
+          ((${#planned_names[@]} == expected_count)) || refuse "preloaded ${#planned_names[@]} of $expected_count planned actions"
+
+          rm -- "$actions_file" "$targets_file" "$PLAN_ACTIONS_PATH"
+          unset PLAN_ACTIONS_PATH action action_targets materialized_actions
+          readonly -a planned_names planned_commands planned_target_offsets planned_target_counts planned_targets
+
+          executed_count=0
+          for ((action_index = 0; action_index < expected_count; action_index++)); do
+            name="${planned_names[$action_index]}"
+            command="${planned_commands[$action_index]}"
+            target_offset="${planned_target_offsets[$action_index]}"
+            target_count="${planned_target_counts[$action_index]}"
+            targets=("${planned_targets[@]:target_offset:target_count}")
+            ((${#targets[@]} == target_count)) || refuse "in-memory plan lost targets for action $name"
+            echo "::group::v4 action $name"
+            strict_wrapper_environment
+            "$gloriousflywheel_bazel_bin" "$command" "${targets[@]}"
+            echo "::endgroup::"
+            executed_count=$((executed_count + 1))
+          done
+          ((executed_count > 0)) || refuse "no v4 actions executed"
+          ((executed_count == expected_count)) || refuse "executed $executed_count of $expected_count planned actions"

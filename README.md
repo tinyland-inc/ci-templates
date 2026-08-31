@@ -7,26 +7,16 @@ Tinyland CI house style.
 > may break without notice. See [`RELEASING.md`](./RELEASING.md) for the
 > SemVer contract.
 
-> **Superseded (2026-08-05):** the blahaj receiver path was evicted
-> (blahaj #1255); lane lifecycle belongs to the app owner overlay — see
-> site.scaffold `docs/patterns/owner-overlay-apply-plane.md` and the merged
-> scaffold #119 recut (2026-08-06, `8862f359`). The `lane-dispatch` /
-> `lane-reap` / `public-preview-dispatch` actions and the
-> `spoke-lane-env*` / `spoke-public-preview`
-> workflows below document the retired-era receiver contract as released
-> (spokes pin immutable tags, so released behavior is unchanged), but
-> `tinyland-inc/blahaj` no longer hosts the receivers. Do not wire new
-> spokes at blahaj; the behavior recut ships via the versioned release
-> train. The zero-caller TTL half (`lane-ttl-reap` action,
-> `spoke-lane-ttl-reap.yml`, `schemas/lane-ttl-reap-dispatch.schema.json`)
-> was removed from `main` on 2026-08-07 (TIN-489); released tags retain it.
+> The retired Blahaj lane-environment workflows were removed from this source
+> line under TIN-2130. Runtime lifecycle remains owner-overlay authority; this
+> repository supplies CI and no receiver, apply, or preview fallback.
 
 Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
 
 - **Spoke CI** (lint, type-check, build, test, Bazel graph, optional
   Playwright) via `spoke-ci.yml` reusable workflow.
-- **Per-PR ephemeral env lifecycle** (build image, dispatch to the
-  retired-era Blahaj receiver, reap on close) via `spoke-lane-env.yml`.
+- **Breaking v4 action-fabric CI** via `spoke-ci-v4.yml`: one canonical repo
+  manifest, one executable action plan, and a fail-closed executor profile.
 - **Static projection snapshot refresh** via `spoke-pulse-ingest.yml`.
 - **GloriousFlywheel REAPI binding** via the `flywheel-bazel` composite
   action.
@@ -35,13 +25,6 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
   tag.
 - **Repo-shape manifest validation** via `repo-manifest-validate`.
 - **Schema-validated `lanes.json` loading** via `lanes-load`.
-- **Blahaj `repository_dispatch` payload construction** via
-  `lane-dispatch` / `lane-reap` (retired-era receiver — see Superseded
-  note above).
-- **Public client preview dispatch** via `public-preview-dispatch`;
-  the retired-era Blahaj receiver owned Cloudflare DNS, Access, Tunnel
-  ingress, and cleanup — that ownership now sits with the app owner
-  overlay.
 - **GloriousFlywheel proof dispatch** via `flywheel-reapi-proof`.
 - **Per-lane GitHub commit status checks** via `lane-status-check`.
 
@@ -61,26 +44,38 @@ jobs:
     secrets: inherit
 ```
 
-**Deprecated** — `spoke-lane-env.yml` below is the retired-era
-Blahaj-dispatch PR-env path, kept callable only. A new spoke wires its own
-owner-overlay PR-env create+destroy+TTL workflow per site.scaffold
-`docs/patterns/owner-overlay-apply-plane.md`, not this template:
+The breaking v4 foundation has no caller-selected runner, mode, endpoint, plan
+path, or publication input. `tinyland.repo.json` is the sole attachment
+authority; `.github/lanes.json` contains only executable Bazel commands and
+targets. V4 admits only `tinyland-nix`, requires the manifest to declare
+`executor-backed`, mints a short-lived GitHub-OIDC profile, and runs the
+preinstalled `gf-reapi-credhelper`, `flywheel-verify`, and
+`gloriousflywheel-bazel` path without a cache-only, downloaded-helper, or PATH
+fallback. The workflow verifies the root-owned OIDC helper against its image
+digest receipt and derives the other three client paths from their immutable
+Nix-store receipts. Each packaged-wrapper invocation forbids
+`.env.flywheel.local`, uses the immutable Bazelisk executable recorded by the
+runner image, and clears inherited output/external-input environment
+overrides. It parses the complete plan into readonly, non-exported shell arrays before the
+first repository-controlled action, then executes those in-memory entries
+sequentially with an exact planned/completed count. TIN-4026 comment
+`a02a7948` P2d owns the explicit per-action `jobs=4` client cap until a
+fleet-published replacement; the gf-reapi-cell scheduler remains the actual
+per-tenant concurrency authority under GF-I11.
 
-```yaml
-# .github/workflows/lane-env.yml (deprecated shape, do not copy for new spokes)
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
+This is a held source foundation, not a release. Its vendored action-plan
+schema must name the exact durable site.scaffold source commit and byte digest
+before TIN-4248 can cut v4. TIN-4249 separately owns consumer adoption,
+including the manifest/caller co-move; no consumer should point at an unresolved
+`@v4` or treat this checkout as merge-ready runtime wiring.
 
-jobs:
-  lane-env:
-    uses: tinyland-inc/ci-templates/.github/workflows/spoke-lane-env.yml@v2.0.0
-    with:
-      spoke: my-spoke
-      enable_tailnet_qa: false
-    secrets:
-      BLAHAJ_DISPATCH_TOKEN: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}
-```
+The runner currently receipts Bazelisk, not an exact Bazel binary or offline
+external-input capsule. Clearing inherited Bazelisk environment overrides and
+setting `BAZELISK_SKIP_WRAPPER` prevents an inherited launcher or repository
+`tools/bazel` wrapper from redirecting this call. Workspace/home `.bazeliskrc`
+and the `.bazelversion`-selected cold Bazel fetch remain unresolved input
+surfaces. The carrier's no-downloader condition therefore remains a TIN-4248
+release blocker; source validation here must not be read as closing it.
 
 Your spoke needs `.github/lanes.json` validating against
 [`schemas/lanes.schema.json`](./schemas/lanes.schema.json). New spokes should
@@ -131,10 +126,7 @@ working-tree scan.
 | **`repo-manifest-validate`** | Validate `tinyland.repo.json` and optionally require repo roles such as `static-spoke`. |
 | **`cache-attachment-validate`** | Execute the release-vendored cache attachment contract without a network source fallback. |
 | **`flywheel-bazel`** | `bazelisk` wrapper with endpoint-free `--config=flywheel[-executor]`. Supplies cache/executor endpoints from runtime env or inputs. Refuses executor on non-cluster runners. |
-| **`lanes-load`** | Validate + load `.github/lanes.json`. Outputs matrix-ready `lanes_json`. |
-| **`lane-dispatch`** *(deprecated)* | Emit Blahaj `<spoke>-lane-env` provision payload. Supports `dry_run`. PR-env create is an owner-overlay capability now; see the Superseded note above. |
-| **`lane-reap`** *(deprecated)* | Emit Blahaj destroy payload. Idempotent. PR-env destroy is an owner-overlay capability now. |
-| **`public-preview-dispatch`** *(deprecated)* | Emit Blahaj public/client preview payload with Cloudflare Access allowlist. The owner overlay is the preview producer now. |
+| **`lanes-load`** | V4: validate and load the complete `.github/lanes.json` executable action map; no filter or partial-plan output. V3 callers remain pinned to the prior action contract. |
 | **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run, correlated by a unique request id. |
 | **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
 | **`pulse-ingest-validate`** | Validate a Pulse / static projection snapshot. |
@@ -231,9 +223,8 @@ Set `attic-public-read: "true"` on any of the three to opt in. What flips:
 | `npm-publish.yml` | Pre-existing: Node package build + publish, callable only (no local tag/manual trigger). Ran GitHub-hosted until TIN-3914 moved all three jobs to `tinyland-nix`. |
 | **`rust-bazel-application.yml`** | Opt-in/default-off native Darwin/Linux Rust application validation with Bazel-only rustfmt, clippy, build, unit, integration, and package targets; cache reads are runtime-attached and writes require an explicitly enabled protected push ref. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
-| **`spoke-lane-env.yml`** *(deprecated)* | Retired-era Blahaj-dispatch PR-env workflow, kept callable only. The PR-env producer is the product's owner-overlay repository — see site.scaffold `docs/patterns/owner-overlay-apply-plane.md` and the merged scaffold #119 recut. Do not point a new spoke at it. |
+| **`spoke-ci-v4.yml`** | Breaking executor-only action fabric: fixed `tinyland-nix` admission, manifest-authoritative attachment, OIDC profile mint, and complete Bazel-plan execution through preinstalled Flywheel tools. |
 | **`spoke-ci-restricted.yml`** | Explicit private-repo opt-in variant of `spoke-ci.yml`; every job requires an owner `-infra` runner group plus its reviewed capability label. |
-| **`spoke-lane-env-restricted.yml`** *(deprecated)* | Explicit private-repo opt-in variant of `spoke-lane-env.yml`; preserves lane semantics while requiring group+capability routing and rejecting fork execution before checkout. Same PR-env producer deprecation applies. |
 | **`spoke-public-preview.yml`** *(deprecated)* | Reusable public/client preview dispatcher for Cloudflare Access-gated aliases. The owner overlay is the preview producer now. |
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |
 | **`spoke-deploy-cloudflare-pages.yml`** | Sanctioned **opt-in** Cloudflare Pages deploy lane. Builds the adapter-static `build/` via `nix develop --command just setup/check/build`, then `wrangler pages deploy build`. Credential-skips when the org CF secrets are absent; PR events build only. Does **not** replace the scaffold default GitHub-Pages lane. |
@@ -241,7 +232,7 @@ Set `attic-public-read: "true"` on any of the three to opt in. What flips:
 The restricted variants are a separate, default-off source surface. Their
 `v2.12.1` release closes the transitive graph with exact self-release refs,
 full third-party commit SHAs, and checksum-verified scanner archives. Existing
-`spoke-ci.yml` and `spoke-lane-env.yml` callers do not enter a private runner
+`spoke-ci.yml` callers do not enter a private runner
 group by upgrading their pin. Adoption is deliberately sequenced: the owner
 `-infra` overlay first creates or adopts the selected private group and proves
 its repository selection; ci-templates then publishes an immutable release;
@@ -270,7 +261,6 @@ What moved:
 | Workflow | Job(s) | Before | After |
 |---|---|---|---|
 | `spoke-ci.yml` | `secrets-scan`, `lanes-load`, `repo-manifest` | `ubuntu-latest` | `default_runner_class`, group-routed on opt-in |
-| `spoke-lane-env.yml` *(deprecated)* | `check-blahaj-token`, `lanes-load`, `dispatch-apply`, `destroy-lanes` | `ubuntu-latest` | `tinyland-nix` |
 | `js-bazel-package.yml` | `resolve-runner` | `ubuntu-latest` | `tinyland-nix` |
 | `npm-publish.yml` | `build-and-test`, `publish-gpr`, `publish-npm` | `ubuntu-latest` | `tinyland-nix` |
 | `rust-bazel-application.yml` | `trust-gate` | `ubuntu-24.04` | `tinyland-nix` |
@@ -312,9 +302,9 @@ by spelling.
 |---|---|---|
 | `just lint-runs-on-check` | `runs-on` values, structurally | the routing itself; 75-case oracle, this repo dogfoods at 0 FAIL |
 | `just no-hosted-runners-check` | every schedulable surface, textually | a label hiding in an input default, a `fromJSON` fallback, an env value, or a JSON schema |
-| `just lanes-schema-runner-class-check` | what the lanes schema *admits*, semantically | a hosted label that is representable as consumer data even when never written down |
 
-All are in `just check`, each with its own self-test.
+Both are in `just check`; the v4 lanes schema is vendored byte-for-byte from
+site.scaffold and its provenance is checked there too.
 
 `.github/actionlint.yaml` declares the six capability labels so actionlint stops
 reporting them as unknown. It is a declaration, not a suppression: a typo'd or
@@ -597,10 +587,10 @@ nothing comparing them.
 
 Scope is the whole directory on purpose. The first draft globbed
 `tinyland-repo-manifest*.json` and reported "all 2 vendored schemas match" over
-a directory holding four — including `lanes.schema.json`, which this README's
-own vendoring note already listed, which is drifted today, and which backs the
-`lanes-load` action that consumer CI runs. A gate that reads as coverage while
-enforcing less than it appears to is the defect this whole section is about.
+a directory holding four — including load-bearing `lanes.schema.json`, which
+backs the `lanes-load` action that consumer CI runs. A gate that reads as
+coverage while enforcing less than it appears to is the defect this whole
+section is about.
 
 Each entry carries a `state`, and the state is **asserted**, not just recorded:
 `identical` requires `upstream_sha256` to equal the vendored digest, `drifted`
@@ -626,14 +616,11 @@ entry (named, not a traceback), and a record with no entries at all. Upstream
 questions: no offline check can prove that string names a real commit. An entry
 marked `drifted` is reported, never failed.
 
-**Do not reflexively re-vendor a `drifted` entry.** `lanes.schema.json` has
-drifted in both directions and this repo is *ahead* on one of them: the
-vendored copy carries the TIN-3914 org-namespaced capability-class `pattern`
-where upstream still carries a hardcoded `tinyland-*` `enum`. Adopting
-upstream's bytes turns this repo's own `just lanes-schema-runner-class-check`
-red (`runnerClass no longer admits capability class great-falls-tool-bus-nix`).
-Upstream is ahead on authority language. Reconciling it is a real change with a
-real decision in it.
+The `lanes.schema.json` bytes match the paired site.scaffold working tree. The
+vendoring record deliberately remains `drifted` against its last committed
+source revision until the site change has a commit to cite; a v4 release is
+blocked until `source_revision` and the upstream SHA-256 are updated and the
+entry can honestly become `identical`.
 
 **Known drift, not closed here:** the vendored
 `tinyland-repo-manifest.schema.json` (v1) and site.scaffold's copy have diverged

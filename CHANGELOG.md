@@ -5,6 +5,24 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **TIN-2130 v4 action-fabric foundation** (carrier comment
+  `a7fb6f87-5d45-45a6-bd99-136c4f461fbd`). The vendored schema now admits only
+  an executable Bazel action map; `tinyland.repo.json` remains the sole
+  attachment authority. Added one executor-only `spoke-ci-v4.yml` with fixed
+  `tinyland-nix` admission, GitHub OIDC minting, and the preinstalled
+  `gf-reapi-credhelper` → `flywheel-verify` → `gloriousflywheel-bazel` path.
+  The workflow forbids workspace fallback profiles on every wrapper call,
+  verifies the root-owned OIDC helper and receipt-derived Nix-store clients,
+  pins Bazelisk from the immutable runner receipt, clears inherited
+  output/external-input environment injection, applies the TIN-4026 P2d
+  `jobs=4` client cap, and preloads the complete plan into readonly shell memory before
+  enforcing an exact nonzero planned/executed action count.
+  Removed the two obsolete lane-env workflows and their orphaned validator
+  logic, so the v4 co-move is a net workflow/validation contraction. V3 remains
+  unmodified, and no release or runtime adoption is implied.
+
 ### Removed
 
 - **The dependency-free fallback validator is deleted** (TIN-4132, operator
@@ -87,19 +105,19 @@ Versioning: [SemVer 2.0](https://semver.org/).
   consumer CI runs — a gate reading as coverage while enforcing less than it
   appears to, which is the standard this release is written against.
 
-  Newly recorded: `lanes.schema.json` as `drifted`, and
-  `blahaj-dispatch.schema.json` / `public-preview-dispatch.schema.json` as
-  `unsourced` — their `$id`s name site.scaffold paths that **404** at the
+  `blahaj-dispatch.schema.json` and `public-preview-dispatch.schema.json` remain
+  `unsourced`: their `$id`s name site.scaffold paths that **404** at the
   recorded revision, so their digests are pinned but no provenance can be
   claimed. That also shows the "`$id` names the authority" heuristic this
   record rests on is not reliable on its own.
 
-  **`lanes.schema.json` must not be reflexively re-vendored.** It has drifted
-  in both directions and ci-templates is ahead on one: the vendored copy
-  carries the TIN-3914 org-namespaced capability-class `pattern` where upstream
-  still carries a hardcoded `tinyland-*` `enum`. Measured 2026-08-29 — adopting
-  upstream's bytes turns `just lanes-schema-runner-class-check` red with
-  `runnerClass no longer admits capability class great-falls-tool-bus-nix`.
+  The earlier v3-era instruction not to re-vendor `lanes.schema.json` is
+  superseded by TIN-2130 comment `a7fb6f87-5d45-45a6-bd99-136c4f461fbd`.
+  V4 removes runner selection from the schema entirely and deletes the orphaned
+  `lanes-schema-runner-class-check`. The entry is temporarily `drifted` only
+  because this requested working-tree co-move may not commit the paired site
+  source; a v4 release is blocked until the site commit and exact upstream
+  SHA-256 replace that temporary provenance state.
 
 - **`state` and `upstream_sha256` in `schemas/VENDORED.json` are asserted, not
   merely recorded.** `identical` now requires `upstream_sha256` to equal the

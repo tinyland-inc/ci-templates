@@ -1,26 +1,13 @@
-# Restricted private-repository workflows
+# Restricted private-repository spoke CI
 
-> **`spoke-lane-env-restricted.yml` is deprecated (TIN-489, post-#1255)**:
-> it inherits `spoke-lane-env.yml`'s Blahaj-`repository_dispatch` PR-env
-> routing, which Blahaj (cluster substrate only, post-#1255) no longer owns.
-> PR-env create+destroy+TTL is the application's owner-overlay repository's
-> capability now — see the ci-templates README's PR-env lifecycle producer
-> note and `tinyland-inc/site.scaffold`
-> `docs/patterns/owner-overlay-apply-plane.md`. It is kept callable, unchanged,
-> only so existing callers don't break; do not point a new private spoke at
-> it. `spoke-ci-restricted.yml` (CI, not PR-env) is unaffected by this note.
-
-`spoke-ci-restricted.yml` and `spoke-lane-env-restricted.yml` are explicit
-opt-in variants of the existing spoke workflows. They preserve the legacy
-behavior, matrices, permissions, cache-first behavior, and lane lifecycle, but
-every directly defined job routes through both:
+`spoke-ci-restricted.yml` is an explicit opt-in variant of the legacy spoke
+workflow. Every directly defined job routes through both:
 
 - a required GitHub runner group owned by the caller's `-infra` overlay; and
 - a required, reviewed GloriousFlywheel capability label.
 
-The legacy `spoke-ci.yml` and `spoke-lane-env.yml` files remain
-behaviorally unchanged for every caller that does not opt in, and their bytes
-stay pinned by `SPECS[…][:legacy_sha256]` in
+The legacy `spoke-ci.yml` file remains behaviorally unchanged for every caller
+that does not opt in, and its bytes stay pinned by `SPECS[…][:legacy_sha256]` in
 `scripts/restricted-workflow-contract.rb`. `spoke-ci.yml`'s optional
 `runner_group` input (TIN-3902) is *not* this surface: it adds group routing
 with no trust gate, is default-off (unset renders the pinned label-only
@@ -29,11 +16,9 @@ admits any non-generic group the caller names. A private repo that needs the
 fail-closed, reviewed group+capability contract — required inputs, no defaults,
 fork and pre-scheduling trust gate — still uses the restricted variants here.
 
-**TIN-3914 (v3.0.0) changed the legacy files, not this surface.** Both
-`legacy_sha256` pins were re-recorded because the no-GitHub-hosted-runners
-ruling moved the legacy lanes' hosted jobs onto self-hosted capability classes
-(`spoke-ci.yml`'s three utility jobs through `default_runner_class`,
-`spoke-lane-env.yml`'s four through a literal `tinyland-nix`). Those digests are
+**TIN-3914 (v3.0.0) changed the legacy file, not this surface.** The
+`legacy_sha256` pin was re-recorded because the no-GitHub-hosted-runners ruling
+moved the legacy utility jobs onto self-hosted capability classes. That digest is
 a tripwire on the legacy bytes so that adding or changing the restricted variant
 cannot silently move the shared lane — they are not a claim that the legacy
 files never change on purpose. The restricted variants needed **no** edit and
@@ -99,20 +84,6 @@ jobs:
     secrets: inherit
 ```
 
-```yaml
-jobs:
-  lane-env:
-    uses: tinyland-inc/ci-templates/.github/workflows/spoke-lane-env-restricted.yml@v2.12.1
-    with:
-      runner_group: tinyland-infra
-      nix_runner_label: tinyland-nix
-      dind_runner_label: tinyland-dind
-      kvm_runner_label: tinyland-nix-kvm
-      spoke: my-private-spoke
-    secrets:
-      BLAHAJ_DISPATCH_TOKEN: ${{ secrets.BLAHAJ_DISPATCH_TOKEN }}
-```
-
 The group and capability inputs are intentionally exact. The trust job's
 job-level `if` admits only `tinyland-infra` plus the reviewed `tinyland-nix`,
 `tinyland-nix-heavy`, `tinyland-nix-kvm`, and `tinyland-dind` roles used by the
@@ -126,7 +97,5 @@ route is doubly unreachable here: the trust gate rejected it before scheduling
 already, and `scripts/lint-runs-on.rb` now FAILs a GitHub-hosted label in either
 arm of a `{group, labels}` mapping at author time.
 
-These workflows add no provider credentials, Tofu state, plan/apply authority,
-production promotion policy, or app deployment ownership. `spoke-lane-env`'s
-existing bounded image-and-Blahaj-dispatch behavior is copied unchanged; the
-restricted variant changes only runner routing and pre-checkout trust gating.
+This workflow adds no provider credentials, Tofu state, plan/apply authority,
+production promotion policy, or app deployment ownership.

@@ -1,115 +1,95 @@
 name: lanes-load
 description: |
-  Read and validate .github/lanes.json against schemas/lanes.schema.json.
-  Outputs the validated lanes array (for strategy.matrix.lane consumption)
-  plus derived helpers (styles_json, lane_count, schema_version).
-
-  Fixes the MassageIthaca duplication bug: lane names are derived ONCE
-  from lanes.json, not duplicated inline in workflow YAML.
-
-  Contract: tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §3.
-
-inputs:
-  path:
-    description: Path to lanes.json (relative to the consumer repo's checkout root).
-    required: false
-    default: .github/lanes.json
-  filter:
-    description: |
-      Comma-separated lane names to keep, or `all`. Used by downstream
-      lane-reap consumers that want to target a subset.
-    required: false
-    default: all
+  Validate and load the fixed .github/lanes.json v4 Bazel action plan.
+  Attachment authority lives only in tinyland.repo.json. This action exposes
+  the complete finite plan; it has no filter or partial-execution path.
 
 outputs:
-  lanes_json:
-    description: Validated lanes array as a JSON string. Pass to `fromJson(...)` in strategy.matrix.
-    value: ${{ steps.load.outputs.lanes_json }}
-  styles_json:
-    description: '[lane.name for lane in lanes] — the legacy Blahaj field, derived not duplicated.'
-    value: ${{ steps.load.outputs.styles_json }}
-  lane_count:
-    description: Integer count of selected lanes.
-    value: ${{ steps.load.outputs.lane_count }}
+  actions_path:
+    description: Absolute path to a read-only validated action-map snapshot under RUNNER_TEMP.
+    value: ${{ steps.load.outputs.actions_path }}
   schema_version:
-    description: lanes.json top-level schema_version value.
+    description: Validated action-plan schema version.
     value: ${{ steps.load.outputs.schema_version }}
-  spoke_name:
-    description: lanes.json spoke.name.
-    value: ${{ steps.load.outputs.spoke_name }}
-  spoke_domain:
-    description: lanes.json spoke.domain.
-    value: ${{ steps.load.outputs.spoke_domain }}
 
 runs:
   using: composite
   steps:
-    - name: Validate lanes.json against schema
-      shell: bash
-      run: |
-        set -euo pipefail
-        schema="${{ github.action_path }}/../../../schemas/lanes.schema.json"
-        if [[ ! -f "$schema" ]]; then
-          echo "::error::ci-templates schema missing at $schema"
-          exit 1
-        fi
-        if [[ ! -f "${{ inputs.path }}" ]]; then
-          echo "::error::lanes.json not found at ${{ inputs.path }}"
-          exit 1
-        fi
-
-        if python3 -c 'import jsonschema' >/dev/null 2>&1; then
-          validator=(python3)
-        elif command -v nix >/dev/null 2>&1 && [[ -f flake.nix ]]; then
-          validator=(nix develop --command python3)
-          echo "::notice::host python lacks jsonschema; validating via nix develop"
-        else
-          echo "::error::python jsonschema is unavailable and no flake.nix dev shell exists"
-          exit 2
-        fi
-
-        "${validator[@]}" - <<PY
-        import json, sys
-        from jsonschema import Draft202012Validator
-        schema = json.load(open("$schema"))
-        inst   = json.load(open("${{ inputs.path }}"))
-        Draft202012Validator.check_schema(schema)
-        errors = sorted(Draft202012Validator(schema).iter_errors(inst), key=lambda e: list(e.absolute_path))
-        if errors:
-            for e in errors:
-                p = "/" + "/".join(str(x) for x in e.absolute_path)
-                print(f"::error file=${{ inputs.path }}::at {p}: {e.message}", file=sys.stderr)
-            sys.exit(1)
-        PY
-
-    - name: Load + filter lanes
+    - name: Validate executable action plan
       id: load
       shell: bash
       run: |
         set -euo pipefail
-        filter="${{ inputs.filter }}"
-        if [[ "$filter" == "all" || -z "$filter" ]]; then
-          lanes_json=$(jq -c '.lanes' "${{ inputs.path }}")
-        else
-          # comma-separated names
-          IFS=',' read -ra wanted <<< "$filter"
-          jq_filter=$(printf '%s\n' "${wanted[@]}" | jq -R . | jq -s .)
-          lanes_json=$(jq -c --argjson wanted "$jq_filter" '[.lanes[] | select(.name as $n | $wanted | index($n))]' "${{ inputs.path }}")
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        plan=.github/lanes.json
+        schema="${{ github.action_path }}/../../../schemas/lanes.schema.json"
+
+        [[ -f "$plan" ]] || { echo "::error file=$plan::v4 action plan is missing"; exit 1; }
+        [[ -f "$schema" ]] || { echo "::error::ci-templates action-plan schema is missing at $schema"; exit 1; }
+        [[ -n "${RUNNER_TEMP:-}" && -d "$RUNNER_TEMP" ]] || { echo "::error::RUNNER_TEMP is unavailable"; exit 1; }
+        for tool in python3 jq mktemp chmod; do
+          command -v "$tool" >/dev/null || { echo "::error::required preinstalled tool is absent: $tool"; exit 5; }
+        done
+        if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
+          echo "::error::python3 cannot import jsonschema; v4 refuses a weaker validator and has no installer or devshell fallback"
+          exit 5
         fi
 
-        styles_json=$(echo "$lanes_json" | jq -c '[.[].name]')
-        lane_count=$(echo "$lanes_json" | jq 'length')
-        schema_version=$(jq -r '.schema_version' "${{ inputs.path }}")
-        spoke_name=$(jq -r '.spoke.name' "${{ inputs.path }}")
-        spoke_domain=$(jq -r '.spoke.domain' "${{ inputs.path }}")
+        actions_path="$(mktemp "$RUNNER_TEMP/tinyland-v4-actions.XXXXXX.json")"
+        schema_version="$(python3 - "$schema" "$plan" "$actions_path" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+        from jsonschema import Draft202012Validator
 
+        schema_path, plan_path, actions_path = map(Path, sys.argv[1:])
+
+        class DuplicateNameError(ValueError):
+            pass
+
+        def reject_duplicate_names(pairs):
+            value = {}
+            for name, member in pairs:
+                if name in value:
+                    raise DuplicateNameError(f"duplicate JSON object name {name!r}")
+                value[name] = member
+            return value
+
+        def load_json(path):
+            try:
+                return json.loads(
+                    path.read_text(encoding="utf-8"),
+                    object_pairs_hook=reject_duplicate_names,
+                )
+            except (json.JSONDecodeError, DuplicateNameError) as error:
+                print(f"::error file={path}::{error}", file=sys.stderr)
+                raise SystemExit(1) from error
+
+        schema = load_json(schema_path)
+        plan = load_json(plan_path)
+        Draft202012Validator.check_schema(schema)
+        errors = sorted(
+            Draft202012Validator(schema).iter_errors(plan),
+            key=lambda error: list(error.absolute_path),
+        )
+        for error in errors:
+            path = "/" + "/".join(str(part) for part in error.absolute_path)
+            print(f"::error file={plan_path}::at {path}: {error.message}", file=sys.stderr)
+        if errors:
+            raise SystemExit(1)
+
+        actions_path.write_text(
+            json.dumps(plan["actions"], ensure_ascii=False, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        print(plan["schema_version"])
+        PY
+        )"
+        [[ "$schema_version" == 2 ]] || { echo "::error::validated action-plan schema version is not 2"; exit 1; }
+
+        chmod 0444 "$actions_path"
         {
-          echo "lanes_json=$lanes_json"
-          echo "styles_json=$styles_json"
-          echo "lane_count=$lane_count"
+          echo "actions_path=$actions_path"
           echo "schema_version=$schema_version"
-          echo "spoke_name=$spoke_name"
-          echo "spoke_domain=$spoke_domain"
-        } >> "$GITHUB_OUTPUT"
-
-        echo "::notice::loaded $lane_count lane(s) from ${{ inputs.path }} (spoke=$spoke_name, schema_version=$schema_version)"
+        } >>"$GITHUB_OUTPUT"
+        echo "::notice::loaded $(jq 'length' "$actions_path") executable v4 action(s); names are unique JSON object keys"

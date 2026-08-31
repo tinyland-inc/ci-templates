@@ -34,11 +34,9 @@ a fleet-wide change.
    org capability class. Three gates, deliberately reading different things:
    `just lint-runs-on-check` verdicts `runs-on` values structurally,
    `just no-hosted-runners-check` scans every schedulable surface textually
-   (label-aware and case-insensitive), and
-   `just lanes-schema-runner-class-check` proves no hosted label is even
-   REPRESENTABLE as consumer `lanes.json` data. The third exists because the
-   first two both missed a schema that sanctioned one. There is no opt-out
-   input, and reintroducing one is not a local decision. See
+   (label-aware and case-insensitive). The v4 action-plan schema cannot express
+   a runner at all. There is no opt-out input, and reintroducing one is not a
+   local decision. See
    `docs/migration-v2-to-v3.md`.
 4. **No baked endpoints, credentials, or upload authority** in `bazelrc/*.bazelrc`
    (enforced by `just endpoint-free-check` + `just ci-cached-endpoint-free-check`).
@@ -60,9 +58,31 @@ nix develop --command just check # if tools are not on PATH
 restricted workflows' exact dependency closure, guards the js-bazel-package
 runner + cache-backed contracts, asserts the bazelrc fragments stay
 endpoint-free, dogfoods the `runs-on` linter at 0 FAIL, proves no GitHub-hosted
-runner label survives on a schedulable surface or is representable as consumer
-lanes data (`no-hosted-runners-check` + `lanes-schema-runner-class-check`,
-TIN-3914), and runs the gitleaks working-tree scan.
+runner label survives on a schedulable surface, including canonical consumer
+lanes data (`no-hosted-runners-check`, TIN-3914), and runs the gitleaks
+working-tree scan.
+
+## V4 source foundation (TIN-2130)
+
+TIN-2130 comment `a7fb6f87-5d45-45a6-bd99-136c4f461fbd` authorizes exactly one
+new `spoke-ci-v4.yml` together with deletion of both obsolete lane-env
+workflows and their orphaned validator logic. V4 fixes forge admission at
+`tinyland-nix`, reads attachment intent only from `tinyland.repo.json`, accepts
+only `executor-backed`, and executes the complete action map through the
+preinstalled GitHub-OIDC/Flywheel tool chain. Every wrapper invocation forbids
+the workspace `.env.flywheel.local`, pins Bazelisk from the root-owned runner
+receipt, clears inherited output/external-input environment injection, and
+uses the digest-receipted OIDC helper plus receipt-derived Nix-store client
+executables.
+The complete plan is parsed into readonly, non-exported shell arrays before the
+first repository-controlled action, then held to an exact nonzero
+planned/executed count. TIN-4026 comment `a02a7948` P2d
+owns the explicit `jobs=4` client cap; GF-I11 leaves actual per-tenant capacity
+with the cell scheduler. V4 has no cache-only, endpoint override/fallback,
+installer, hosted, or local fallback. Source is not release, adoption, apply,
+or RBE proof; only
+independently joined nonzero remote-action evidence supports a remote-execution
+claim.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 

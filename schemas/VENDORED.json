@@ -16,8 +16,8 @@
     "SCOPE IS THE WHOLE DIRECTORY, deliberately. The first draft of this record",
     "covered the two manifest schemas only, and `just",
     "vendored-schema-provenance-check` reported 'all 2 vendored schemas match'",
-    "over a directory holding four -- one of which, lanes.schema.json, was",
-    "already drifted and is load-bearing (it backs the lanes-load action that",
+    "over a directory holding four -- one of which, lanes.schema.json, is",
+    "load-bearing (it backs the lanes-load action that",
     "tinyland.dev's CI runs). Coverage-shaped output enforcing less than it",
     "reads as is the defect this whole change exists to end, so the gate now",
     "globs schemas/*.schema.json and an unrecorded schema is an error.",
@@ -42,8 +42,8 @@
     "stay separate, advisory, non-blocking questions."
   ],
   "source_repository": "tinyland-inc/site.scaffold",
-  "source_revision": "cf05836bf98526ac6f05af31200176d9141f9584",
-  "source_revision_note": "site.scaffold main @ 2026-08-29. Advisory: a hermetic check cannot verify that this names a real commit, only that the digests beside it are internally consistent. Both manifest schema files are byte-identical at 6c58bb630de1 and at this revision, so recording the newer tip is a provenance refresh, not a content change.",
+  "source_revision": "b79f56977855b98db2fc2c83b01aad990f690920",
+  "source_revision_note": "Exact held site.scaffold TIN-2130 v4 source commit. This provenance records source identity only; it does not authorize the ci-templates v4 release or site adoption.",
   "files": [
     {
       "vendored": "schemas/tinyland-repo-manifest.v2.schema.json",
@@ -63,10 +63,9 @@
     {
       "vendored": "schemas/lanes.schema.json",
       "source": "docs/schemas/lanes.schema.json",
-      "sha256": "eaba0b2c791c8df85c86f4e9abd99865d5ab367a85733e5025822bdade77b468",
-      "upstream_sha256": "fff8058b1ec87029e3877da67eacbb79badab8c8272dda9452ba5cdaacec08cb",
-      "state": "drifted",
-      "state_note": "Drifted in BOTH directions, and this one must not be reflexively re-vendored. Upstream is ahead on authority language: it says the schema 'grants no receiver, apply, DNS, or lifecycle authority', where the vendored copy still describes blahaj PR-env provisioning, PR-env DNS templating and a reaper TTL, and still names --config=flywheel-executor where upstream says GF_BAZEL_SUBSTRATE_MODE=executor-backed. ci-templates is ahead on runnerClass: the vendored copy carries the TIN-3914 org-namespaced capability-class PATTERN, upstream still carries a hardcoded tinyland-* ENUM. Adopting upstream's bytes wholesale turns this repo's own `just lanes-schema-runner-class-check` red -- measured 2026-08-29: 'runnerClass no longer admits capability class great-falls-tool-bus-nix'. Reconciling it is a real change with a real decision in it, which is exactly why it is recorded rather than quietly copied."
+      "sha256": "521521527751a6faa705124b6232b64c4217f14c4cc5aa74e560cc9c798aa923",
+      "upstream_sha256": "521521527751a6faa705124b6232b64c4217f14c4cc5aa74e560cc9c798aa923",
+      "state": "identical"
     },
     {
       "vendored": "schemas/blahaj-dispatch.schema.json",
