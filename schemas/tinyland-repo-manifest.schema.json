@@ -130,11 +130,6 @@
 					"minLength": 1,
 					"description": "Operator overlay that provisions the repo's runners/secrets (e.g. jesssullivan-infra)."
 				},
-				"executionPool": {
-					"type": "string",
-					"minLength": 1,
-					"description": "Execution pool the lanes target (e.g. tinyland-nix in-cluster ARC)."
-				},
 				"substrateMode": {
 					"$ref": "#/$defs/substrateMode",
 					"description": "Authoritative Bazel substrate mode. compatibility-local-only = no shared cache; shared-cache-backed = cache-first (TIN-1997 Option D); executor-backed = REAPI executor (DEFINED + ENFORCED but not selected by any current repo)."

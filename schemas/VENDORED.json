@@ -42,29 +42,29 @@
     "stay separate, advisory, non-blocking questions."
   ],
   "source_repository": "tinyland-inc/site.scaffold",
-  "source_revision": "b79f56977855b98db2fc2c83b01aad990f690920",
+  "source_revision": "0b5ff6fba1a97dc3057ce6e25d72be71d25b418d",
   "source_revision_note": "Exact held site.scaffold TIN-2130 v4 source commit. This provenance records source identity only; it does not authorize the ci-templates v4 release or site adoption.",
   "files": [
     {
       "vendored": "schemas/tinyland-repo-manifest.v2.schema.json",
       "source": "docs/schemas/tinyland-repo-manifest.v2.schema.json",
-      "sha256": "c7049f33e6098822c79736d9232a97609d3a052dda4d56e213f9fba4f12ad64b",
-      "upstream_sha256": "c7049f33e6098822c79736d9232a97609d3a052dda4d56e213f9fba4f12ad64b",
+      "sha256": "0514f01d7507419528f998d64d48804e8d2237c8f9314b89fea475596a7fd9fc",
+      "upstream_sha256": "0514f01d7507419528f998d64d48804e8d2237c8f9314b89fea475596a7fd9fc",
       "state": "identical"
     },
     {
       "vendored": "schemas/tinyland-repo-manifest.schema.json",
       "source": "docs/schemas/tinyland-repo-manifest.schema.json",
-      "sha256": "4b8155126349ef226ead7e079e0917b3b8e91c2ecb3bc4f8de4ca1baad3887ec",
-      "upstream_sha256": "15965f1864c8d853805cf0596d5d1d76da536e09be46d05fd1cf8137f7122a4a",
+      "sha256": "e6c5d25bdf26ea4f6392151a96724b910100cc90f4d60118be0d6a14b5f115c9",
+      "upstream_sha256": "3b7b403632b03f219efea30de512219be8b7871fe3e7d436c3e9ce6b4c22046e",
       "state": "drifted",
       "state_note": "Known divergence, reported not reconciled. ci-templates alone defines authorities.artifact_registry; site.scaffold alone forbids authorities.gitops_receiver on a static spoke. De-forking v1 changes what live consumers are validated against and is its own change."
     },
     {
       "vendored": "schemas/lanes.schema.json",
       "source": "docs/schemas/lanes.schema.json",
-      "sha256": "521521527751a6faa705124b6232b64c4217f14c4cc5aa74e560cc9c798aa923",
-      "upstream_sha256": "521521527751a6faa705124b6232b64c4217f14c4cc5aa74e560cc9c798aa923",
+      "sha256": "56a3d23d00f33b5915af2c9c5579fc24af37633870a679533ee523cb0069ab34",
+      "upstream_sha256": "56a3d23d00f33b5915af2c9c5579fc24af37633870a679533ee523cb0069ab34",
       "state": "identical"
     },
     {

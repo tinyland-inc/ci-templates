@@ -64,49 +64,27 @@ working-tree scan.
 
 ## V4 source foundation (TIN-2130)
 
-TIN-2130 comment `a7fb6f87-5d45-45a6-bd99-136c4f461fbd` authorizes the
-`spoke-ci-v4.yml` foundation together with deletion of both obsolete lane-env
-workflows and their orphaned validator logic. V4 fixes forge admission at
-`tinyland-nix`, reads attachment intent only from `tinyland.repo.json`, accepts
-only `executor-backed`, and executes the complete action map through the
-preinstalled GitHub-OIDC/Flywheel tool chain. Every wrapper invocation forbids
-the workspace `.env.flywheel.local`, pins Bazelisk from the root-owned runner
-receipt, clears inherited output/external-input environment injection, and
-uses the digest-receipted OIDC helper plus receipt-derived Nix-store client
-executables. One receipt-pinned Bubblewrap session runs verification and the
-complete plan as UID/GID 65534 with dropped capabilities, a cleared
-environment, private PID/process/device views, read-only source, isolated
-outputs, and no runner home/socket/cache mounts; root validates results only
-after that session exits. TIN-4026 comment `a02a7948` P2d
-owns the explicit `jobs=4` client cap; GF-I11 leaves actual per-tenant capacity
-with the cell scheduler. V4 has no cache-only, endpoint override/fallback,
-installer, hosted, or local fallback. Source is not release, adoption, apply,
-or RBE proof; only
-independently joined nonzero remote-action evidence supports a remote-execution
-claim.
+The held v4 carrier is deliberately thin. `.github/lanes.json` declares named
+Bazel `build` or `test` actions, finite workspace labels, and only the
+abstract REAPI capabilities defined by GloriousFlywheel `Core.dhall`
+(`rbe-linux-x86_64` or `rbe-darwin-aarch64`). It never names a runner,
+execution pool, resolved platform, endpoint, credential, upload posture, or
+provider concurrency.
 
-The held #156 source co-move keeps OCI publication outside that build/test
-plan. `spoke-oci-publish-v4.yml` derives the caller's own GHCR repository and
-one SHA-qualified tag from a same-repository pull request or exact main push;
-the caller supplies neither. Its no-package build job materializes only the
-fixed `//:oci_publish_bundle` OCI layout through the executor profile (PR cache
-upload false; trusted main true). A root-owned workspace-status command stamps
-the admitted commit SHA and deterministic commit date only into the terminal
-OCI config and labels; source identity never enters global Bazel action
-environment, so reusable build and layer actions keep their source-derived
-cache keys. The build validates every descriptor/blob and stamped identity,
-then uploads one deterministic inert tar. A fresh job with no checkout, OIDC,
-or Bazel authority is the sole `packages: write` holder. It downloads that exact
-artifact ID without decompression, revalidates the archive, and uses only the
-root-custodied `skopeo` client. An existing equal digest is idempotent; an
-existing different digest refuses. GitHub concurrency serializes the
-controlled SHA tag, but GHCR package-level tag immutability remains external to
-this workflow. Forks are explicit no-artifact skips. There is no
-caller-selected command, target, runner, endpoint, tag, repository,
-Docker/daemon, hosted, local, or cache-only path. Publication remains release
-blocked until GF#1712 publishes and rolls out
-an exact image carrying root-custodied Bubblewrap 0.11.2, Bazelisk 1.29.0, and
-`skopeo` receipts; the workflow never fetches or installs those clients.
+`spoke-ci-v4.yml` accepts one checked-in action name, checks out the exact
+pull-request head SHA when present (otherwise `github.sha`), then invokes the
+image-custodied compiled client:
+
+```text
+/usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>
+```
+
+The Go client owns OIDC, owner-installation binding, cache/executor resolution,
+and REAPI dispatch. Workflow source must not reimplement that lifecycle in
+Bash, Python, composite actions, proxy setup, or fallback branches. Consumer
+overlay declarations own demand; provider internals resolve supply. This is
+source only: no v4 tag, adoption, publication, installation, or runtime proof
+exists merely because the carrier is present.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 
@@ -153,7 +131,6 @@ mode the gate enforces (additive + optional; existing manifests still validate):
 "enrollment": {
   "forgeScope": "Jesssullivan",
   "operatorOverlay": "jesssullivan-infra",
-  "executionPool": "tinyland-nix",
   "substrateMode": "shared-cache-backed"
 }
 ```

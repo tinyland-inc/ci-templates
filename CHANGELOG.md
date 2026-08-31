@@ -8,58 +8,21 @@ Versioning: [SemVer 2.0](https://semver.org/).
 ### Changed
 
 - **TIN-2130 v4 action-fabric foundation** (carrier comment
-  `a7fb6f87-5d45-45a6-bd99-136c4f461fbd`). The vendored schema now admits only
-  an executable Bazel action map; `tinyland.repo.json` remains the sole
-  attachment authority. Added one executor-only `spoke-ci-v4.yml` with fixed
-  `tinyland-nix` admission, GitHub OIDC minting, and the preinstalled
-  `gf-reapi-credhelper` → `flywheel-verify` → `gloriousflywheel-bazel` path.
-  The workflow forbids workspace fallback profiles on every wrapper call,
-  verifies the root-owned OIDC helper and receipt-derived Nix-store clients,
-  pins Bazelisk from the immutable runner receipt, clears inherited
-  output/external-input environment injection, applies the TIN-4026 P2d
-  `jobs=4` client cap, and runs every repository-controlled Bazel action in one
-  receipt-pinned Bubblewrap 0.11.2 session as UID/GID 65534, with all
-  capabilities dropped, `no-new-privs`, a cleared environment, private
-  PID/process/device views, read-only source, isolated outputs, and no ambient
-  runner home/socket/cache mounts. One non-renewing one-hour token is copied
-  into the sandbox; raw OIDC/exchange material is deleted before an `env -i`
-  stage-2 re-entry, and root validates results only after the sandbox exits. Its one
-  default-off maintenance input is mutually exclusive with that plan:
-  `refresh_module_lock: true` admits only an exact same-repository PR head,
-  runs the fixed image-custodied
-  `gloriousflywheel-bazel fetch //... --lockfile_mode=update` operation in a
-  private exact-head copy with cache upload disabled, accepts only a tracked
-  regular `MODULE.bazel.lock` delta, rehashes the copied lock against its
-  identity receipt, uploads it for one day without overwrite, and then fails
-  deliberately. It exposes no caller command, target,
-  runner, endpoint, source write, publication, or green maintenance verdict.
-  Added the separate typed `spoke-oci-publish-v4.yml` boundary: it admits only
-  trusted same-repository PR heads or main pushes and derives the only legal
-  GHCR repository/tag from that event. Its package-free build job invokes the
-  fixed `//:oci_publish_bundle` through the executor profile, keeps PR cache
-  upload disabled, and uses a root-owned workspace-status command to stamp the
-  admitted commit SHA and deterministic commit date only into the terminal OCI
-  config and labels. Source identity never enters global Bazel action
-  environment, so reusable build and layer actions retain source-derived cache
-  keys. The job completely validates the OCI layout and stamped provenance,
-  then uploads one deterministic inert archive. A fresh source-blind job is the
-  sole `packages: write` holder: it downloads by exact artifact ID without
-  extraction, revalidates every descriptor/blob and identity, and uses only a
-  root-custodied `skopeo` client. Same-digest re-entry is idempotent;
-  different-digest or ambiguous registry state refuses; the output digest is
-  read back from GHCR. Forks explicitly skip with no artifact. It exposes no
-  command, target, runner, endpoint, destination, tag, Docker/Buildx/DinD,
-  hosted, local, or cache-only escape. Publication remains blocked on the
-  exact GF runner-image publication and rollout carrying root-custodied
-  Bubblewrap 0.11.2 and `skopeo` receipts; the workflows never install a
-  client.
-  Removed the two obsolete lane-env workflows and their orphaned validator
-  logic, plus the zero-caller superseded `spoke-public-preview.yml`, its orphan
-  composite and schema, and their live documentation/ledger references. The
-  two v4 workflows total 456 lines against 550 removed workflow lines, so the
-  co-move is a 94-line workflow contraction; the central validator is a
-  7-line contraction against main after the narrow trust assertions.
-  V3 remains unmodified, and no release or runtime adoption is implied.
+  `a7fb6f87-5d45-45a6-bd99-136c4f461fbd`). `spoke-ci-v4.yml` is now an
+  exact-checkout, compiled-client dispatcher. The caller selects one named
+  action from the checked-in `.github/lanes.json` plan, and the workflow invokes
+  `/usr/local/bin/gf-action-client run` once with the admitted source SHA. The
+  vendored schema is an exact
+  projection of GloriousFlywheel `Core.dhall`: actions contain only Bazel
+  command, finite targets, and abstract REAPI capabilities. Provider pool,
+  runner, resolved platform, endpoint, profile, upload, and fixed concurrency
+  fields were removed from consumer manifests and plans. Inline OIDC, token,
+  proxy, sandbox, OCI, cleanup, and fallback orchestration was deleted rather
+  than becoming a second scheduler/client implementation. The old lane-env and
+  zero-caller public-preview surfaces remain deleted, and the existing central
+  validator shrank with the public surface. V3 remains unmodified. This held
+  source names no v4 tag and implies no release, adoption, publication,
+  installation, or runtime proof.
 
 ### Removed
 
@@ -152,10 +115,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
   The earlier v3-era instruction not to re-vendor `lanes.schema.json` is
   superseded by TIN-2130 comment `a7fb6f87-5d45-45a6-bd99-136c4f461fbd`.
   V4 removes runner selection from the schema entirely and deletes the orphaned
-  `lanes-schema-runner-class-check`. The entry is temporarily `drifted` only
-  because this requested working-tree co-move may not commit the paired site
-  source; a v4 release is blocked until the site commit and exact upstream
-  SHA-256 replace that temporary provenance state.
+  `lanes-schema-runner-class-check`. The paired site source is committed at
+  `0b5ff6fba1a97dc3057ce6e25d72be71d25b418d`; the vendoring record pins that
+  revision and matching upstream SHA-256, so the entry is now `identical`.
 
 - **`state` and `upstream_sha256` in `schemas/VENDORED.json` are asserted, not
   merely recorded.** `identical` now requires `upstream_sha256` to equal the

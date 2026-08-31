@@ -15,12 +15,8 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
 
 - **Spoke CI** (lint, type-check, build, test, Bazel graph, optional
   Playwright) via `spoke-ci.yml` reusable workflow.
-- **Breaking v4 action-fabric CI** via `spoke-ci-v4.yml`: one canonical repo
-  manifest, one executable action plan, and a fail-closed executor profile.
-- **Typed v4 OCI publication** via `spoke-oci-publish-v4.yml`: one canonical
-  inert `//:oci_publish_bundle` layout, an event-derived caller repository/tag,
-  and a source-blind image-custodied publisher; no Docker/Buildx/DinD or
-  arbitrary command surface.
+- **Breaking v4 action-fabric CI** via `spoke-ci-v4.yml`: one action-only plan
+  and one compiled-client dispatch boundary.
 - **Static projection snapshot refresh** via `spoke-pulse-ingest.yml`.
 - **GloriousFlywheel REAPI binding** via the `flywheel-bazel` composite
   action.
@@ -48,68 +44,27 @@ jobs:
     secrets: inherit
 ```
 
-The breaking v4 foundation has no caller-selected runner, mode, endpoint, plan
-path, or publication input. `tinyland.repo.json` is the sole attachment
-authority; `.github/lanes.json` contains only executable Bazel commands and
-targets. V4 admits only `tinyland-nix`, requires the manifest to declare
-`executor-backed`, mints a short-lived GitHub-OIDC profile, and runs the
-preinstalled `gf-reapi-credhelper`, `flywheel-verify`, and
-`gloriousflywheel-bazel` path without a cache-only, downloaded-helper, or PATH
-fallback. The workflow verifies the root-owned OIDC helper and receipt-derived
-Nix-store clients, mints one non-renewing one-hour cell token, deletes the raw
-OIDC exchange material, and exposes only that cell token inside a
-receipt-pinned Bubblewrap boundary. Repository-controlled Bazel runs as
-UID/GID 65534 with all capabilities dropped, `no-new-privs`, a cleared
-environment, private PID/process/device views, read-only source, isolated
-outputs, no runner home/socket/cache mounts, and a shared network only for the
-fixed REAPI authorities. The root parent validates outputs only after the
-single sandbox session exits. TIN-4026 comment
-`a02a7948` P2d owns the explicit per-action `jobs=4` client cap until a
-fleet-published replacement; the gf-reapi-cell scheduler remains the actual
-per-tenant concurrency authority under GF-I11.
+The held v4 source has no caller-selected runner, execution pool, resolved
+platform, endpoint, profile, upload authority, concurrency cap, or fallback.
+`.github/lanes.json` declares named Bazel commands and finite targets with only
+the abstract `rbe-linux-x86_64` or `rbe-darwin-aarch64` capabilities from
+GloriousFlywheel `Core.dhall`. Consumer overlays declare that demand; the
+provider resolves private supply.
 
-This is a held source foundation, not a release. Its vendored action-plan
-schema must name the exact durable site.scaffold source commit and byte digest
-before TIN-4248 can cut v4. TIN-4249 separately owns consumer adoption,
-including the manifest/caller co-move; consumers use the exact `@v4.0.0`
-self-release transaction and must not treat this checkout as runtime wiring.
+`spoke-ci-v4.yml` is a thin dispatcher. The caller selects one checked-in
+action name, the workflow checks out the exact pull-request head SHA when
+present (otherwise `github.sha`), and it invokes the compiled client already
+custodied by the v4 runner image:
 
-The runner currently receipts Bazelisk, not an exact Bazel binary or offline
-external-input capsule. Clearing inherited Bazelisk environment overrides and
-setting `BAZELISK_SKIP_WRAPPER` prevents an inherited launcher or repository
-`tools/bazel` wrapper from redirecting this call. Workspace/home `.bazeliskrc`
-and the `.bazelversion`-selected cold Bazel fetch remain unresolved input
-surfaces. The carrier's no-downloader condition therefore remains a TIN-4248
-release blocker; source validation here must not be read as closing it.
+```text
+/usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>
+```
 
-OCI publication is a separate reusable workflow rather than an action-plan
-command and takes no caller input. It derives lowercase
-`ghcr.io/<github.repository>` plus `pr-<number>-sha-<full-head-sha>` for a
-trusted same-repository pull request or `main-sha-<full-sha>` for a main push.
-Forks are recorded as skipped and expose no artifact or digest. The build job
-has no package authority: it checks out the exact admitted SHA, executes only
-the fixed `//:oci_publish_bundle` target through the executor client, and
-supplies a root-owned workspace-status command that stamps the admitted commit
-SHA and deterministic commit date only into the terminal OCI config and
-labels. It does not inject source identity through global Bazel action
-environment, so reusable build and layer actions remain source-keyed and
-cacheable across workflow-only commits. The job disables remote cache writes on
-PRs, validates the complete OCI descriptor/blob closure and stamped provenance,
-and uploads one deterministic inert tar by exact artifact ID. A fresh
-`packages: write` job has no checkout, OIDC, or Bazel authority. It downloads
-without extracting, independently revalidates the archive and event identity,
-then uses the root-custodied `skopeo` client to create or idempotently confirm
-the controlled SHA tag. A different existing digest, registry ambiguity, or
-missing client is a refusal. The returned digest comes from a post-publication
-GHCR Registry v2 response. GHCR tag immutability itself is an external package
-governance limit, not something this workflow claims.
-
-The expected consumer target is an `oci_image` named
-`//:oci_publish_bundle`; rules_oci supplies
-`//:oci_publish_bundle.digest`. The runner image must carry exact root-custodied
-Bubblewrap 0.11.2 and `skopeo` receipts; their GF image publication and rollout
-remain explicit release dependencies. These workflows never download or
-install either client.
+The Go client owns OIDC, owner-installation binding, cache/executor resolution,
+and REAPI action dispatch. The reusable workflow does not reproduce those
+lifecycles in Bash, Python, proxy composites, OCI helpers, or fallback paths.
+This branch is source only: it does not name an unavailable v4 tag and does not
+claim release, adoption, publication, installation, or runtime proof.
 
 Your spoke needs `.github/lanes.json` validating against
 [`schemas/lanes.schema.json`](./schemas/lanes.schema.json). New spokes should
@@ -160,7 +115,7 @@ working-tree scan.
 | **`repo-manifest-validate`** | Validate `tinyland.repo.json` and optionally require repo roles such as `static-spoke`. |
 | **`cache-attachment-validate`** | Execute the release-vendored cache attachment contract without a network source fallback. |
 | **`flywheel-bazel`** | `bazelisk` wrapper with endpoint-free `--config=flywheel[-executor]`. Supplies cache/executor endpoints from runtime env or inputs. Refuses executor on non-cluster runners. |
-| **`lanes-load`** | V4: validate and load the complete `.github/lanes.json` executable action map; no filter or partial-plan output. V3 callers remain pinned to the prior action contract. |
+| **`lanes-load`** | Legacy lane-matrix loader retained for v3 callers. V4 dispatch goes directly through the compiled client. |
 | **`flywheel-reapi-proof`** | Dispatch and optionally await a GloriousFlywheel executor-backed proof run, correlated by a unique request id. |
 | **`lane-status-check`** | Post per-lane `ci/lane/<name>` GitHub commit status. |
 | **`pulse-ingest-validate`** | Validate a Pulse / static projection snapshot. |
@@ -257,8 +212,7 @@ Set `attic-public-read: "true"` on any of the three to opt in. What flips:
 | `npm-publish.yml` | Pre-existing: Node package build + publish, callable only (no local tag/manual trigger). Ran GitHub-hosted until TIN-3914 moved all three jobs to `tinyland-nix`. |
 | **`rust-bazel-application.yml`** | Opt-in/default-off native Darwin/Linux Rust application validation with Bazel-only rustfmt, clippy, build, unit, integration, and package targets; cache reads are runtime-attached and writes require an explicitly enabled protected push ref. |
 | **`spoke-ci.yml`** | Canonical spoke CI: secrets-scan, lanes-load, per-lane flywheel-bazel build/test, bazel-graph, optional Playwright. |
-| **`spoke-ci-v4.yml`** | Breaking executor-only action fabric: fixed `tinyland-nix` admission, manifest-authoritative attachment, and complete Bazel-plan execution as an isolated unprivileged identity. Its typed `refresh_module_lock` mode uses a private exact-head copy, accepts only the lock delta, uploads a rehashed identity receipt for one day, and then fails deliberately. |
-| **`spoke-oci-publish-v4.yml`** | Typed v4 GHCR publisher: no-package `//:oci_publish_bundle` build, exact inert-artifact transfer, source-blind root-custodied `skopeo`, and registry-derived digest output; forks produce no artifact. |
+| **`spoke-ci-v4.yml`** | Thin v4 action dispatcher: one checked-in action name, exact checkout, and one compiled `gf-action-client` invocation. Provider lifecycle and supply stay behind the client boundary. |
 | **`spoke-ci-restricted.yml`** | Explicit private-repo opt-in variant of `spoke-ci.yml`; every job requires an owner `-infra` runner group plus its reviewed capability label. |
 | **`spoke-pulse-ingest.yml`** | Snapshot-refresh PR opener. |
 | **`spoke-deploy-cloudflare-pages.yml`** | Sanctioned **opt-in** Cloudflare Pages deploy lane. Builds the adapter-static `build/` via `nix develop --command just setup/check/build`, then `wrangler pages deploy build`. Credential-skips when the org CF secrets are absent; PR events build only. Does **not** replace the scaffold default GitHub-Pages lane. |
@@ -649,11 +603,10 @@ entry (named, not a traceback), and a record with no entries at all. Upstream
 questions: no offline check can prove that string names a real commit. An entry
 marked `drifted` is reported, never failed.
 
-The `lanes.schema.json` bytes match the paired site.scaffold working tree. The
-vendoring record deliberately remains `drifted` against its last committed
-source revision until the site change has a commit to cite; a v4 release is
-blocked until `source_revision` and the upstream SHA-256 are updated and the
-entry can honestly become `identical`.
+The `lanes.schema.json` bytes match held site.scaffold commit
+`0b5ff6fba1a97dc3057ce6e25d72be71d25b418d`. The vendoring record names that
+exact revision, records the same SHA-256 on both sides, and classifies the file
+as `identical`; this provenance edge is closed for the held v4 source.
 
 **Known drift, not closed here:** the vendored
 `tinyland-repo-manifest.schema.json` (v1) and site.scaffold's copy have diverged
@@ -690,8 +643,8 @@ current contract surface.
 `lane-ttl-reap` composite, its only consumer, on 2026-08-07.)
 
 `tinyland-repo-manifest.schema.json` carries first-class, validated **enrollment**
-fields (TIN-2109): `enrollment.forgeScope`, `enrollment.operatorOverlay`,
-`enrollment.executionPool`, and `enrollment.substrateMode`
+fields (TIN-2109): `enrollment.forgeScope`, `enrollment.operatorOverlay`, and
+`enrollment.substrateMode`
 (`compatibility-local-only` | `shared-cache-backed` | `executor-backed`). The
 object is additive and optional — existing manifests without it still validate —
 and `substrateMode` is the authoritative expected mode the cache-backed gate

@@ -1,280 +1,39 @@
 name: spoke-ci-v4
-# Source-only breaking contract authorized by TIN-2130 comment a7fb6f87-5d45-45a6-bd99-136c4f461fbd.
-# Publication and adoption are separate operator transactions.
+# Source-only breaking contract authorized by TIN-2130. Publication, adoption,
+# installation, and runtime proof are separate operator transactions.
 
 on:
   workflow_call:
     inputs:
-      refresh_module_lock:
-        description: Produce an exact-head MODULE.bazel.lock artifact; never a green CI verdict.
-        type: boolean
-        default: false
+      action_name:
+        description: Named action from the caller's checked-in .github/lanes.json.
+        required: true
+        type: string
+
 permissions:
   contents: read
   id-token: write
 
 jobs:
   action-fabric:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: tinyland-nix
     timeout-minutes: 45
-    env:
-      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     steps:
-      - name: Admit one exact source identity
-        id: admission
-        shell: bash
-        env:
-          REFRESH_MODULE_LOCK: ${{ inputs.refresh_module_lock }}
-          CALLER_REPOSITORY: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_REF: ${{ github.ref }}
-          EVENT_SHA: ${{ github.sha }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          refuse() { echo "::error::v4 action fabric refused: $*" >&2; exit 1; }
-          case "$REFRESH_MODULE_LOCK" in true|false) ;; *) refuse "refresh_module_lock must be boolean" ;; esac
-          source_sha="$EVENT_SHA"
-          if [[ "$EVENT_NAME" == pull_request ]]; then
-            if [[ "$PR_HEAD_REPOSITORY" != "$CALLER_REPOSITORY" ]]; then
-              [[ "$REFRESH_MODULE_LOCK" == false ]] || refuse "lock refresh is admitted only for a same-repository pull-request head"
-              printf 'allowed=false\n' >>"$GITHUB_OUTPUT"
-              echo "::notice::v4 action fabric skipped an untrusted fork pull request"
-              exit 0
-            fi
-            source_sha="$PR_HEAD_SHA"
-            if [[ "$REFRESH_MODULE_LOCK" == true ]]; then
-              [[ -n "$DEFAULT_BRANCH" && "$PR_BASE_REF" == "$DEFAULT_BRANCH" ]] || refuse "lock refresh pull request must target the repository default branch"
-            fi
-          elif [[ "$REFRESH_MODULE_LOCK" == true ]]; then
-            refuse "lock refresh is admitted only for a same-repository pull-request head"
-          fi
-          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || refuse "source identity is not one exact commit SHA"
-          remote_upload=false
-          [[ "$EVENT_NAME" == push && "$EVENT_REF" == refs/heads/main ]] && remote_upload=true
-          printf 'allowed=true\nsource_sha=%s\nremote_upload=%s\n' "$source_sha" "$remote_upload" >>"$GITHUB_OUTPUT"
-
       - name: Check out exact admitted source
-        if: steps.admission.outputs.allowed == 'true'
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ steps.admission.outputs.source_sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - name: Verify exact checkout identity
-        if: steps.admission.outputs.allowed == 'true'
+      - name: Execute declared Bazel actions
         shell: bash
         env:
-          EXPECTED_SOURCE_SHA: ${{ steps.admission.outputs.source_sha }}
+          ACTION_NAME: ${{ inputs.action_name }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse --verify 'HEAD^{commit}')" == "$EXPECTED_SOURCE_SHA" ]] || { echo "::error::checkout did not resolve the admitted SHA" >&2; exit 1; }
-          [[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] || { echo "::error::exact checkout is not clean" >&2; exit 1; }
-
-      - name: Validate sole attachment authority
-        if: steps.admission.outputs.allowed == 'true'
-        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v4.0.0
-
-      - name: Load complete executable action plan
-        if: steps.admission.outputs.allowed == 'true' && !inputs.refresh_module_lock
-        id: plan
-        uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v4.0.0
-
-      - name: Execute admitted mode across the privilege boundary
-        if: steps.admission.outputs.allowed == 'true'
-        id: fabric
-        shell: bash
-        env:
-          REFRESH_MODULE_LOCK: ${{ inputs.refresh_module_lock }}
-          SOURCE_REPOSITORY_ID: ${{ github.repository_id }}
-          SOURCE_REPOSITORY: ${{ github.repository }}
-          SOURCE_SHA: ${{ steps.admission.outputs.source_sha }}
-          REMOTE_UPLOAD: ${{ steps.admission.outputs.remote_upload }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_REF: ${{ github.ref }}
-          PLAN_SCHEMA_VERSION: ${{ steps.plan.outputs.schema_version }}
-          PLAN_ACTIONS_PATH: ${{ steps.plan.outputs.actions_path }}
-        run: |
-          set -euo pipefail
-          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-          refuse() { echo "::error::v4 action fabric refused: $*" >&2; exit 1; }
-          receipt() {
-            local path="$1" label="$2" value
-            [[ -f "$path" && ! -L "$path" && "$(stat -c '%u:%g:%a' "$path")" == 0:0:444 && "$(wc -l <"$path")" == 1 ]] || refuse "$label receipt is not root:root mode 0444 with one line"
-            IFS= read -r value <"$path"; [[ -n "$value" ]] || refuse "$label receipt is empty"; printf '%s\n' "$value"
-          }
-          custody_tool() {
-            local name="$1" store bin link root mode
-            store="$(receipt "/etc/tinyland/gf-client-${name}-store" "$name store")"
-            [[ "$store" =~ ^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9][A-Za-z0-9._+~-]*$ && -d "$store" && ! -L "$store" && "$(stat -c '%u:%g' "$store")" == 0:0 ]] || refuse "$name store receipt is not an immutable root-owned Nix output"
-            mode="$(stat -c '%a' "$store")"; (( (8#$mode & 8#022) == 0 )) || refuse "$name store is writable outside root"
-            bin="$store/bin/$name"; [[ -f "$bin" && -x "$bin" && "$(readlink -f "$bin")" == /nix/store/* ]] || refuse "$name executable is absent from its store receipt"
-            link="/usr/local/bin/$name"; [[ -L "$link" && "$(stat -c '%u:%g' "$link")" == 0:0 && "$(readlink "$link")" == "$bin" ]] || refuse "$name public link disagrees with its receipt"
-            root="/nix/var/nix/gcroots/tinyland-gf-client-$name"; [[ -L "$root" && "$(readlink -f "$root")" == "$store" ]] || refuse "$name GC root disagrees with its receipt"
-            printf '%s\n' "$bin"
-          }
-          system_tool() {
-            local path="$1" resolved mode
-            [[ -e "$path" && -x "$path" && "$(stat -c '%u:%g' "$path")" == 0:0 ]] || refuse "trusted system tool is absent or not root-owned: $path"
-            resolved="$(readlink -f "$path")"; [[ -f "$resolved" && "$(stat -c '%u:%g' "$resolved")" == 0:0 ]] || refuse "trusted system tool target is not root-owned: $path"
-            mode="$(stat -c '%a' "$resolved")"; (( (8#$mode & 8#022) == 0 )) || refuse "trusted system tool target is writable outside root: $path"
-          }
-          cleanup() {
-            local status=$?; trap - EXIT
-            rm -rf -- "${isolation_root:-}" "${token_dir:-}"; exit "$status"
-          }
-
-          stage2_main() {
-            isolation_root="${V4_ISOLATION_ROOT:?}"; exec_dir="$isolation_root/execution"
-            [[ -d "$isolation_root" && ! -L "$isolation_root" && "$(stat -c '%u:%g:%a' "$isolation_root")" == 0:0:700 ]] || refuse "stage-2 custody directory is invalid"
-            [[ "$(id -u)" == 0 && "$(awk '$1 == "NoNewPrivs:" { print $2 }' /proc/self/status)" == 1 ]] || refuse "stage 2 requires root with no-new-privileges"
-            case "$V4_REFRESH:$V4_REMOTE_UPLOAD" in true:false|false:false|false:true) ;; *) refuse "stage-2 posture is malformed" ;; esac
-            trap cleanup EXIT
-            bwrap="$(custody_tool bwrap)"; [[ "$("$bwrap" --version)" == "bubblewrap 0.11.2" ]] || refuse "bubblewrap version disagrees with the image contract"
-            launcher="$isolation_root/bazel"; [[ -f "$launcher" && ! -L "$launcher" && "$(stat -c '%u:%g:%a' "$launcher")" == 0:0:555 ]] || refuse "trusted Bazel launcher is invalid"
-            sandbox_script="$isolation_root/sandbox"; cat >"$sandbox_script" <<'V4_SANDBOX'
-          #!/bin/bash
-          set -euo pipefail
-          refuse() { echo "v4 sandbox refused: $*" >&2; exit 1; }
-          [[ "$(id -u):$(id -g):$(id -G)" == 65534:65534:65534 ]] || refuse "sandbox identity is not isolated"
-          for environ in /proc/[0-9]*/environ; do
-            [[ -r "$environ" ]] || continue
-            while IFS= read -r -d '' entry; do case "${entry%%=*}" in ACTIONS_ID_TOKEN_REQUEST_URL|ACTIONS_ID_TOKEN_REQUEST_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITHUB_ENV|GITHUB_OUTPUT|GITHUB_PATH|GITHUB_STEP_SUMMARY) refuse "private proc exposed ambient authority" ;; esac; done <"$environ"
-          done
-          [[ ! -e /home && ! -e /root && ! -e /run && ! -e /var/run ]] || refuse "ambient runner paths entered the sandbox"
-          for name in ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN GITHUB_TOKEN GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STEP_SUMMARY; do [[ ! -v $name ]] || refuse "ambient authority variable survived: $name"; done
-          for path in /usr/.v4-write /nix/store/.v4-write /etc/.v4-write /trusted/.v4-write; do if (: >"$path") 2>/dev/null; then refuse "read-only mount accepted a write: $path"; fi; done
-          : >/work/.v4-write && rm /work/.v4-write
-          [[ -f /work/cell-token.jwt && ! -L /work/cell-token.jwt && "$(stat -c '%a' /work/cell-token.jwt)" == 600 ]] || refuse "scoped cell token is invalid"
-          if [[ "$REFRESH_MODULE_LOCK" == false ]] && (: >/workspace/.v4-write) 2>/dev/null; then refuse "normal source mount is writable"; fi
-          "$GF_VERIFY_BIN"
-          if [[ "$REFRESH_MODULE_LOCK" == true ]]; then
-            "$GF_BAZEL_WRAPPER" fetch --symlink_prefix=/work/symlinks/bazel- //... --lockfile_mode=update
-          else
-            jq -cer 'to_entries[]' /trusted/actions.json | while IFS= read -r entry; do
-              name="$(jq -er '.key' <<<"$entry")"; command="$(jq -er '.value.command' <<<"$entry")"
-              jq -j '.value.targets[] | ., "\u0000"' <<<"$entry" >/work/targets; mapfile -d '' -t targets </work/targets; ((${#targets[@]} > 0)) || refuse "action $name has no targets"
-              echo "v4 action: $name"; "$GF_BAZEL_WRAPPER" "$command" --symlink_prefix=/work/symlinks/bazel- "${targets[@]}" --lockfile_mode=error
-            done
-          fi
-          V4_SANDBOX
-            chown root:root "$sandbox_script"; chmod 0555 "$sandbox_script"
-            work_mount=(--ro-bind "$V4_WORK" /workspace); plan_mount=()
-            if [[ "$V4_REFRESH" == true ]]; then work_mount=(--bind "$V4_WORK" /workspace); else plan_mount=(--ro-bind "$V4_PLAN" /trusted/actions.json); fi
-            bwrap_args=(
-              --unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try --die-with-parent --new-session --cap-drop ALL --clearenv
-              --tmpfs / --dir /bin --ro-bind /bin /bin --dir /sbin --ro-bind /sbin /sbin --dir /lib --ro-bind /lib /lib --dir /lib64 --ro-bind /lib64 /lib64 --dir /usr --ro-bind /usr /usr
-              --dir /nix --dir /nix/store --ro-bind /nix/store /nix/store --dir /etc --ro-bind /etc/passwd /etc/passwd --ro-bind /etc/group /etc/group --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --dir /etc/ssl --ro-bind /etc/ssl/certs /etc/ssl/certs
-              --proc /proc --tmpfs /dev --dev-bind /dev/null /dev/null --dev-bind /dev/zero /dev/zero --dev-bind /dev/random /dev/random --dev-bind /dev/urandom /dev/urandom --dir /dev/shm --chmod 1777 /dev/shm
-              --dir /work --bind "$exec_dir" /work --dir /tmp --bind "$exec_dir/tmp" /tmp --dir /workspace "${work_mount[@]}" --dir /trusted --ro-bind "$launcher" /trusted/bazel --ro-bind "$sandbox_script" /trusted/run "${plan_mount[@]}"
-              --uid 65534 --gid 65534 --chdir /workspace
-              --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin --setenv HOME /work/home --setenv USER nobody --setenv LOGNAME nobody --setenv TMPDIR /tmp --setenv RUNNER_TEMP /tmp --setenv CI true --setenv GITHUB_ACTIONS true
-              --setenv BAZEL_BIN /trusted/bazel --setenv BAZELISK_SKIP_WRAPPER 1 --setenv BAZEL_OUTPUT_BASE /work/output-base --setenv GF_FLYWHEEL_LOCAL_ENV_MODE forbid --setenv GF_BAZEL_JOBS 4 --setenv GF_BAZEL_REMOTE_UPLOAD "$V4_REMOTE_UPLOAD" --setenv GF_BAZEL_REMOTE_EXECUTION_PLATFORM gloriousflywheel-rbe-linux-x86_64
-              --setenv GF_FLYWHEEL_PROFILE_STATE executor-backed --setenv GF_BAZEL_SUBSTRATE_MODE executor-backed --setenv GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE /work/cell-token.jwt --setenv BAZEL_REMOTE_CACHE "$V4_REMOTE_ENDPOINT" --setenv BAZEL_REMOTE_EXECUTOR "$V4_REMOTE_ENDPOINT" --setenv BAZEL_REMOTE_INSTANCE_NAME "$V4_INSTANCE" --setenv BAZEL_CREDENTIAL_HELPER "$V4_HELPER_SCOPE=$V4_CREDHELPER"
-              --setenv GF_VERIFY_BIN "$V4_VERIFIER" --setenv GF_BAZEL_WRAPPER "$V4_WRAPPER" --setenv REFRESH_MODULE_LOCK "$V4_REFRESH" /trusted/run
-            )
-            IFS= read -r command_token </proc/sys/kernel/random/uuid; [[ "$command_token" =~ ^[0-9a-f-]{36}$ ]] || refuse "workflow-command stop token is unavailable"
-            printf '::stop-commands::%s\n' "$command_token"; if "$bwrap" "${bwrap_args[@]}"; then sandbox_status=0; else sandbox_status=$?; fi; printf '::%s::\n' "$command_token"
-            ((sandbox_status == 0)) || refuse "isolated action session failed"
-
-            if [[ "$V4_REFRESH" == true ]]; then
-              status="$(git -C "$V4_ORIGINAL_WORKSPACE" --work-tree="$V4_WORK" status --porcelain=v1 --untracked-files=all)"
-              [[ "$status" == " M MODULE.bazel.lock" && -f "$V4_WORK/MODULE.bazel.lock" && ! -L "$V4_WORK/MODULE.bazel.lock" ]] || refuse "lock refresh must change only tracked MODULE.bazel.lock"
-              lock_hash="$(/usr/bin/sha256sum "$V4_WORK/MODULE.bazel.lock" | cut -d' ' -f1)"; [[ "$lock_hash" =~ ^[0-9a-f]{64}$ && "$V4_REPOSITORY_ID" =~ ^[1-9][0-9]*$ ]] || refuse "refreshed lock identity is malformed"
-              artifact_name="v4-module-lock-${V4_RUN_ID}-${V4_RUN_ATTEMPT}"; artifact="$isolation_root/$artifact_name"; install -d -m 0700 "$artifact"; install -m 0600 "$V4_WORK/MODULE.bazel.lock" "$artifact/MODULE.bazel.lock"
-              [[ "$(/usr/bin/sha256sum "$artifact/MODULE.bazel.lock" | cut -d' ' -f1)" == "$lock_hash" ]] || refuse "copied lock bytes disagree with their receipt"
-              jq -n --argjson repository_id "$V4_REPOSITORY_ID" --arg repository_name "$V4_REPOSITORY" --arg exact_head_sha "$V4_SOURCE_SHA" --arg lock_sha256 "$lock_hash" '{schema_version:1,repository:{id:$repository_id,name:$repository_name},exact_head_sha:$exact_head_sha,command:"gloriousflywheel-bazel fetch //... --lockfile_mode=update",lockfile:{path:"MODULE.bazel.lock",sha256:$lock_sha256}}' >"$artifact/receipt.json"
-              mapfile -t entries < <(find "$artifact" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort); [[ "${entries[*]}" == "MODULE.bazel.lock receipt.json" ]] || refuse "lock artifact census is not exact"
-              for file in "$artifact/MODULE.bazel.lock" "$artifact/receipt.json"; do [[ -f "$file" && ! -L "$file" ]] || refuse "lock artifact contains a non-regular member"; done
-              jq -e --argjson id "$V4_REPOSITORY_ID" --arg repo "$V4_REPOSITORY" --arg sha "$V4_SOURCE_SHA" --arg hash "$lock_hash" '.schema_version==1 and .repository=={id:$id,name:$repo} and .exact_head_sha==$sha and .command=="gloriousflywheel-bazel fetch //... --lockfile_mode=update" and .lockfile=={path:"MODULE.bazel.lock",sha256:$hash}' "$artifact/receipt.json" >/dev/null || refuse "lock receipt does not bind exact source and command"
-              [[ "$(/usr/bin/sha256sum "$artifact/MODULE.bazel.lock" | cut -d' ' -f1)" == "$lock_hash" ]] || refuse "final lock artifact disagrees with its identity receipt"
-              printf 'artifact_path=%s\nartifact_name=%s\n' "$artifact" "$artifact_name" >>"$V4_GITHUB_OUTPUT"
-              rm -rf "$exec_dir"; rm -f "$sandbox_script" "$launcher"; trap - EXIT
-            fi
-          }
-
-          if [[ "${V4_BOUNDARY_STAGE:-}" == stage2 ]]; then stage2_main; exit 0; fi
-
-          [[ "$(id -u)" == 0 ]] || refuse "v4 caller execution requires a root runner boundary"
-          case "$REMOTE_UPLOAD" in true|false) ;; *) refuse "cache upload posture is malformed" ;; esac
-          [[ "$REMOTE_UPLOAD" == false || ( "$EVENT_NAME" == push && "$EVENT_REF" == refs/heads/main ) ]] || refuse "only trusted main may upload Bazel cache entries"
-          for path in /usr/bin/env /usr/bin/id /bin/bash; do system_tool "$path"; done
-          [[ "$(awk '$1 == "NoNewPrivs:" { print $2 }' /proc/self/status)" == 1 ]] || refuse "runner must enforce no-new-privileges"
-          trap cleanup EXIT
-
-          if [[ "$REFRESH_MODULE_LOCK" == false ]]; then
-            [[ "$PLAN_SCHEMA_VERSION" == 2 && "$PLAN_ACTIONS_PATH" == "${RUNNER_TEMP:?}"/tinyland-v4-actions.*.json ]] || refuse "validated action plan identity is malformed"
-            [[ -f "$PLAN_ACTIONS_PATH" && ! -L "$PLAN_ACTIONS_PATH" && "$(stat -c '%u:%a' "$PLAN_ACTIONS_PATH")" == 0:444 ]] || refuse "validated action plan must be root-owned mode 0444"
-          fi
-          for tool in git install jq stat wc readlink mktemp rm cp chmod chown find cut; do command -v "$tool" >/dev/null || refuse "required preinstalled tool is absent: $tool"; done
-          [[ -x /usr/bin/sha256sum ]] || refuse "required system SHA-256 tool is absent"
-          [[ "$(jq -er '.enrollment.executionPool' tinyland.repo.json)" == tinyland-nix ]] || refuse "executionPool must be tinyland-nix"
-          [[ "$(jq -er '.enrollment.substrateMode' tinyland.repo.json)" == executor-backed ]] || refuse "substrateMode must be executor-backed"
-          [[ ! -e .env.flywheel.local && ! -L .env.flywheel.local ]] || refuse "v4 forbids the local attachment fallback"
-          [[ -n "${GF_REAPI_TOKEN_EXCHANGE_ENDPOINT:-}" && -n "${GF_REAPI_CACHE_FRONTDOOR_ENDPOINT:-}" ]] || refuse "runtime executor authorities are absent"
-          [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]] || refuse "GitHub OIDC authority is absent"
-
-          oidc=/usr/local/bin/flywheel-github-oidc-profile
-          [[ -f "$oidc" && ! -L "$oidc" && -x "$oidc" && "$(stat -c '%u:%g:%a' "$oidc")" == 0:0:555 ]] || refuse "OIDC helper is not the image-custodied executable"
-          oidc_hash="$(receipt /etc/tinyland/gf-client-flywheel-github-oidc-profile-sha256 "OIDC helper")"
-          [[ "$oidc_hash" =~ ^[0-9a-f]{64}$ && "$(/usr/bin/sha256sum "$oidc" | cut -d' ' -f1)" == "$oidc_hash" ]] || refuse "OIDC helper digest disagrees with its receipt"
-          credhelper="$(custody_tool gf-reapi-credhelper)"; verifier="$(custody_tool flywheel-verify)"; wrapper="$(custody_tool gloriousflywheel-bazel)"; bwrap="$(custody_tool bwrap)"
-          [[ "$("$bwrap" --version)" == "bubblewrap 0.11.2" ]] || refuse "bubblewrap version disagrees with the image contract"
-          bazel_bin="$(receipt /etc/tinyland/ci-bazelisk-bin "Bazelisk")"
-          [[ "$bazel_bin" =~ ^/nix/store/.*/bin/bazelisk$ && -f "$bazel_bin" && ! -L "$bazel_bin" && -x "$bazel_bin" && "$(stat -c '%u:%g' "$bazel_bin")" == 0:0 ]] || refuse "Bazelisk receipt is invalid"
-
-          umask 077
-          isolation_root="$(mktemp -d "${RUNNER_TEMP:?}/v4-isolation.XXXXXX")"; chmod 0700 "$isolation_root"
-          exec_dir="$isolation_root/execution"; install -d -o 65534 -g 65534 -m 0700 "$exec_dir" "$exec_dir/home" "$exec_dir/tmp" "$exec_dir/output-user-root" "$exec_dir/output-base" "$exec_dir/symlinks"
-          launcher="$isolation_root/bazel"; printf '#!/bin/bash\nexec %q --output_user_root=/work/output-user-root "$@"\n' "$bazel_bin" >"$launcher"; chmod 0555 "$launcher"
-          token_dir="$(mktemp -d "${RUNNER_TEMP}/gf-reapi-v4.XXXXXX")"; profile="$token_dir/profile.env"
-          unset GF_FLYWHEEL_PROFILE_STATE GF_BAZEL_SUBSTRATE_MODE GF_FRONTDOOR_ENDPOINT BAZEL_REMOTE_CACHE BAZEL_REMOTE_EXECUTOR BAZEL_REMOTE_INSTANCE_NAME BAZEL_CREDENTIAL_HELPER GF_REAPI_CREDENTIAL_HELPER_TOKEN_FILE
-          "$oidc" --request executor --ttl 1h --frontdoor-endpoint "$GF_REAPI_CACHE_FRONTDOOR_ENDPOINT" --credential-helper-bin "$credhelper" --token-dir "$token_dir" --profile-out "$profile" --github-output "" >/dev/null
-          rm -f -- "$token_dir/github-oidc.curl" "$token_dir/github-oidc-response.json" "$token_dir/token-exchange.curl" "$token_dir/token-exchange-response.json"
-          for raw in github-oidc.curl github-oidc-response.json token-exchange.curl token-exchange-response.json; do [[ ! -e "$token_dir/$raw" && ! -L "$token_dir/$raw" ]] || refuse "raw OIDC/exchange material survived mint"; done
-          summary="$token_dir/token-exchange-summary.json"
-          [[ -f "$profile" && ! -L "$profile" && "$(stat -c '%u:%a' "$profile")" == 0:600 && -f "$summary" && ! -L "$summary" ]] || refuse "minted profile custody is invalid"
-          remote_endpoint="$GF_REAPI_CACHE_FRONTDOOR_ENDPOINT"; [[ -n "$remote_endpoint" && "$remote_endpoint" != *$'\n'* && "$remote_endpoint" != *$'\r'* ]] || refuse "executor endpoint is malformed"
-          instance_name="$(jq -er '.instance_name | select(type=="string" and length>0)' "$summary")" || refuse "token exchange returned no tenant instance"
-          credential_helper="$(jq -er '.credential_helper | select(type=="string" and length>0)' "$summary")" || refuse "token exchange returned no credential helper"
-          helper_scope="${credential_helper%%=*}"; [[ -n "$helper_scope" && "$credential_helper" != *$'\n'* && "$credential_helper" != *$'\r'* && "${credential_helper#*=}" == "$credhelper" ]] || refuse "minted credential helper is not custody-validated"
-          source_token="$token_dir/gf-reapi-cell-token.jwt"; [[ -f "$source_token" && ! -L "$source_token" ]] || refuse "minted cell token is outside its custody directory"
-          cell_token="$exec_dir/cell-token.jwt"; install -o 65534 -g 65534 -m 0600 "$source_token" "$cell_token"
-          rm -rf -- "$token_dir"; token_dir=""
-
-          [[ -z "$(find "$GITHUB_WORKSPACE" -xdev ! -uid 0 -print -quit)" ]] || refuse "admitted source is not root-owned"
-          work="$GITHUB_WORKSPACE"
-          if [[ "$REFRESH_MODULE_LOCK" == true ]]; then
-            [[ -f "$GITHUB_WORKSPACE/MODULE.bazel.lock" && ! -L "$GITHUB_WORKSPACE/MODULE.bazel.lock" ]] || refuse "MODULE.bazel.lock must already be a tracked regular file"
-            git -C "$GITHUB_WORKSPACE" ls-files --error-unmatch -- MODULE.bazel.lock >/dev/null || refuse "MODULE.bazel.lock is not tracked"
-            work="$exec_dir/source"; install -d -m 0700 "$work"; cp -a "$GITHUB_WORKSPACE/." "$work/"; chown -R --no-dereference 65534:65534 "$work"; chmod 0700 "$work"
-          fi
-          script="$0"; [[ -f "$script" && ! -L "$script" && "$(stat -c '%u:%g' "$script")" == 0:0 ]] || refuse "trusted re-entry script is invalid"
-          script_mode="$(stat -c '%a' "$script")"; (( (8#$script_mode & 8#022) == 0 )) || refuse "trusted re-entry script is writable outside root"
-          exec /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin V4_BOUNDARY_STAGE=stage2 \
-            V4_ISOLATION_ROOT="$isolation_root" V4_WORK="$work" V4_ORIGINAL_WORKSPACE="$GITHUB_WORKSPACE" V4_PLAN="$PLAN_ACTIONS_PATH" V4_REFRESH="$REFRESH_MODULE_LOCK" V4_REMOTE_UPLOAD="$REMOTE_UPLOAD" \
-            V4_REMOTE_ENDPOINT="$remote_endpoint" V4_INSTANCE="$instance_name" V4_HELPER_SCOPE="$helper_scope" V4_CREDHELPER="$credhelper" V4_VERIFIER="$verifier" V4_WRAPPER="$wrapper" \
-            V4_REPOSITORY_ID="$SOURCE_REPOSITORY_ID" V4_REPOSITORY="$SOURCE_REPOSITORY" V4_SOURCE_SHA="$SOURCE_SHA" V4_RUN_ID="$GITHUB_RUN_ID" V4_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" V4_GITHUB_OUTPUT="$GITHUB_OUTPUT" \
-            /bin/bash --noprofile --norc "$script"
-
-      - name: Upload exact-head lock refresh
-        if: steps.admission.outputs.allowed == 'true' && inputs.refresh_module_lock
-        id: upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ steps.fabric.outputs.artifact_name }}
-          path: ${{ steps.fabric.outputs.artifact_path }}
-          if-no-files-found: error
-          retention-days: 1
-          overwrite: false
-
-      - name: Refuse a green maintenance verdict
-        if: steps.admission.outputs.allowed == 'true' && inputs.refresh_module_lock && steps.upload.outcome == 'success'
-        shell: bash
-        run: |
-          echo "::error::MODULE.bazel.lock refresh is an artifact-only maintenance run; commit the reviewed lock and remove refresh_module_lock before CI may pass"
-          echo "Retrieve it with: gh run download $GITHUB_RUN_ID -n ${{ steps.fabric.outputs.artifact_name }}"
-          exit 1
+          /usr/local/bin/gf-action-client run \
+            --plan .github/lanes.json \
+            --action "$ACTION_NAME" \
+            --source-sha "$SOURCE_SHA"

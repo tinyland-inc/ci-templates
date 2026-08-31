@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://raw.githubusercontent.com/tinyland-inc/site.scaffold/main/docs/schemas/lanes.schema.json",
 	"title": "Tinyland v4 Bazel action plan",
-	"description": "Normative executable Bazel action plan for the v4 ci-templates workflow. Attachment authority lives only in tinyland.repo.json; this document contains no runner, substrate mode, endpoint, credential, tenant, repository identity, lifecycle, publication, or apply authority.",
+	"description": "Exact projection of GloriousFlywheel Core.dhall action intent for the v4 ci-templates workflow. It contains only Bazel actions and abstract REAPI capability requirements; no runner, pool, resolved platform, endpoint, credential, tenant, repository identity, lifecycle, publication, or apply authority.",
 	"type": "object",
 	"required": ["schema_version", "actions"],
 	"additionalProperties": false,
@@ -19,18 +19,22 @@
 				"pattern": "^[a-z][a-z0-9-]{0,62}$"
 			},
 			"additionalProperties": { "$ref": "#/$defs/action" },
-			"description": "Bazel actions keyed by their log and evidence identity. JSON object keys make action names unique by construction; the v4 workflow executes every entry exactly once through gloriousflywheel-bazel."
+			"description": "Bazel actions keyed by their log and evidence identity. JSON object keys make action names unique by construction; the v4 workflow dispatches every entry exactly once through the compiled GF action client."
 		}
 	},
 	"$defs": {
+		"capability": {
+			"enum": ["rbe-linux-x86_64", "rbe-darwin-aarch64"],
+			"description": "Abstract REAPI capability from GloriousFlywheel Core.dhall. The provider resolves it to a concrete platform and worker supply; this value is never a runner label or resolved gloriousflywheel-rbe-* platform identity."
+		},
 		"action": {
 			"type": "object",
-			"required": ["command", "targets"],
+			"required": ["command", "targets", "capabilities"],
 			"additionalProperties": false,
 			"properties": {
 				"command": {
 					"enum": ["build", "test"],
-					"description": "Bazel command passed verbatim to gloriousflywheel-bazel."
+					"description": "Bazel command passed verbatim to the compiled GF action client."
 				},
 				"targets": {
 					"type": "array",
@@ -43,7 +47,15 @@
 						"pattern": "^//\\S+$",
 						"not": { "pattern": "[\\s\\u0000-\\u001F\\u007F-\\u009F]" }
 					},
-					"description": "Finite workspace-local Bazel labels passed verbatim to gloriousflywheel-bazel. Flags and external-repository labels are not accepted."
+					"description": "Finite workspace-local Bazel labels passed verbatim to the compiled v4 action client. Flags and external-repository labels are not accepted."
+				},
+				"capabilities": {
+					"type": "array",
+					"minItems": 1,
+					"maxItems": 2,
+					"uniqueItems": true,
+					"items": { "$ref": "#/$defs/capability" },
+					"description": "Abstract execution requirements joined to provider supply by the GF controller."
 				}
 			}
 		}

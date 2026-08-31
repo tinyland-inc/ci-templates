@@ -18,7 +18,6 @@ from collections import Counter
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUST_BAZEL_RELEASE = "v2.14.0"
 RUST_BAZEL_CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
-V4_EXACT_RELEASE = "v4.0.0"
 RUBY_USES_SCRIPT = r"""
 require "json"
 require "yaml"
@@ -144,10 +143,6 @@ def validate_manifest() -> int:
 # fixed and v3.0.0 shipped. The fix reached nobody. The check below used to
 # discard the ref entirely (`for action, _ref in …`), so nothing said so.
 CURRENT_RELEASE_LINE = "v3"
-V4_FOUNDATION_WORKFLOWS = {
-    ".github/workflows/spoke-ci-v4.yml",
-    ".github/workflows/spoke-oci-publish-v4.yml",
-}
 
 # Files still on the previous line, with the ticket that unfreezes them. This is
 # a debt ledger, not a permanent exemption: an entry means "known stale", and a
@@ -162,159 +157,77 @@ STALE_INTERNAL_REF_FILES = {
 }
 
 
-def check_v4_oci_trust_split() -> bool:
-    """Assert v4's source-blind publisher and isolated executor boundary.
-    Retire when a typed effect schema enforces both claims, or v4 is removed.
+def check_v4_action_client_surface() -> bool:
+    """Assert the thin v4 workflow delegates execution to the compiled client.
+
+    This replaces the larger inline OCI/proxy assertion family. Retire it when
+    the typed workflow-effect contract directly enforces this boundary.
     """
 
-    workflow_path = ROOT / ".github/workflows/spoke-oci-publish-v4.yml"
-    spoke_path = ROOT / ".github/workflows/spoke-ci-v4.yml"
-    bundle_path = ROOT / ".github/actions/v4-oci-bundle/action.yml"
-    publish_path = ROOT / ".github/actions/v4-oci-publish/action.yml"
-    paths = (workflow_path, spoke_path, bundle_path, publish_path)
-    if any(not path.is_file() for path in paths):
-        for path in paths:
-            if not path.is_file():
-                print(f"{path.relative_to(ROOT)}: missing v4 OCI trust-split surface", file=sys.stderr)
+    path = ROOT / ".github/workflows/spoke-ci-v4.yml"
+    if not path.is_file():
+        print(f"{path.relative_to(ROOT)}: missing thin v4 action workflow", file=sys.stderr)
         return False
 
-    workflow = workflow_path.read_text(encoding="utf-8")
-    spoke = spoke_path.read_text(encoding="utf-8")
-    spoke_call_surface = spoke.split("\npermissions:\n", maxsplit=1)[0]
-    bundle = bundle_path.read_text(encoding="utf-8")
-    publisher = publish_path.read_text(encoding="utf-8")
-    try:
-        build_job = workflow.split("\n  build:\n", maxsplit=1)[1].split(
-            "\n  publish:\n", maxsplit=1
-        )[0]
-        publish_job = workflow.split("\n  publish:\n", maxsplit=1)[1]
-        call_surface = workflow.split("\npermissions:\n", maxsplit=1)[0]
-    except IndexError:
-        print(f"{workflow_path.relative_to(ROOT)}: build/publish job split is absent", file=sys.stderr)
-        return False
-
+    document = path.read_text(encoding="utf-8")
+    call_surface = document.split("\npermissions:\n", maxsplit=1)[0]
     failures: list[str] = []
 
-    def require(document: str, snippet: str, claim: str) -> None:
+    required = {
+        "ref: ${{ github.event.pull_request.head.sha || github.sha }}": "exact source checkout",
+        "SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}": "exact source identity",
+        "ACTION_NAME: ${{ inputs.action_name }}": "caller-selected action identity",
+        "/usr/local/bin/gf-action-client run": "compiled action client",
+        "--plan .github/lanes.json": "canonical action plan",
+        '--action "$ACTION_NAME"': "one named action per invocation",
+        '--source-sha "$SOURCE_SHA"': "source identity passed to the client",
+    }
+    for snippet, claim in required.items():
         if snippet not in document:
             failures.append(f"missing {claim}")
 
-    if "inputs:" in call_surface:
-        failures.append("workflow_call must expose no caller-selected repository, tag, or target input")
-    if workflow.count("packages: write") != 1 or "packages: write" not in publish_job:
-        failures.append("packages:write must occur exactly once and only in the publisher job")
-    if "packages:" in build_job:
-        failures.append("build job must have no packages permission")
-    if workflow.count("id-token: write") != 1 or "id-token: write" not in build_job:
-        failures.append("id-token:write must occur exactly once and only in the build job")
+    if re.findall(r"^      ([a-z_][a-z0-9_]*):$", call_surface, re.MULTILINE) != [
+        "action_name"
+    ]:
+        failures.append("workflow_call must expose only the checked-in action name")
+    if document.count("id-token: write") != 1:
+        failures.append("the thin dispatcher must carry exactly one OIDC permission")
+    if re.findall(
+        r"^  ([a-z_][a-z0-9_-]*):$",
+        document.partition("\njobs:\n")[2],
+        re.MULTILINE,
+    ) != ["action-fabric"]:
+        failures.append("v4 action fabric must remain one thin job identity")
+
     for forbidden in (
-        "actions/checkout@",
-        "repo-manifest-validate",
-        "v4-oci-bundle",
-        "id-token: write",
+        "executionPool",
+        "runner_class",
+        "GF_REAPI_",
+        "BAZEL_REMOTE_",
+        "gloriousflywheel-rbe-",
+        "@v4.0.0",
+        "packages: write",
+        "contents: write",
+        "git push",
+        "curl ",
+        "python3",
+        "mktemp",
+        "trap ",
+        "proxy",
+        "fallback",
     ):
-        if forbidden in publish_job:
-            failures.append(f"publisher job must not carry source/build authority: {forbidden}")
-    for forbidden in (
-        "gloriousflywheel-bazel",
-        "ACTIONS_ID_TOKEN",
-        "oidc_profile_bin",
-        "flywheel_verify_bin",
-        "bazelisk",
-    ):
-        if forbidden in publisher:
-            failures.append(f"publisher composite must remain source-blind and Bazel-free: {forbidden}")
-    for forbidden in ("image_repository:", "image_tag:", "remote_tags", "oci_push"):
-        if forbidden in call_surface or forbidden in publisher.split("outputs:", maxsplit=1)[0]:
-            failures.append(f"caller-selected publication routing is forbidden: {forbidden}")
-
-    required_workflow = {
-        "archive: false": "single-file artifact transport",
-        "artifact-ids:": "exact artifact-ID download",
-        "skip-decompress: true": "source-blind no-extraction download",
-        "digest-mismatch: error": "artifact transport digest enforcement",
-        "contents: none": "publisher source-read refusal",
-        'source_sha: ${{ steps.admission.outputs.source_sha }}': "exact source identity passed to the OCI builder",
-    }
-    for snippet, claim in required_workflow.items():
-        require(workflow, snippet, claim)
-    required_spoke = {
-        "refresh_module_lock:": "typed lock-refresh input",
-        "lock refresh is admitted only for a same-repository pull-request head": "same-repository refresh admission",
-        "lock refresh pull request must target the repository default branch": "default-branch refresh admission",
-        "ref: ${{ steps.admission.outputs.source_sha }}": "exact admitted checkout",
-        'bwrap="$(custody_tool bwrap)"': "image-custodied sandbox boundary",
-        "exec /usr/bin/env -i": "raw OIDC-erasing stage-2 re-entry",
-        "--unshare-user --unshare-pid --unshare-ipc --unshare-uts": "isolated execution namespaces",
-        "--proc /proc --tmpfs /dev": "private process and device views",
-        "ambient authority variable survived": "negative ambient-authority probe",
-        'status" == " M MODULE.bazel.lock"': "sole tracked lockfile delta",
-        'command:"gloriousflywheel-bazel fetch //... --lockfile_mode=update"': "fixed-command receipt",
-        '--lockfile_mode=error': "normal action lock-policy refusal",
-        'final lock artifact disagrees with its identity receipt': "final lock artifact rehash",
-        "refresh is an artifact-only maintenance run": "non-green maintenance result",
-    }
-    for snippet, claim in required_spoke.items():
-        require(spoke, snippet, claim)
-    for forbidden in ("command:", "target:", "runner:", "endpoint:"):
-        if forbidden in spoke_call_surface:
-            failures.append(f"v4 action-fabric caller input is forbidden: {forbidden}")
-    for forbidden in ("packages: write", "contents: write", "actions: write", "git push", "gh api"):
-        if forbidden in spoke:
-            failures.append(f"v4 action fabric must have no publication/write authority: {forbidden}")
-    if re.findall(r"^      ([a-z_][a-z0-9_]*):$", spoke_call_surface, re.MULTILINE) != ["refresh_module_lock"]:
-        failures.append("v4 action fabric must expose exactly one typed maintenance input")
-    if re.findall(r"^  ([a-z_][a-z0-9_-]*):$", spoke.partition("\njobs:\n")[2], re.MULTILINE) != ["action-fabric"]:
-        failures.append("v4 action fabric must remain one CI job identity")
-    if any(term in spoke for term in ("--renew-background", "/usr/bin/setpriv", "/usr/bin/pkill")):
-        failures.append("v4 action fabric must not retain a renewer or host-UID process boundary")
-
-    required_bundle = {
-        "pull-request builds must set GF_BAZEL_REMOTE_UPLOAD=false": "PR cache-write refusal",
-        "only a main push may set GF_BAZEL_REMOTE_UPLOAD=true": "trusted-main cache-write admission",
-        "//:oci_publish_bundle.digest": "fixed generated digest target",
-        "--remote_download_outputs=all": "complete inert layout materialization",
-        "--lockfile_mode=error": "caller lockfile-policy downgrade refusal",
-        "--stamp --workspace_status_command=/trusted/source-status": "terminal-only source provenance stamping",
-        "STABLE_BUILD_COMMIT_SHA": "exact source workspace-status key",
-        'build_date="$("$git_bin" show -s --format=%cI "$SOURCE_SHA")"': "deterministic commit-date provenance",
-        "image runtime provenance disagrees with the admitted source": "runtime source provenance validation",
-        "image OCI provenance labels disagree with the admitted source": "OCI label provenance validation",
-        'bwrap="$(custody_store_tool bwrap)"': "image-custodied sandbox boundary",
-        "exec /usr/bin/env -i": "raw OIDC-erasing stage-2 re-entry",
-        "--unshare-user --unshare-pid --unshare-ipc --unshare-uts": "isolated execution namespaces",
-        "--proc /proc --tmpfs /dev": "private process and device views",
-        "ambient authority variable survived": "negative ambient-authority probe",
-    }
-    for snippet, claim in required_bundle.items():
-        require(bundle, snippet, claim)
-    if "--action_env=BUILD_COMMIT_" in bundle or "--action_env=BUILD_DATE" in bundle:
-        failures.append("v4 OCI provenance must not poison every Bazel action key")
-    if any(term in bundle for term in ("--renew-background", "/usr/bin/setpriv", "/usr/bin/pkill")):
-        failures.append("v4 OCI builder must not retain a renewer or host-UID process boundary")
-
-    required_publisher = {
-        "custody_store_tool skopeo": "image-custodied OCI client",
-        "oci-archive:$ARTIFACT_PATH": "non-executed inert archive source",
-        "--preserve-digests": "digest-preserving registry copy",
-        "--digestfile": "client-derived copy digest",
-        "only 200 or 404 is admissible": "fail-closed registry preflight",
-        "controlled SHA tag already exists at a different digest": "different-digest refusal",
-        "GF client-image dependency TIN-4247 / GF#1712": "named unmet skopeo dependency",
-    }
-    for snippet, claim in required_publisher.items():
-        require(publisher, snippet, claim)
+        if forbidden in document:
+            failures.append(f"thin v4 dispatcher contains forbidden orchestration: {forbidden}")
 
     if failures:
         for failure in failures:
-            print(f"{workflow_path.relative_to(ROOT)}: {failure}", file=sys.stderr)
+            print(f"{path.relative_to(ROOT)}: {failure}", file=sys.stderr)
         return False
-    print("v4 OCI build/publish trust split is source-blind and fail-closed")
+    print("v4 workflow is a thin compiled-client dispatcher")
     return True
 
-
 def check_internal_refs() -> int:
-    ok = check_v4_oci_trust_split()
+    ok = check_v4_action_client_surface()
     action_pattern = re.compile(
         r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@([^\s#]+)"
     )
@@ -324,15 +237,13 @@ def check_internal_refs() -> int:
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
-        expected_release_line = V4_EXACT_RELEASE if str(rel) in V4_FOUNDATION_WORKFLOWS else CURRENT_RELEASE_LINE
+        expected_release_line = CURRENT_RELEASE_LINE
         for action, ref in action_pattern.findall(text):
             action_yml = ROOT / ".github/actions" / action / "action.yml"
             if not action_yml.exists():
                 print(f"{rel}: missing internal action {action_yml.relative_to(ROOT)}", file=sys.stderr)
                 ok = False
-            if str(rel) in V4_FOUNDATION_WORKFLOWS and ref == V4_EXACT_RELEASE:
-                continue
-            if str(rel) not in V4_FOUNDATION_WORKFLOWS and (exact_release.match(ref) or ref == expected_release_line):
+            if exact_release.match(ref) or ref == expected_release_line:
                 continue
             if str(rel) in STALE_INTERNAL_REF_FILES:
                 continue
