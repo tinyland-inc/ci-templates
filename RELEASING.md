@@ -14,7 +14,9 @@ and may break without notice**.
 
 ## Release flow
 
-1. **Land all changes for the release on `main`** via squash-merged PRs.
+1. **Land all changes for the release on `main`** via merge-commit PRs. The
+   repository ruleset permits only the `merge` method even though the
+   repository-level feature flags also advertise squash and rebase.
    Each PR amends `## [Unreleased]` in `CHANGELOG.md`.
 2. **Pick the next version** per SemVer:
    - **MAJOR** — breaking changes to composite-action inputs, reusable
