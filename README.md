@@ -44,7 +44,7 @@ jobs:
     secrets: inherit
 ```
 
-The held v4 source has no caller-selected runner, execution pool, resolved
+The v4.0.0 action-fabric contract has no caller-selected runner, execution pool, resolved
 platform, endpoint, profile, upload authority, concurrency cap, or fallback.
 `.github/lanes.json` declares named Bazel commands and finite targets with only
 the currently executable abstract `rbe-linux-x86_64` capability from
@@ -68,8 +68,15 @@ identity rather than GitHub's synthetic merge commit. For `push`, it is
 The Go client owns OIDC, owner-installation binding, cache/executor resolution,
 and REAPI action dispatch. The reusable workflow does not reproduce those
 lifecycles in Bash, Python, proxy composites, OCI helpers, or fallback paths.
-This branch is source only: it does not name an unavailable v4 tag and does not
-claim release, adoption, publication, installation, or runtime proof.
+Consumers pin the immutable `@v4.0.0` release. The tag publishes this workflow
+contract; it does not by itself prove consumer adoption, provider convergence,
+or runtime execution. Those remain fail-closed until the signed consumer
+overlay, verified provider supply, current binding catalog, and image-custodied
+client are all present.
+
+See [`docs/migration-v3-to-v4.md`](./docs/migration-v3-to-v4.md) for the
+breaking action-plan migration and the evidence required before deleting a v3
+caller.
 
 Your spoke needs `.github/lanes.json` validating against
 [`schemas/lanes.schema.json`](./schemas/lanes.schema.json). New spokes should
