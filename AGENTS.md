@@ -72,11 +72,12 @@ surface: it becomes admissible only with its own worker, route, client support,
 and canary. The plan never names a runner, execution pool, resolved platform,
 endpoint, credential, upload posture, or provider concurrency.
 
-`spoke-ci-v4.yml` accepts one checked-in action name per invocation, checks out exactly
-`github.sha`, then invokes the image-custodied compiled client. For a
-`pull_request` event that is GitHub's synthetic merge commit. It is also the
-SHA GitHub signs into the job's OIDC token; accepting the caller-controlled
-head SHA instead would make source binding impossible:
+`spoke-ci-v4.yml` accepts one checked-in action name per invocation, then invokes
+the image-custodied compiled client against the source identity admitted by the
+owner overlay. For a same-repository `pull_request`, that is exactly
+`github.event.pull_request.head.sha`; for `push`, it is `github.sha`. The
+workflow admits no other event shape and never substitutes GitHub's synthetic
+pull-request merge commit for the overlay-bound head:
 
 ```text
 /usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>

@@ -14,9 +14,10 @@ Versioning: [SemVer 2.0](https://semver.org/).
   `/usr/local/bin/gf-action-client run` once with the admitted source SHA. The
   plan is an admissibility boundary and does not claim one invocation executes
   every member. The
-  admitted SHA is exactly `github.sha`, including GitHub's synthetic merge
-  commit on pull-request events, so the resolver can bind it to the OIDC
-  token's signed `sha` claim. The
+  admitted SHA is the exact owner-overlay identity: the pull-request head SHA
+  for same-repository pull requests and `github.sha` for pushes. Unsupported
+  event shapes do not enter the action-fabric job, and the workflow never
+  substitutes GitHub's synthetic merge commit for a pull-request head. The
   vendored schema is an exact
   projection of GloriousFlywheel `Core.dhall`: actions contain only Bazel
   command, finite targets, and the one currently executable abstract REAPI

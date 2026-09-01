@@ -174,8 +174,12 @@ def check_v4_action_client_surface() -> bool:
     failures: list[str] = []
 
     required = {
-        "ref: ${{ github.sha }}": "exact caller-context source checkout",
-        "SOURCE_SHA: ${{ github.sha }}": "exact caller-context source identity",
+        "github.event_name == 'push'": "push-only admitted event",
+        "github.event_name == 'pull_request'": "same-repository pull-request event",
+        'fromJSON(format(\'\'{{"pull_request":"{0}","push":"{1}"}}\'\'': "event-keyed source identity without a fallback",
+        "github.event.pull_request.head.sha": "exact pull-request head identity",
+        "github.sha))[github.event_name]": "exact push identity",
+        "ref: ${{ env.SOURCE_SHA }}": "exact admitted source checkout",
         "ACTION_NAME: ${{ inputs.action_name }}": "caller-selected action identity",
         "/usr/local/bin/gf-action-client run": "compiled action client",
         "--plan .github/lanes.json": "canonical action plan",
