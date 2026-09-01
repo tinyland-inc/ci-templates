@@ -34,11 +34,9 @@ a fleet-wide change.
    org capability class. Three gates, deliberately reading different things:
    `just lint-runs-on-check` verdicts `runs-on` values structurally,
    `just no-hosted-runners-check` scans every schedulable surface textually
-   (label-aware and case-insensitive), and
-   `just lanes-schema-runner-class-check` proves no hosted label is even
-   REPRESENTABLE as consumer `lanes.json` data. The third exists because the
-   first two both missed a schema that sanctioned one. There is no opt-out
-   input, and reintroducing one is not a local decision. See
+   (label-aware and case-insensitive). The v4 action-plan schema cannot express
+   a runner at all. There is no opt-out input, and reintroducing one is not a
+   local decision. See
    `docs/migration-v2-to-v3.md`.
 4. **No baked endpoints, credentials, or upload authority** in `bazelrc/*.bazelrc`
    (enforced by `just endpoint-free-check` + `just ci-cached-endpoint-free-check`).
@@ -60,9 +58,36 @@ nix develop --command just check # if tools are not on PATH
 restricted workflows' exact dependency closure, guards the js-bazel-package
 runner + cache-backed contracts, asserts the bazelrc fragments stay
 endpoint-free, dogfoods the `runs-on` linter at 0 FAIL, proves no GitHub-hosted
-runner label survives on a schedulable surface or is representable as consumer
-lanes data (`no-hosted-runners-check` + `lanes-schema-runner-class-check`,
-TIN-3914), and runs the gitleaks working-tree scan.
+runner label survives on a schedulable surface, including canonical consumer
+lanes data (`no-hosted-runners-check`, TIN-3914), and runs the gitleaks
+working-tree scan.
+
+## V4 source foundation (TIN-2130)
+
+The held v4 carrier is deliberately thin. `.github/lanes.json` declares named
+Bazel `build` or `test` actions, finite workspace labels, and only the
+exactly one abstract REAPI capability defined by GloriousFlywheel `Core.dhall`
+(`rbe-linux-x86_64`) per action. Darwin is not part of the first executable v4
+surface: it becomes admissible only with its own worker, route, client support,
+and canary. The plan never names a runner, execution pool, resolved platform,
+endpoint, credential, upload posture, or provider concurrency.
+
+`spoke-ci-v4.yml` accepts one checked-in action name per invocation, checks out exactly
+`github.sha`, then invokes the image-custodied compiled client. For a
+`pull_request` event that is GitHub's synthetic merge commit. It is also the
+SHA GitHub signs into the job's OIDC token; accepting the caller-controlled
+head SHA instead would make source binding impossible:
+
+```text
+/usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>
+```
+
+The Go client owns OIDC, owner-installation binding, cache/executor resolution,
+and REAPI dispatch. Workflow source must not reimplement that lifecycle in
+Bash, Python, composite actions, proxy setup, or fallback branches. Consumer
+overlay declarations own demand; provider internals resolve supply. This is
+source only: no v4 tag, adoption, publication, installation, or runtime proof
+exists merely because the carrier is present.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 
@@ -109,7 +134,6 @@ mode the gate enforces (additive + optional; existing manifests still validate):
 "enrollment": {
   "forgeScope": "Jesssullivan",
   "operatorOverlay": "jesssullivan-infra",
-  "executionPool": "tinyland-nix",
   "substrateMode": "shared-cache-backed"
 }
 ```

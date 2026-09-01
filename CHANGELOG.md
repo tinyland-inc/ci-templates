@@ -5,6 +5,32 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **TIN-2130 v4 action-fabric foundation** (carrier comment
+  `a7fb6f87-5d45-45a6-bd99-136c4f461fbd`). `spoke-ci-v4.yml` is now an
+  exact-checkout, compiled-client dispatcher. One invocation selects one named
+  action from the checked-in `.github/lanes.json` plan, and the workflow invokes
+  `/usr/local/bin/gf-action-client run` once with the admitted source SHA. The
+  plan is an admissibility boundary and does not claim one invocation executes
+  every member. The
+  admitted SHA is exactly `github.sha`, including GitHub's synthetic merge
+  commit on pull-request events, so the resolver can bind it to the OIDC
+  token's signed `sha` claim. The
+  vendored schema is an exact
+  projection of GloriousFlywheel `Core.dhall`: actions contain only Bazel
+  command, finite targets, and the one currently executable abstract REAPI
+  capability (`rbe-linux-x86_64`). Darwin remains schema-inadmissible until its
+  worker, provider route, client support, and canary exist. Provider pool,
+  runner, resolved platform, endpoint, profile, upload, and fixed concurrency
+  fields were removed from consumer manifests and plans. Inline
+  OIDC, token, proxy, sandbox, OCI, cleanup, and fallback orchestration was deleted rather
+  than becoming a second scheduler/client implementation. The old lane-env and
+  zero-caller public-preview surfaces remain deleted, and the existing central
+  validator shrank with the public surface. V3 remains unmodified. This held
+  source names no v4 tag and implies no release, adoption, publication,
+  installation, or runtime proof.
+
 ### Removed
 
 - **The dependency-free fallback validator is deleted** (TIN-4132, operator
@@ -87,19 +113,18 @@ Versioning: [SemVer 2.0](https://semver.org/).
   consumer CI runs — a gate reading as coverage while enforcing less than it
   appears to, which is the standard this release is written against.
 
-  Newly recorded: `lanes.schema.json` as `drifted`, and
-  `blahaj-dispatch.schema.json` / `public-preview-dispatch.schema.json` as
-  `unsourced` — their `$id`s name site.scaffold paths that **404** at the
-  recorded revision, so their digests are pinned but no provenance can be
+  `blahaj-dispatch.schema.json` remains `unsourced`: its `$id` names a
+  site.scaffold path that **404s** at the recorded revision, so its digest is
+  pinned but no provenance can be
   claimed. That also shows the "`$id` names the authority" heuristic this
   record rests on is not reliable on its own.
 
-  **`lanes.schema.json` must not be reflexively re-vendored.** It has drifted
-  in both directions and ci-templates is ahead on one: the vendored copy
-  carries the TIN-3914 org-namespaced capability-class `pattern` where upstream
-  still carries a hardcoded `tinyland-*` `enum`. Measured 2026-08-29 — adopting
-  upstream's bytes turns `just lanes-schema-runner-class-check` red with
-  `runnerClass no longer admits capability class great-falls-tool-bus-nix`.
+  The earlier v3-era instruction not to re-vendor `lanes.schema.json` is
+  superseded by TIN-2130 comment `a7fb6f87-5d45-45a6-bd99-136c4f461fbd`.
+  V4 removes runner selection from the schema entirely and deletes the orphaned
+  `lanes-schema-runner-class-check`. The paired site source is committed at
+  `7be3a545f530d003e734dd8e6f1fd5b8481244e1`; the vendoring record pins that
+  revision and matching upstream SHA-256, so the entry is now `identical`.
 
 - **`state` and `upstream_sha256` in `schemas/VENDORED.json` are asserted, not
   merely recorded.** `identical` now requires `upstream_sha256` to equal the

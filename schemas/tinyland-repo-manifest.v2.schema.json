@@ -19,9 +19,17 @@
 	"additionalProperties": false,
 	"properties": {
 		"$schema": {
-			"enum": [
-				"./docs/schemas/tinyland-repo-manifest.v2.schema.json",
-				"../../docs/schemas/tinyland-repo-manifest.v2.schema.json"
+			"oneOf": [
+				{
+					"enum": [
+						"./docs/schemas/tinyland-repo-manifest.v2.schema.json",
+						"../../docs/schemas/tinyland-repo-manifest.v2.schema.json"
+					]
+				},
+				{
+					"type": "string",
+					"pattern": "^https://raw\\.githubusercontent\\.com/tinyland-inc/site\\.scaffold/[0-9a-f]{40}/docs/schemas/tinyland-repo-manifest\\.v2\\.schema\\.json$"
+				}
 			]
 		},
 		"schema_version": {
@@ -120,7 +128,6 @@
 				"organizationOverlay",
 				"organizationOverlayRole",
 				"organizationOverlayComposition",
-				"executionPool",
 				"substrateMode",
 				"bindingStatus"
 			],
@@ -142,17 +149,6 @@
 				"organizationOverlayComposition": {
 					"enum": ["distinct", "co-located-application-overlay"],
 					"description": "Whether the forge/org execution plane is a distinct repo or intentionally co-located with an application-owner-overlay. Co-location composes two authorities; it does not collapse them."
-				},
-				"executionPool": {
-					"enum": [
-						"tinyland-nix",
-						"tinyland-nix-heavy",
-						"tinyland-nix-kvm",
-						"tinyland-nix-gpu",
-						"tinyland-docker",
-						"tinyland-dind"
-					],
-					"description": "Org-scoped capability pool used for the repository's ordinary source lane."
 				},
 				"substrateMode": {
 					"$ref": "#/$defs/substrateMode",

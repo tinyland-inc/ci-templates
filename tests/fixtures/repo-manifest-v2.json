@@ -21,7 +21,6 @@
 		"organizationOverlay": "tinyland-inc/example-infra",
 		"organizationOverlayRole": "organization-execution-overlay",
 		"organizationOverlayComposition": "distinct",
-		"executionPool": "tinyland-nix",
 		"substrateMode": "shared-cache-backed",
 		"bindingStatus": "declared"
 	},

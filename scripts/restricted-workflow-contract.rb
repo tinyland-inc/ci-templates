@@ -1,11 +1,11 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Structural contract for the opt-in private-repository workflow variants.
-# The variants may route only through an explicit owner -infra group plus an
-# exact reviewed capability. Their transitive action graph is immutable and
-# source-closed. The legacy shared workflows are checksum-pinned so adding this
-# surface cannot silently change ~190 existing consumers.
+# Structural contract for the opt-in private-repository spoke-CI variant.
+# It may route only through an explicit owner runner group plus an exact
+# reviewed capability. Its transitive action graph is immutable and
+# source-closed. The legacy shared workflow is checksum-pinned so adding this
+# surface cannot silently change existing consumers.
 
 require "digest"
 require "json"
@@ -61,8 +61,6 @@ SCANNER_INSTALL_SPECS = [
 EXPECTED_CLOSURE_ACTIONS = %w[
   cache-attachment-validate
   flywheel-bazel
-  lane-dispatch
-  lane-reap
   lane-status-check
   lanes-load
   nix-setup
@@ -131,41 +129,6 @@ SPECS = {
       "flywheel-build" => "nix_runner_label",
       "bazel-graph" => "heavy_runner_label",
     },
-  },
-  "spoke-lane-env" => {
-    legacy: ".github/workflows/spoke-lane-env.yml",
-    restricted: ".github/workflows/spoke-lane-env-restricted.yml",
-    # Re-recorded again for TIN-3815: this lane's four internal action refs moved
-    # `@v2` -> `@v3` so it sits on the same floating line as spoke-ci, which the
-    # restricted structural mapping requires. Provably inert — none of
-    # setup-nix / lanes-load / lane-dispatch / lane-reap changed between v2.14.0
-    # and v3.0.0 (only nix-setup and secrets-scan did, and this lane uses
-    # neither), so no consumer behaviour changes; it only unfreezes the ref.
-    # Previously ac5018e8-era c238ab59… .
-    # Re-recorded for TIN-3914. Previously 8e7e444f… . The deprecated legacy
-    # lane's four GitHub-hosted jobs (check-blahaj-token, lanes-load,
-    # dispatch-apply, destroy-lanes) move to the literal base capability class
-    # `tinyland-nix`, matching the literal `tinyland-dind` / `tinyland-nix-kvm`
-    # routing its other two jobs already used. No input surface changes, so the
-    # restricted variant stays a strict subset unchanged.
-    legacy_sha256: "b578c9c559ad1366e9fef4ea0a6c8cc9c8d9636a8dcf8dd4c243baadc1ed342c",
-    inputs: {
-      "runner_group" => "tinyland-infra",
-      "nix_runner_label" => "tinyland-nix",
-      "dind_runner_label" => "tinyland-dind",
-      "kvm_runner_label" => "tinyland-nix-kvm",
-    },
-    removed_legacy_inputs: [],
-    labels: {
-      "trust-gate" => "nix_runner_label",
-      "check-blahaj-token" => "nix_runner_label",
-      "lanes-load" => "nix_runner_label",
-      "publish-image" => "dind_runner_label",
-      "dispatch-apply" => "nix_runner_label",
-      "tailnet-qa" => "kvm_runner_label",
-      "destroy-lanes" => "nix_runner_label",
-    },
-    runner_env: {},
   },
 }.freeze
 

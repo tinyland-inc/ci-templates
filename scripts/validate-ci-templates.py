@@ -154,12 +154,80 @@ CURRENT_RELEASE_LINE = "v3"
 STALE_INTERNAL_REF_FILES = {
     ".github/workflows/js-bazel-package.yml": "TIN-3914",
     ".github/workflows/spoke-deploy-cloudflare-pages.yml": "TIN-3914",
-    ".github/workflows/spoke-public-preview.yml": "TIN-3914",
 }
 
 
+def check_v4_action_client_surface() -> bool:
+    """Assert the thin v4 workflow delegates execution to the compiled client.
+
+    This replaces the larger inline OCI/proxy assertion family. Retire it when
+    the typed workflow-effect contract directly enforces this boundary.
+    """
+
+    path = ROOT / ".github/workflows/spoke-ci-v4.yml"
+    if not path.is_file():
+        print(f"{path.relative_to(ROOT)}: missing thin v4 action workflow", file=sys.stderr)
+        return False
+
+    document = path.read_text(encoding="utf-8")
+    call_surface = document.split("\npermissions:\n", maxsplit=1)[0]
+    failures: list[str] = []
+
+    required = {
+        "ref: ${{ github.sha }}": "exact caller-context source checkout",
+        "SOURCE_SHA: ${{ github.sha }}": "exact caller-context source identity",
+        "ACTION_NAME: ${{ inputs.action_name }}": "caller-selected action identity",
+        "/usr/local/bin/gf-action-client run": "compiled action client",
+        "--plan .github/lanes.json": "canonical action plan",
+        '--action "$ACTION_NAME"': "one named action per invocation",
+        '--source-sha "$SOURCE_SHA"': "source identity passed to the client",
+    }
+    for snippet, claim in required.items():
+        if snippet not in document:
+            failures.append(f"missing {claim}")
+
+    if re.findall(r"^      ([a-z_][a-z0-9_]*):$", call_surface, re.MULTILINE) != [
+        "action_name"
+    ]:
+        failures.append("workflow_call must expose only the checked-in action name")
+    if document.count("id-token: write") != 1:
+        failures.append("the thin dispatcher must carry exactly one OIDC permission")
+    if re.findall(
+        r"^  ([a-z_][a-z0-9_-]*):$",
+        document.partition("\njobs:\n")[2],
+        re.MULTILINE,
+    ) != ["action-fabric"]:
+        failures.append("v4 action fabric must remain one thin job identity")
+
+    for forbidden in (
+        "executionPool",
+        "runner_class",
+        "GF_REAPI_",
+        "BAZEL_REMOTE_",
+        "gloriousflywheel-rbe-",
+        "@v4.0.0",
+        "packages: write",
+        "contents: write",
+        "git push",
+        "curl ",
+        "python3",
+        "mktemp",
+        "trap ",
+        "proxy",
+        "fallback",
+    ):
+        if forbidden in document:
+            failures.append(f"thin v4 dispatcher contains forbidden orchestration: {forbidden}")
+
+    if failures:
+        for failure in failures:
+            print(f"{path.relative_to(ROOT)}: {failure}", file=sys.stderr)
+        return False
+    print("v4 workflow is a thin compiled-client dispatcher")
+    return True
+
 def check_internal_refs() -> int:
-    ok = True
+    ok = check_v4_action_client_surface()
     action_pattern = re.compile(
         r"tinyland-inc/ci-templates/\.github/actions/([^@\s]+)@([^\s#]+)"
     )
@@ -169,21 +237,19 @@ def check_internal_refs() -> int:
     for path in sorted((ROOT / ".github").glob("**/*.yml")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
+        expected_release_line = CURRENT_RELEASE_LINE
         for action, ref in action_pattern.findall(text):
             action_yml = ROOT / ".github/actions" / action / "action.yml"
             if not action_yml.exists():
                 print(f"{rel}: missing internal action {action_yml.relative_to(ROOT)}", file=sys.stderr)
                 ok = False
-            # An exact SemVer ref is the restricted workflows' immutability
-            # contract (restricted-workflow-contract.rb pins the exact release
-            # and rejects anything floating), so it is always admissible here.
-            if exact_release.match(ref) or ref == CURRENT_RELEASE_LINE:
+            if exact_release.match(ref) or ref == expected_release_line:
                 continue
             if str(rel) in STALE_INTERNAL_REF_FILES:
                 continue
             print(
                 f"{rel}: internal action {action}@{ref} is not on the current release line "
-                f"@{CURRENT_RELEASE_LINE} and is not an exact release pin; a stale floating "
+                f"@{expected_release_line} and is not an exact release pin; a stale floating "
                 "major freezes this file's actions at the previous major",
                 file=sys.stderr,
             )
@@ -216,7 +282,7 @@ def check_internal_refs() -> int:
 
     if not ok:
         return 1
-    print(f"internal action refs resolve and track @{CURRENT_RELEASE_LINE} (or an exact release pin)")
+    print(f"internal action refs resolve and track their release line (or an exact release pin)")
     return 0
 
 
@@ -1119,173 +1185,14 @@ def check_rust_bazel_application_contract() -> int:
     return 0
 
 
-# TIN-3914. The lanes schema validates CONSUMER data, and `lanes-load` feeds
-# `runnerClass` into spoke-ci's `matrix.lane.runner_class`, i.e. straight into
-# `runs-on`. Until v3.0.0 the schema carried an explicit `{"const":
-# "ubuntu-latest"}` arm, so a consumer could route a build job onto GitHub's
-# fleet with this repo's own schema approving it — and none of the
-# workflow-facing gates could see it: `lint-runs-on.rb` reads workflow text,
-# and the textual backstop only reads files, not what a regex ADMITS.
-#
-# This check is semantic, not textual: it asserts no GitHub-hosted label is
-# REPRESENTABLE as a runnerClass, by executing every accept-arm against hostile
-# and legitimate label sets. A future arm that re-opens the hole in some new
-# spelling fails here even if it never writes a hosted label down.
-HOSTED_LABEL_RE = re.compile(r"^(ubuntu|macos|windows)-", re.IGNORECASE)
-
-HOSTILE_RUNNER_CLASSES = (
-    "ubuntu-latest",
-    "Ubuntu-Latest",
-    "ubuntu-24.04",
-    "ubuntu-latest-4-cores",
-    "ubuntu-22.04-arm",
-    "macos-15",
-    "MacOS-Latest",
-    "windows-2022",
-    "windows-11-arm",
-)
-
-LEGITIMATE_RUNNER_CLASSES = (
-    "tinyland-nix",
-    "tinyland-nix-heavy",
-    "tinyland-nix-kvm",
-    "tinyland-docker",
-    "tinyland-dind",
-    "great-falls-tool-bus-nix",
-)
-
-
-def _collect_accept_arms(node: object, literals: list, patterns: list, open_strings: list) -> None:
-    if not isinstance(node, dict):
-        return
-    if "const" in node:
-        literals.append(node["const"])
-    if "enum" in node:
-        literals.extend(node["enum"])
-    if "pattern" in node:
-        patterns.append(node["pattern"])
-    elif node.get("type") == "string" and "const" not in node and "enum" not in node:
-        # A bare string arm accepts anything, hosted labels included.
-        open_strings.append(node)
-    for combinator in ("anyOf", "oneOf", "allOf"):
-        for child in node.get(combinator, []):
-            _collect_accept_arms(child, literals, patterns, open_strings)
-
-
-def check_lanes_schema_runner_class() -> int:
-    schema_path = ROOT / "schemas/lanes.schema.json"
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    rel = schema_path.relative_to(ROOT)
-    node = schema.get("$defs", {}).get("runnerClass")
-    ok = True
-
-    if not isinstance(node, dict):
-        print(f"{rel}: $defs.runnerClass is missing", file=sys.stderr)
-        return 1
-
-    literals: list = []
-    patterns: list = []
-    open_strings: list = []
-    _collect_accept_arms(node, literals, patterns, open_strings)
-
-    if open_strings:
-        print(
-            f"{rel}: runnerClass has an unconstrained string arm; it would admit any runner label",
-            file=sys.stderr,
-        )
-        ok = False
-    if not literals and not patterns:
-        print(f"{rel}: runnerClass constrains nothing", file=sys.stderr)
-        ok = False
-
-    for literal in literals:
-        if HOSTED_LABEL_RE.match(str(literal)):
-            print(
-                f"{rel}: runnerClass sanctions GitHub-hosted label {literal!r}; "
-                "consumer lanes.json feeds this into spoke-ci's runs-on (TIN-3914)",
-                file=sys.stderr,
-            )
-            ok = False
-
-    compiled = []
-    for pattern in patterns:
-        try:
-            compiled.append((pattern, re.compile(pattern)))
-        except re.error as exc:
-            print(f"{rel}: runnerClass pattern {pattern!r} does not compile: {exc}", file=sys.stderr)
-            ok = False
-    for pattern, regex in compiled:
-        for label in HOSTILE_RUNNER_CLASSES:
-            if regex.search(label):
-                print(
-                    f"{rel}: runnerClass pattern {pattern!r} admits GitHub-hosted label {label!r} "
-                    "(TIN-3914)",
-                    file=sys.stderr,
-                )
-                ok = False
-
-    # Guard the other direction too: a pattern tightened until it rejects the
-    # capability classes would "pass" this check while breaking every consumer.
-    for label in LEGITIMATE_RUNNER_CLASSES:
-        admitted = label in [str(literal) for literal in literals] or any(
-            regex.search(label) for _pattern, regex in compiled
-        )
-        if not admitted:
-            print(
-                f"{rel}: runnerClass no longer admits capability class {label!r}",
-                file=sys.stderr,
-            )
-            ok = False
-
-    if not ok:
-        return 1
-    print(
-        "lanes schema runnerClass admits capability classes only "
-        f"({len(HOSTILE_RUNNER_CLASSES)} hostile labels rejected, "
-        f"{len(LEGITIMATE_RUNNER_CLASSES)} capability classes accepted)"
-    )
-    return 0
-
-
 def check_vendored_schema_provenance() -> int:
     """Assert every vendored schema still matches its recorded digest.
 
-    ci-templates carries COPIES of schemas whose own `$id` names
-    tinyland-inc/site.scaffold as the authority. Before schemas/VENDORED.json
-    existed there was no lock and no gate, and the v1 copy had silently
-    diverged from its source in BOTH directions -- ci-templates gained
-    `authorities.artifact_registry`, site.scaffold gained a `gitops_receiver`
-    prohibition -- with nothing comparing them. The v2 copy then arrived the
-    same way; it is byte-identical to its source today, which is precisely why
-    this is the cheapest moment to record it.
-
     This gate is deliberately HERMETIC: it compares the vendored bytes to the
     digests recorded in VENDORED.json, and does NOT reach out to site.scaffold.
-    A network call would make every consumer's CI depend on another repository
-    being reachable. What it catches is the thing a lock can catch offline: a
-    hand-edit to a vendored copy that never went through a re-vendor.
-
-    Upstream freshness is a different question and needs a different, non-
-    blocking mechanism -- the same split lab uses for its repo-contract source
-    locks.
-
-    A `drifted` entry is REPORTED, not failed. The divergence is known and
-    de-forking it changes what live consumers are validated against; what must
-    not happen is it going unnoticed again.
-
-    SCOPE. This check covers `schemas/*.schema.json` — every schema in the
-    directory. It was written globbing `tinyland-repo-manifest*.json`, and that
-    narrower glob was not a smaller version of the same gate, it was a gate
-    that could not see the file it most needed to: `schemas/lanes.schema.json`
-    carries a site.scaffold `$id`, is drifted from its source TODAY (the
-    vendored copy still describes blahaj PR-env provisioning, reaper TTL and
-    `--config=flywheel-executor`; upstream says the schema "grants no receiver,
-    apply, DNS, or lifecycle authority" and uses
-    `GF_BAZEL_SUBSTRATE_MODE=executor-backed`), and backs the `lanes-load`
-    action that tinyland.dev's CI actually runs. The old glob would have
-    printed "all 2 vendored schemas match" over a directory holding four, one
-    of them drifted and load-bearing — coverage-shaped output enforcing less
-    than it read as, which is the exact defect this file exists to end.
+    It covers every `schemas/*.schema.json`; upstream freshness remains a
+    separate non-blocking question, and a `drifted` entry is reported rather
+    than failed because reconciling it changes the consumer contract.
 
     STATE VOCABULARY, and why each arm is asserted rather than recorded:
 
@@ -1472,7 +1379,6 @@ def main() -> int:
             "flywheel-reapi-proof-contract",
             "cache-backed-optin-contract",
             "rust-bazel-application-contract",
-            "lanes-schema-runner-class",
         ],
     )
     args = parser.parse_args()
@@ -1489,8 +1395,6 @@ def main() -> int:
         return check_cache_backed_optin_contract()
     if args.check == "rust-bazel-application-contract":
         return check_rust_bazel_application_contract()
-    if args.check == "lanes-schema-runner-class":
-        return check_lanes_schema_runner_class()
     return check_internal_refs()
 
 
