@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.0.0] — 2026-09-01
+
 ### Changed
 
 - **TIN-2130 v4 action-fabric foundation** (carrier comment

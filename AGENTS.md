@@ -62,9 +62,9 @@ runner label survives on a schedulable surface, including canonical consumer
 lanes data (`no-hosted-runners-check`, TIN-3914), and runs the gitleaks
 working-tree scan.
 
-## V4 source foundation (TIN-2130)
+## V4 action-fabric release (TIN-2130, TIN-4249)
 
-The held v4 carrier is deliberately thin. `.github/lanes.json` declares named
+The v4.0.0 carrier is deliberately thin. `.github/lanes.json` declares named
 Bazel `build` or `test` actions, finite workspace labels, and only the
 exactly one abstract REAPI capability defined by GloriousFlywheel `Core.dhall`
 (`rbe-linux-x86_64`) per action. Darwin is not part of the first executable v4
@@ -87,8 +87,10 @@ The Go client owns OIDC, owner-installation binding, cache/executor resolution,
 and REAPI dispatch. Workflow source must not reimplement that lifecycle in
 Bash, Python, composite actions, proxy setup, or fallback branches. Consumer
 overlay declarations own demand; provider internals resolve supply. This is
-source only: no v4 tag, adoption, publication, installation, or runtime proof
-exists merely because the carrier is present.
+The immutable tag publishes workflow source only. Adoption and runtime proof do
+not exist merely because the carrier is present: the consumer-owned signed
+overlay, verified provider supply, current binding catalog, image-custodied
+client, and an attributed REAPI action must all succeed independently.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 

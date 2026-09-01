@@ -1,6 +1,7 @@
 name: spoke-ci-v4
-# Source-only breaking contract authorized by TIN-2130. Publication, adoption,
-# installation, and runtime proof are separate operator transactions.
+# Immutable v4 action-fabric contract released under TIN-4249. The release
+# publishes workflow source only; consumer adoption, provider convergence, and
+# runtime proof remain separately verified product transactions.
 
 on:
   workflow_call:
