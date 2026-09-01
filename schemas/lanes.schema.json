@@ -19,7 +19,7 @@
 				"pattern": "^[a-z][a-z0-9-]{0,62}$"
 			},
 			"additionalProperties": { "$ref": "#/$defs/action" },
-			"description": "Bazel actions keyed by their log and evidence identity. JSON object keys make action names unique by construction; the v4 workflow dispatches every entry exactly once through the compiled GF action client."
+			"description": "Bazel actions keyed by their log and evidence identity. JSON object keys make action names unique by construction. One v4 workflow invocation selects exactly one declared name and the compiled GF action client consumes that member's complete command, target, and capability tuple."
 		}
 	},
 	"$defs": {

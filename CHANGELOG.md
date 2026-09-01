@@ -9,9 +9,11 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 - **TIN-2130 v4 action-fabric foundation** (carrier comment
   `a7fb6f87-5d45-45a6-bd99-136c4f461fbd`). `spoke-ci-v4.yml` is now an
-  exact-checkout, compiled-client dispatcher. The caller selects one named
+  exact-checkout, compiled-client dispatcher. One invocation selects one named
   action from the checked-in `.github/lanes.json` plan, and the workflow invokes
   `/usr/local/bin/gf-action-client run` once with the admitted source SHA. The
+  plan is an admissibility boundary and does not claim one invocation executes
+  every member. The
   admitted SHA is exactly `github.sha`, including GitHub's synthetic merge
   commit on pull-request events, so the resolver can bind it to the OIDC
   token's signed `sha` claim. The
@@ -121,7 +123,7 @@ Versioning: [SemVer 2.0](https://semver.org/).
   superseded by TIN-2130 comment `a7fb6f87-5d45-45a6-bd99-136c4f461fbd`.
   V4 removes runner selection from the schema entirely and deletes the orphaned
   `lanes-schema-runner-class-check`. The paired site source is committed at
-  `0b5ff6fba1a97dc3057ce6e25d72be71d25b418d`; the vendoring record pins that
+  `7be3a545f530d003e734dd8e6f1fd5b8481244e1`; the vendoring record pins that
   revision and matching upstream SHA-256, so the entry is now `identical`.
 
 - **`state` and `upstream_sha256` in `schemas/VENDORED.json` are asserted, not

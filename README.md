@@ -52,9 +52,10 @@ GloriousFlywheel `Core.dhall`. Darwin is deliberately absent until its worker,
 route, client support, and canary exist. Consumer overlays declare demand; the
 provider resolves private supply.
 
-`spoke-ci-v4.yml` is a thin dispatcher. The caller selects one checked-in
-action name, the workflow checks out `github.sha`, and it invokes the compiled
-client already custodied by the v4 runner image. For `pull_request`, GitHub
+`spoke-ci-v4.yml` is a thin dispatcher. One invocation selects one checked-in
+action name, checks out `github.sha`, and invokes the compiled client already
+custodied by the v4 runner image. Plan membership is an admissibility boundary,
+not a claim that one invocation executes every member. For `pull_request`, GitHub
 defines that SHA as the synthetic merge commit; the caller workflow context and
 OIDC `sha` claim describe that same executed source:
 
@@ -606,7 +607,7 @@ questions: no offline check can prove that string names a real commit. An entry
 marked `drifted` is reported, never failed.
 
 The `lanes.schema.json` bytes match held site.scaffold commit
-`0b5ff6fba1a97dc3057ce6e25d72be71d25b418d`. The vendoring record names that
+`7be3a545f530d003e734dd8e6f1fd5b8481244e1`. The vendoring record names that
 exact revision, records the same SHA-256 on both sides, and classifies the file
 as `identical`; this provenance edge is closed for the held v4 source.
 

@@ -72,7 +72,7 @@ surface: it becomes admissible only with its own worker, route, client support,
 and canary. The plan never names a runner, execution pool, resolved platform,
 endpoint, credential, upload posture, or provider concurrency.
 
-`spoke-ci-v4.yml` accepts one checked-in action name, checks out exactly
+`spoke-ci-v4.yml` accepts one checked-in action name per invocation, checks out exactly
 `github.sha`, then invokes the image-custodied compiled client. For a
 `pull_request` event that is GitHub's synthetic merge commit. It is also the
 SHA GitHub signs into the job's OIDC token; accepting the caller-controlled

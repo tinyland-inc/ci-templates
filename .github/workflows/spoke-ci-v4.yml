@@ -29,7 +29,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Execute declared Bazel actions
+      - name: Execute declared Bazel action
         shell: bash
         env:
           ACTION_NAME: ${{ inputs.action_name }}
