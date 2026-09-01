@@ -53,11 +53,13 @@ route, client support, and canary exist. Consumer overlays declare demand; the
 provider resolves private supply.
 
 `spoke-ci-v4.yml` is a thin dispatcher. One invocation selects one checked-in
-action name, checks out `github.sha`, and invokes the compiled client already
-custodied by the v4 runner image. Plan membership is an admissibility boundary,
-not a claim that one invocation executes every member. For `pull_request`, GitHub
-defines that SHA as the synthetic merge commit; the caller workflow context and
-OIDC `sha` claim describe that same executed source:
+action name, checks out the exact admitted source, and invokes the compiled
+client already custodied by the v4 runner image. Plan membership is an
+admissibility boundary, not a claim that one invocation executes every member.
+For `pull_request`, the admitted source is
+`github.event.pull_request.head.sha`, matching the owner-overlay and admission
+identity rather than GitHub's synthetic merge commit. For `push`, it is
+`github.sha`. Other event shapes do not enter the action-fabric job:
 
 ```text
 /usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>

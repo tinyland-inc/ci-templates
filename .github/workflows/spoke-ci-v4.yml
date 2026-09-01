@@ -16,24 +16,24 @@ permissions:
 
 jobs:
   action-fabric:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: tinyland-nix
     timeout-minutes: 45
+    env:
+      SOURCE_SHA: '${{ fromJSON(format(''{{"pull_request":"{0}","push":"{1}"}}'', github.event.pull_request.head.sha, github.sha))[github.event_name] }}'
     steps:
       - name: Check out exact admitted source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          # GitHub signs github.sha into the job's OIDC token. On a
-          # pull_request event this is the synthetic merge commit, not the
-          # untrusted head SHA. The resolver refuses any mismatch.
-          ref: ${{ github.sha }}
+          # The owner overlay and admission binding identify the exact PR head,
+          # never GitHub's synthetic merge commit. Pushes bind github.sha.
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
 
       - name: Execute declared Bazel action
         shell: bash
         env:
           ACTION_NAME: ${{ inputs.action_name }}
-          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           /usr/local/bin/gf-action-client run \
