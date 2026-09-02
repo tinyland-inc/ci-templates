@@ -82,7 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v3
 
       # wrangler-action installs Wrangler with pnpm when it is not already on
       # PATH; the Nix devshell keeps Node/pnpm inside `nix develop --command`,

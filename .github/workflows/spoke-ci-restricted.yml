@@ -176,7 +176,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
-      - uses: tinyland-inc/ci-templates/.github/actions/secrets-scan@v2.12.1
+      - uses: tinyland-inc/ci-templates/.github/actions/secrets-scan@v3
 
   lanes-load:
     needs: [trust-gate]
@@ -191,9 +191,9 @@ jobs:
       spoke_name: ${{ steps.load.outputs.spoke_name }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v3
       - id: load
-        uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/lanes-load@v3
         with:
           path: ${{ inputs.lanes_path }}
 
@@ -205,7 +205,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v3
       - id: manifest
         shell: bash
         run: |
@@ -216,7 +216,7 @@ jobs:
             echo "::notice::tinyland.repo.json not present; skipping manifest validation for this pre-manifest consumer."
           fi
       - if: steps.manifest.outputs.exists == 'true'
-        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v3
         with:
           required_roles: >-
             ${{ startsWith(inputs.allowed_repo_roles, '[')
@@ -240,14 +240,14 @@ jobs:
       # non-opted spoke consumers. setup-nix installs Nix only; it does NOT
       # export BAZEL_REMOTE_CACHE.
       - if: ${{ !inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v3
 
       # Cache-backed path (cache_backed=true): nix-setup probes cluster DNS and
       # exports BAZEL_REMOTE_CACHE / ATTIC_SERVER so the contract + cache-backed
       # build below can attach the shared Bazel cache. This is the spoke wiring
       # fix: spoke-ci's default setup-nix does not export the cache endpoint.
       - if: ${{ inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v3
 
       - name: Setup workspace
         run: nix develop --command just setup
@@ -259,7 +259,7 @@ jobs:
       # and FAIL CLOSED on an invalid manifest (TIN-2109). Network-free.
       - name: Validate repo manifest (cache-backed lane)
         if: ${{ inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/repo-manifest-validate@v3
         with:
           required_roles: >-
             ${{ startsWith(inputs.allowed_repo_roles, '[')
@@ -272,13 +272,13 @@ jobs:
       # contract rejects hosted / non-cluster fallback (no silent degrade).
       - name: Assert shared-cache attachment (cache-backed lane)
         if: ${{ inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v3
         with:
           substrate_mode: ${{ inputs.substrate_mode }}
           runner_labels: ${{ inputs.nix_runner_label }}
 
       - name: Build (flywheel)
-        uses: tinyland-inc/ci-templates/.github/actions/flywheel-bazel@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/flywheel-bazel@v3
         with:
           targets: "//:node_modules"
           command: build
@@ -316,7 +316,7 @@ jobs:
 
       - name: Post lane build status
         if: always()
-        uses: tinyland-inc/ci-templates/.github/actions/lane-status-check@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/lane-status-check@v3
         with:
           commit_sha: ${{ github.event.pull_request.head.sha || github.sha }}
           lane_name: ${{ matrix.lane.name }}
@@ -335,7 +335,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v3
 
       - run: nix develop --command just setup
       - run: nix develop --command just check
@@ -351,10 +351,10 @@ jobs:
 
       # Default path (cache_backed=false): byte-identical for non-opted spokes.
       - if: ${{ !inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v3
       # Cache-backed path: nix-setup exports BAZEL_REMOTE_CACHE from cluster DNS.
       - if: ${{ inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v3
 
       - run: nix develop --command bazelisk mod graph
 
@@ -366,7 +366,7 @@ jobs:
       # tinyland-nix-heavy is a cluster capability class accepted by the contract.
       - name: Assert shared-cache attachment (bazel-graph)
         if: ${{ inputs.cache_backed }}
-        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v2.12.1
+        uses: tinyland-inc/ci-templates/.github/actions/cache-attachment-validate@v3
         with:
           substrate_mode: ${{ inputs.substrate_mode }}
           runner_labels: ${{ inputs.heavy_runner_label }}
@@ -399,6 +399,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v2.12.1
+      - uses: tinyland-inc/ci-templates/.github/actions/setup-nix@v3
       - run: nix develop --command just setup
       - run: nix develop --command just test-e2e
