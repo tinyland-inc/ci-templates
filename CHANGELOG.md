@@ -5,6 +5,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Correct the v4 release boundary after the first consumer canaries failed
+  closed on an absent `/usr/local/bin/gf-action-client`: the immutable template
+  requires the client at a provider-custodied image path, but its source release
+  does not prove that provider rollout. The released 4.0.0 entry no longer calls
+  its own tagged source a held, unreleased carrier.
+
 ## [4.0.0] — 2026-09-01
 
 ### Changed
@@ -30,9 +38,9 @@ Versioning: [SemVer 2.0](https://semver.org/).
   OIDC, token, proxy, sandbox, OCI, cleanup, and fallback orchestration was deleted rather
   than becoming a second scheduler/client implementation. The old lane-env and
   zero-caller public-preview surfaces remain deleted, and the existing central
-  validator shrank with the public surface. V3 remains unmodified. This held
-  source names no v4 tag and implies no release, adoption, publication,
-  installation, or runtime proof.
+  validator shrank with the public surface. V3 remains unmodified. The
+  `v4.0.0` tag releases this workflow source only; it does not itself prove
+  adoption, provider convergence, installation, or runtime execution.
 
 ### Removed
 

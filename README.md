@@ -53,8 +53,8 @@ route, client support, and canary exist. Consumer overlays declare demand; the
 provider resolves private supply.
 
 `spoke-ci-v4.yml` is a thin dispatcher. One invocation selects one checked-in
-action name, checks out the exact admitted source, and invokes the compiled
-client already custodied by the v4 runner image. Plan membership is an
+action name, checks out the exact admitted source, and requires the compiled
+client at its provider-custodied image path. Plan membership is an
 admissibility boundary, not a claim that one invocation executes every member.
 For `pull_request`, the admitted source is
 `github.event.pull_request.head.sha`, matching the owner-overlay and admission
@@ -71,8 +71,8 @@ lifecycles in Bash, Python, proxy composites, OCI helpers, or fallback paths.
 Consumers pin the immutable `@v4.0.0` release. The tag publishes this workflow
 contract; it does not by itself prove consumer adoption, provider convergence,
 or runtime execution. Those remain fail-closed until the signed consumer
-overlay, verified provider supply, current binding catalog, and image-custodied
-client are all present.
+overlay, verified provider supply, current binding catalog, and provider image
+carrying the client are all present.
 
 See [`docs/migration-v3-to-v4.md`](./docs/migration-v3-to-v4.md) for the
 breaking action-plan migration and the evidence required before deleting a v3
@@ -618,7 +618,7 @@ marked `drifted` is reported, never failed.
 The `lanes.schema.json` bytes match held site.scaffold commit
 `7be3a545f530d003e734dd8e6f1fd5b8481244e1`. The vendoring record names that
 exact revision, records the same SHA-256 on both sides, and classifies the file
-as `identical`; this provenance edge is closed for the held v4 source.
+as `identical`; this provenance edge is closed for the v4.0.0 schema projection.
 
 **Known drift, not closed here:** the vendored
 `tinyland-repo-manifest.schema.json` (v1) and site.scaffold's copy have diverged
