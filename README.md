@@ -44,13 +44,15 @@ jobs:
     secrets: inherit
 ```
 
-The v4.0.0 action-fabric contract has no caller-selected runner, execution pool, resolved
-platform, endpoint, profile, upload authority, concurrency cap, or fallback.
-`.github/lanes.json` declares named Bazel commands and finite targets with only
-the currently executable abstract `rbe-linux-x86_64` capability from
-GloriousFlywheel `Core.dhall`. Darwin is deliberately absent until its worker,
-route, client support, and canary exist. Consumer overlays declare demand; the
-provider resolves private supply.
+The GloriousFlywheel v4 action-fabric contract has no caller-selected runner,
+execution pool, resolved platform, endpoint, profile, upload authority,
+concurrency cap, consumer registry row, or fallback. Its schema-3 carrier is
+the ci-templates `v5.0.0` release line; the historical `v4.0.0` tag carries
+schema 2 and is not a compatibility path. `.github/lanes.json` declares named
+Bazel commands, finite targets, one provider-blind capability demand
+(`rbe-linux-x86_64` or `rbe-darwin-aarch64`), and a mandatory closed result
+disposition. Consumer overlays declare demand; the provider resolves private
+supply or fails closed when no admitted supply exists.
 
 `spoke-ci-v4.yml` is a thin dispatcher. One invocation selects one checked-in
 action name, checks out the exact admitted source, and requires the compiled
@@ -66,17 +68,19 @@ identity rather than GitHub's synthetic merge commit. For `push`, it is
 ```
 
 The Go client owns OIDC, owner-installation binding, cache/executor resolution,
-and REAPI action dispatch. The reusable workflow does not reproduce those
-lifecycles in Bash, Python, proxy composites, OCI helpers, or fallback paths.
-Consumers pin the immutable `@v4.0.0` release. The tag publishes this workflow
+REAPI action dispatch, and exact `ActionOutputSet/v1` result carriage. The
+reusable workflow does not reproduce those lifecycles in Bash, Python, proxy
+composites, OCI helpers, or fallback paths. Schema-3 consumers pin the immutable
+`@v5.0.0` release after that tag exists. The tag publishes this workflow
 contract; it does not by itself prove consumer adoption, provider convergence,
-or runtime execution. Those remain fail-closed until the signed consumer
-overlay, verified provider supply, current binding catalog, and provider image
-carrying the client are all present.
+runtime execution, or an output set. Those remain fail-closed until the signed
+consumer overlay, verified provider supply, current binding catalog, and
+provider image carrying the schema-3 client are all present.
 
-See [`docs/migration-v3-to-v4.md`](./docs/migration-v3-to-v4.md) for the
-breaking action-plan migration and the evidence required before deleting a v3
-caller.
+Existing schema-2 callers must follow
+[`docs/migration-v4-to-v5.md`](./docs/migration-v4-to-v5.md). V3 callers start
+with [`docs/migration-v3-to-v4.md`](./docs/migration-v3-to-v4.md), then complete
+the schema-3 migration; neither release is a runtime fallback.
 
 Your spoke needs `.github/lanes.json` validating against
 [`schemas/lanes.schema.json`](./schemas/lanes.schema.json). New spokes should
@@ -615,10 +619,14 @@ entry (named, not a traceback), and a record with no entries at all. Upstream
 questions: no offline check can prove that string names a real commit. An entry
 marked `drifted` is reported, never failed.
 
-The `lanes.schema.json` bytes match held site.scaffold commit
-`7be3a545f530d003e734dd8e6f1fd5b8481244e1`. The vendoring record names that
-exact revision, records the same SHA-256 on both sides, and classifies the file
-as `identical`; this provenance edge is closed for the v4.0.0 schema projection.
+The `lanes.schema.json` bytes match signed site.scaffold #163 commit
+`0a46c06b3415ba0b9dc4e8ff98173a6087d0ba68`. The vendoring record names that
+exact revision, records SHA-256
+`4fef58645b8cd367a4336a66eaee629388c8a949a06d85becc97cfc1be82e3b8` on both
+sides, and classifies the file as `identical`; this provenance edge is closed
+for the ActionPlan/v4 schema-3 projection. The repository-manifest entries are
+independently `drifted` or `unsourced` as recorded; this release does not hide
+or silently reconcile those separate migrations.
 
 **Known drift, not closed here:** the vendored
 `tinyland-repo-manifest.schema.json` (v1) and site.scaffold's copy have diverged

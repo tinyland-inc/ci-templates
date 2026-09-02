@@ -64,13 +64,20 @@ working-tree scan.
 
 ## V4 action-fabric release (TIN-2130, TIN-4249)
 
-The v4.0.0 carrier is deliberately thin. `.github/lanes.json` declares named
-Bazel `build` or `test` actions, finite workspace labels, and only the
-exactly one abstract REAPI capability defined by GloriousFlywheel `Core.dhall`
-(`rbe-linux-x86_64`) per action. Darwin is not part of the first executable v4
-surface: it becomes admissible only with its own worker, route, client support,
-and canary. The plan never names a runner, execution pool, resolved platform,
-endpoint, credential, upload posture, or provider concurrency.
+The product interface remains `ActionPlan/v4`; ci-templates `v5.0.0` is the
+first carrier of its incompatible schema 3. The historical `v4.0.0` release
+carries schema 2 and must not be used as a compatibility fallback. A schema-3
+`.github/lanes.json` declares named Bazel `build` or `test` actions, finite
+workspace labels, one abstract REAPI capability demand
+(`rbe-linux-x86_64` or `rbe-darwin-aarch64`), and one closed result disposition
+per action. `status-only` exports no files; `export-regular-files` names 1--8
+Bazel output groups and requires exact target labels. The plan never names a
+runner, execution pool, resolved platform, endpoint, credential, upload
+posture, provider concurrency, or consumer registration.
+
+Both capability values are provider-blind demand, not claims of live supply.
+Resolution fails closed when the current signed provider catalog cannot
+satisfy a declared capability; consumer schema must not hide absent supply.
 
 `spoke-ci-v4.yml` accepts one checked-in action name per invocation, then
 requires the compiled client at its provider-custodied image path and invokes
@@ -85,13 +92,15 @@ pull-request merge commit for the overlay-bound head:
 ```
 
 The Go client owns OIDC, owner-installation binding, cache/executor resolution,
-and REAPI dispatch. Workflow source must not reimplement that lifecycle in
-Bash, Python, composite actions, proxy setup, or fallback branches. Consumer
-overlay declarations own demand; provider internals resolve supply. The
-immutable tag publishes workflow source only. Adoption and runtime proof do not
-exist merely because the carrier is present: the consumer-owned signed overlay,
-verified provider supply, current binding catalog, a provider image carrying
-the client, and an attributed REAPI action must all succeed independently.
+REAPI dispatch, and exact `ActionOutputSet/v1` result carriage. Workflow source
+must not reimplement that lifecycle in Bash, Python, composite actions, proxy
+setup, or fallback branches. Consumer overlay declarations own demand;
+provider internals resolve supply. The immutable tag publishes workflow source
+only. Adoption and runtime proof do not exist merely because the carrier is
+present: the consumer-owned signed overlay, verified provider supply, current
+binding catalog, a provider image carrying the schema-3 client, an attributed
+REAPI action, and (when requested) an exact output set must all succeed
+independently.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 
