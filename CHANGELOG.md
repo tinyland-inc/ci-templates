@@ -5,6 +5,26 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **TIN-2130/TIN-4249 ActionPlan/v4 schema 3 (targets ci-templates v5.0.0).**
+  Make `result` mandatory for every action, with the closed dispositions
+  `status-only` and `export-regular-files`. Export mode requires exact Bazel
+  target labels and 1--8 named output groups; it is carried only through the
+  compiled client's verified `ActionOutputSet/v1`, never through workflow-side
+  artifact discovery. Admit both Linux x86_64 and Darwin arm64 as abstract,
+  provider-blind capability demand; absent signed supply fails resolution.
+  The reusable `spoke-ci-v4.yml` dispatcher is byte-identical. The schema bytes
+  are vendored from signed site.scaffold #163 commit
+  `0a46c06b3415ba0b9dc4e8ff98173a6087d0ba68`.
+
+### Removed
+
+- Treat schema 2 as historical `v4.0.0` input, not a compatibility or local
+  execution fallback. Schema-3 consumers must migrate atomically with their
+  signed consumer-owned overlay digest and provider image; GF core and this
+  repository continue to own no consumer instances.
+
 ### Fixed
 
 - Correct the v4 release boundary after the first consumer canaries failed

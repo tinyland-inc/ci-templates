@@ -1,5 +1,10 @@
 # Migrate from v3 CI profiles to the v4 action fabric
 
+> Historical first step: `v4.0.0` carries ActionPlan/v4 schema 2. Current
+> consumers must continue through
+> [`migration-v4-to-v5.md`](./migration-v4-to-v5.md) to schema 3; schema 2 is
+> not a fallback after that cutover.
+
 `v4.0.0` is a breaking interface. V4 schedules Bazel actions through the
 GloriousFlywheel REAPI fabric; it does not expose runners, endpoints, cache
 profiles, credentials, lifecycle controls, or a local execution path to the

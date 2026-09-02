@@ -8,8 +8,8 @@
 	"additionalProperties": false,
 	"properties": {
 		"schema_version": {
-			"const": 2,
-			"description": "Breaking v4 plan interface. Version 2 removes every attachment and lifecycle field from lanes.json."
+			"const": 3,
+			"description": "ActionPlan/v4 schema 3. Versions 1 and 2 predate the mandatory result-disposition boundary and are not accepted."
 		},
 		"actions": {
 			"type": "object",
@@ -24,12 +24,45 @@
 	},
 	"$defs": {
 		"capability": {
-			"const": "rbe-linux-x86_64",
-			"description": "The sole GloriousFlywheel v4 REAPI capability implemented by the current resolver and action client. The provider resolves it to concrete platform and worker supply; this value is never a runner label or resolved gloriousflywheel-rbe-* platform identity. Darwin becomes schema-admissible only with its own worker, route, client support, and canary."
+			"enum": ["rbe-linux-x86_64", "rbe-darwin-aarch64"],
+			"description": "Abstract REAPI demand understood by the GloriousFlywheel v4 action client. The provider resolves it to current platform and worker supply; this value is never a runner label or resolved gloriousflywheel-rbe-* platform identity. A declared capability with no admitted supply fails during resolution rather than disappearing from the provider-blind consumer schema."
+		},
+		"result": {
+			"description": "Closed result disposition. There is no omitted or default mode.",
+			"oneOf": [
+				{
+					"title": "Status only",
+					"type": "object",
+					"required": ["mode"],
+					"additionalProperties": false,
+					"properties": {
+						"mode": { "const": "status-only" }
+					}
+				},
+				{
+					"title": "Export regular files",
+					"type": "object",
+					"required": ["mode", "output_groups"],
+					"additionalProperties": false,
+					"properties": {
+						"mode": { "const": "export-regular-files" },
+						"output_groups": {
+							"type": "array",
+							"minItems": 1,
+							"maxItems": 8,
+							"uniqueItems": true,
+							"items": {
+								"type": "string",
+								"pattern": "^[A-Za-z_][A-Za-z0-9_.+-]{0,127}$"
+							}
+						}
+					}
+				}
+			]
 		},
 		"action": {
 			"type": "object",
-			"required": ["command", "targets", "capability"],
+			"required": ["command", "targets", "capability", "result"],
 			"additionalProperties": false,
 			"properties": {
 				"command": {
@@ -52,8 +85,36 @@
 				"capability": {
 					"$ref": "#/$defs/capability",
 					"description": "The one abstract execution requirement joined to provider supply by the GF controller. One action resolves once and therefore cannot select mutually exclusive architectures."
+				},
+				"result": {
+					"$ref": "#/$defs/result"
 				}
-			}
+			},
+			"allOf": [
+				{
+					"if": {
+						"properties": {
+							"result": {
+								"properties": { "mode": { "const": "export-regular-files" } },
+								"required": ["mode"]
+							}
+						}
+					},
+					"then": {
+						"properties": {
+							"targets": {
+								"items": {
+									"allOf": [
+										{ "pattern": "^//[^:]*:[^:]+$" },
+										{ "not": { "pattern": "^//(?:[^/:]*/)*\\.\\.\\.(?:/|:)" } },
+										{ "not": { "pattern": "^//[^:]*:(?:\\*|all|all-targets)$" } }
+									]
+								}
+							}
+						}
+					}
+				}
+			]
 		}
 	}
 }

@@ -9,9 +9,10 @@
     "authorities.artifact_registry; site.scaffold gained a gitops_receiver",
     "prohibition). Nothing compared them.",
     "",
-    "The v2 copy arrived the same way and is currently byte-identical to its",
-    "source. This file exists so that stays a checkable fact rather than a",
-    "coincidence -- it is the cheapest moment a drift gate will ever be added.",
+    "The v2 copy arrived the same way and was byte-identical at the v4.0.0",
+    "source revision. The current scaffold source removes provider and binding",
+    "state from that manifest; this release records the resulting drift without",
+    "silently changing the manifest contract alongside ActionPlan schema 3.",
     "",
     "SCOPE IS THE WHOLE DIRECTORY, deliberately. The first draft of this record",
     "covered the two manifest schemas only, and `just",
@@ -42,29 +43,29 @@
     "stay separate, advisory, non-blocking questions."
   ],
   "source_repository": "tinyland-inc/site.scaffold",
-  "source_revision": "7be3a545f530d003e734dd8e6f1fd5b8481244e1",
-  "source_revision_note": "Exact held site.scaffold TIN-2130 v4 source commit. This provenance records source identity only; it does not authorize the ci-templates v4 release or site adoption.",
+  "source_revision": "0a46c06b3415ba0b9dc4e8ff98173a6087d0ba68",
+  "source_revision_note": "Exact signed site.scaffold #163 ActionPlan/v4 schema-3 source commit. This provenance records source identity only; it does not authorize a ci-templates release, site adoption, provider rollout, or runtime proof.",
   "files": [
     {
       "vendored": "schemas/tinyland-repo-manifest.v2.schema.json",
       "source": "docs/schemas/tinyland-repo-manifest.v2.schema.json",
       "sha256": "0514f01d7507419528f998d64d48804e8d2237c8f9314b89fea475596a7fd9fc",
-      "upstream_sha256": "0514f01d7507419528f998d64d48804e8d2237c8f9314b89fea475596a7fd9fc",
-      "state": "identical"
+      "upstream_sha256": "c2d8da758e85145677779222e26076803a41a3420024a9c5d7a94c1c051d5b89",
+      "state": "drifted",
+      "state_note": "Known divergence, reported not reconciled. Current site.scaffold v4 removes provider selection and binding-state fields from the consumer manifest; changing the released manifest validator is a separate migration from the ActionPlan schema-3 co-move."
     },
     {
       "vendored": "schemas/tinyland-repo-manifest.schema.json",
       "source": "docs/schemas/tinyland-repo-manifest.schema.json",
       "sha256": "e6c5d25bdf26ea4f6392151a96724b910100cc90f4d60118be0d6a14b5f115c9",
-      "upstream_sha256": "3b7b403632b03f219efea30de512219be8b7871fe3e7d436c3e9ce6b4c22046e",
-      "state": "drifted",
-      "state_note": "Known divergence, reported not reconciled. ci-templates alone defines authorities.artifact_registry; site.scaffold alone forbids authorities.gitops_receiver on a static spoke. De-forking v1 changes what live consumers are validated against and is its own change."
+      "state": "unsourced",
+      "state_note": "The legacy v1 source was deleted from site.scaffold before this source revision. The vendored copy remains only for existing manifest routing; retiring it is a separate compatibility decision."
     },
     {
       "vendored": "schemas/lanes.schema.json",
       "source": "docs/schemas/lanes.schema.json",
-      "sha256": "f94e5d34508d4c79fc32123a876566322dd4730b38f170c289b0b8643a252fa3",
-      "upstream_sha256": "f94e5d34508d4c79fc32123a876566322dd4730b38f170c289b0b8643a252fa3",
+      "sha256": "4fef58645b8cd367a4336a66eaee629388c8a949a06d85becc97cfc1be82e3b8",
+      "upstream_sha256": "4fef58645b8cd367a4336a66eaee629388c8a949a06d85becc97cfc1be82e3b8",
       "state": "identical"
     },
     {
