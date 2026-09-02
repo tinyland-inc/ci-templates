@@ -32,9 +32,10 @@ by the consumer overlay, so do not generate or rewrite it during CI:
 ```
 
 One workflow invocation selects exactly one declared action. The workflow
-checks out the exact admitted source SHA and invokes the image-custodied
-`/usr/local/bin/gf-action-client` once. The compiled client owns OIDC,
-resolution, and fail-closed REAPI dispatch.
+checks out the exact admitted source SHA and requires
+`/usr/local/bin/gf-action-client` at the provider-custodied image path. It
+invokes that client once; the compiled client owns OIDC, resolution, and
+fail-closed REAPI dispatch.
 
 ## Consumer and provider ownership
 

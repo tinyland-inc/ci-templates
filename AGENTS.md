@@ -72,9 +72,10 @@ surface: it becomes admissible only with its own worker, route, client support,
 and canary. The plan never names a runner, execution pool, resolved platform,
 endpoint, credential, upload posture, or provider concurrency.
 
-`spoke-ci-v4.yml` accepts one checked-in action name per invocation, then invokes
-the image-custodied compiled client against the source identity admitted by the
-owner overlay. For a same-repository `pull_request`, that is exactly
+`spoke-ci-v4.yml` accepts one checked-in action name per invocation, then
+requires the compiled client at its provider-custodied image path and invokes
+it against the source identity admitted by the owner overlay. For a
+same-repository `pull_request`, that is exactly
 `github.event.pull_request.head.sha`; for `push`, it is `github.sha`. The
 workflow admits no other event shape and never substitutes GitHub's synthetic
 pull-request merge commit for the overlay-bound head:
@@ -86,11 +87,11 @@ pull-request merge commit for the overlay-bound head:
 The Go client owns OIDC, owner-installation binding, cache/executor resolution,
 and REAPI dispatch. Workflow source must not reimplement that lifecycle in
 Bash, Python, composite actions, proxy setup, or fallback branches. Consumer
-overlay declarations own demand; provider internals resolve supply. This is
-The immutable tag publishes workflow source only. Adoption and runtime proof do
-not exist merely because the carrier is present: the consumer-owned signed
-overlay, verified provider supply, current binding catalog, image-custodied
-client, and an attributed REAPI action must all succeed independently.
+overlay declarations own demand; provider internals resolve supply. The
+immutable tag publishes workflow source only. Adoption and runtime proof do not
+exist merely because the carrier is present: the consumer-owned signed overlay,
+verified provider supply, current binding catalog, a provider image carrying
+the client, and an attributed REAPI action must all succeed independently.
 
 ## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
 
