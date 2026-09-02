@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [5.0.0] — 2026-09-02
+
 ### Changed
 
 - **TIN-2130/TIN-4249 ActionPlan/v4 schema 3 (targets ci-templates v5.0.0).**
