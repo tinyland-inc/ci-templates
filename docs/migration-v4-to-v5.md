@@ -1,7 +1,8 @@
 # Migrate ActionPlan/v4 schema 2 to schema 3
 
-ci-templates `v5.0.0` is a SemVer-major release because it carries the
-incompatible third schema of the GloriousFlywheel `ActionPlan/v4` interface.
+ci-templates `v5.1.0` is the portable carrier of schema 3, first introduced in
+`v5.0.0`. Schema 3 is an incompatible revision of the GloriousFlywheel
+`ActionPlan/v4` interface.
 The reusable workflow remains the thin `spoke-ci-v4.yml` dispatcher; the
 product interface did not become ActionPlan/v5.
 
@@ -50,22 +51,27 @@ or cache-only path as compensation.
 ## Move the authority graph atomically
 
 1. Validate the raw schema-3 plan against `schemas/lanes.schema.json`.
-2. Recompute the exact plan digest in the consumer-owned signed
-   `OwnerInstallation/v1` and `TenantOverlay/v1`; never add the consumer to GF
-   core or ci-templates.
+2. Publish a new immutable consumer-owned overlay revision if organization
+   policy changed. `OwnerInstallation/v1` and `TenantOverlay/v1` authorize the
+   organization, workflow/ref/event classes, and capability policy; they never
+   enumerate repositories or ActionPlan digests.
 3. Pin the caller to
-   `tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.0.0` only
-   after the immutable release exists.
-4. Require a current controller catalog and admitted provider supply, plus a
-   provider image carrying the schema-3 `gf-action-client`.
+   `tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.1.0` only
+   after the immutable release exists, and provision the `gf-v4-dispatch`
+   runner edge in that organization's runner group.
+4. Require a current `ResolvedOwnerSupplyCatalog/v1`, admitted provider supply,
+   and a provider image carrying the schema-3 `gf-action-client`. The client
+   binds the exact repository, source SHA, workflow, event, ref, and ActionPlan
+   at invocation time.
 5. Prove a remote miss with nonzero WorkerLeaf execution and an exact
    `ActionOutputSet/v1` when export was requested. Repeat the identical action
    and prove an ActionCache hit with no execution lease.
 6. Delete the schema-2 caller and superseded v3 attachment in the same adoption
    pass. Do not leave either as fallback doctrine.
 
-An absent App installation, signed overlay, catalog, client, route, worker,
-CAS object, or output set is a hard failure. The ci-templates tag proves
+An absent organization App installation, signed overlay, catalog, dynamic
+binding, client, route, worker, CAS object, or output set is a hard failure.
+The ci-templates tag proves
 immutable workflow source only; it does not prove enrollment, provider
 convergence, execution, cache effectiveness, result carriage, or production
 serving.

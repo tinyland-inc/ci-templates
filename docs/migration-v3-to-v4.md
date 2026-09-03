@@ -1,9 +1,8 @@
 # Migrate from v3 CI profiles to the v4 action fabric
 
-> Historical first step: `v4.0.0` carries ActionPlan/v4 schema 2. Current
-> consumers must continue through
-> [`migration-v4-to-v5.md`](./migration-v4-to-v5.md) to schema 3; schema 2 is
-> not a fallback after that cutover.
+> Historical first step: `v4.0.0` carried ActionPlan/v4 schema 2. The current
+> target is schema 3 through `spoke-ci-v4.yml@v5.1.0` or newer; schema 2 is not
+> a fallback.
 
 `v4.0.0` is a breaking interface. V4 schedules Bazel actions through the
 GloriousFlywheel REAPI fabric; it does not expose runners, endpoints, cache
@@ -15,7 +14,7 @@ The immutable workflow pin is:
 ```yaml
 jobs:
   unit-tests:
-    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v4.0.0
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.1.0
     with:
       action_name: unit-tests
 ```
@@ -25,12 +24,13 @@ by the consumer overlay, so do not generate or rewrite it during CI:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "actions": {
     "unit-tests": {
       "command": "test",
       "targets": ["//tests/..."],
-      "capability": "rbe-linux-x86_64"
+      "capability": "rbe-linux-x86_64",
+      "result": { "mode": "status-only" }
     }
   }
 }
@@ -44,10 +44,12 @@ fail-closed REAPI dispatch.
 
 ## Consumer and provider ownership
 
-The adopting organization's `-infra` repository owns signed
-`OwnerInstallation/v1` and `TenantOverlay/v1` instances. They bind immutable
-owner/repository identities, exact action-plan digests, admitted OIDC subjects,
-abstract capability demand, concurrency demand, and write policy.
+The adopting organization's `-infra` repository owns immutable signed
+`OwnerInstallation/v1` and `TenantOverlay/v1` revisions. They bind organization
+identity, App installation, admitted workflow/ref/event classes, abstract
+capability policy, concurrency policy, and write policy. They do not enumerate
+repositories or ActionPlan digests; the client creates that exact binding from
+the invocation and OIDC identity.
 
 GF core owns the types, verifier, client, resolver, and scheduler. The substrate
 provider owns concrete endpoints, worker supply, images, storage, and placement.
@@ -56,20 +58,22 @@ names a runner label, node, cluster, storage class, provider endpoint, or image.
 
 ## Fail-closed migration order
 
-1. Pin `spoke-ci-v4.yml@v4.0.0` and check in the finite action plan.
-2. Publish the consumer-owned signed overlay at an immutable digest through the
+1. Install the organization's all-repositories GF GitHub App and provision its
+   own thin `gf-v4-dispatch` edge.
+2. Pin `spoke-ci-v4.yml@v5.1.0` and check in the finite schema-3 action plan.
+3. Publish the consumer-owned signed overlay at an immutable digest through the
    canonical overlay publisher.
-3. Require the independent controller/verifier to join that demand with signed
-   provider supply and publish a current immutable binding catalog.
-4. Converge the provider-owned runner image and action-resolution route.
-5. Prove one remote cache miss with nonzero remote execution, then repeat the
+4. Require the independent controller/verifier to join organization policy with
+   signed provider supply and publish a current immutable owner-supply catalog.
+5. Converge the provider-owned client image and action-resolution route.
+6. Prove one remote cache miss with nonzero remote execution, then repeat the
    same action and prove a same-authority ActionCache hit. Attribute both to the
    consumer in the measurement plane.
-6. Delete the superseded v3 workflow, profile, wrapper, cache-proof, ARC, Docker,
+7. Delete the superseded v3 workflow, profile, wrapper, cache-proof, ARC, Docker,
    and DinD surfaces only after the canary succeeds.
 
-An absent App installation, overlay, catalog, input capsule, client, route, or
-worker is a hard failure. Do not add a hosted runner, local Bazel, cache-only,
+An absent App installation, overlay, catalog, dynamic binding, client, route,
+or worker is a hard failure. Do not add a hosted runner, local Bazel, cache-only,
 direct endpoint, v3 registry, bespoke wrapper, Docker, or DinD fallback.
 
 The v4 tag proves immutable workflow source. It does **not** prove enrollment,
