@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [5.1.0] — 2026-09-03
+
 ### Changed
 
 - **TIN-4246 portable v4 dispatch edge.** Route `spoke-ci-v4.yml` through the
