@@ -11,12 +11,13 @@
 # tfvars.
 #
 # Why a separate copy and not an import: ci-templates ships to ~160 spoke repos
-# and runs on bare hosted runners (no GloriousFlywheel checkout, no Python +
-# PyYAML). Ruby's stdlib YAML is always present, so the guard is dependency-free
-# everywhere it runs.
+# without a GloriousFlywheel checkout or Python + PyYAML. Ruby's stdlib YAML is
+# sufficient, so the guard remains dependency-free everywhere it runs.
 module RunnerLabelTaxonomy
-  # The six tinyland base shared capability labels.
+  # The portable v4 dispatch edge plus the six historical Tinyland capability
+  # labels. The dispatch edge is org-local and thin; it is never compute supply.
   SHARED_CAPABILITY_LABELS = %w[
+    gf-v4-dispatch
     tinyland-docker
     tinyland-dind
     tinyland-nix

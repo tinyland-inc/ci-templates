@@ -12,6 +12,7 @@
 # Keep this list in sync with RunnerLabelTaxonomy::SHARED_CAPABILITY_LABELS.
 self-hosted-runner:
   labels:
+    - gf-v4-dispatch
     - tinyland-docker
     - tinyland-dind
     - tinyland-nix

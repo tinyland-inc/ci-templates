@@ -18,7 +18,10 @@ permissions:
 jobs:
   action-fabric:
     if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: tinyland-nix
+    # Every adopting organization provisions this thin dispatch edge in its
+    # own runner group. The edge submits one named action; it is not the
+    # execution pool or a Tinyland-owned provider route.
+    runs-on: gf-v4-dispatch
     timeout-minutes: 45
     env:
       SOURCE_SHA: '${{ fromJSON(format(''{{"pull_request":"{0}","push":"{1}"}}'', github.event.pull_request.head.sha, github.sha))[github.event_name] }}'

@@ -5,6 +5,20 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **TIN-4246 portable v4 dispatch edge.** Route `spoke-ci-v4.yml` through the
+  adopting organization's `gf-v4-dispatch` edge instead of a Tinyland provider
+  label. The thin edge invokes the compiled client; REAPI schedules actions.
+  Consumer repositories still name neither runner supply nor provider detail.
+
+### Removed
+
+- Retire the active v3 cache/profile enrollment instructions. V4 adoption is an
+  organization-owned App and overlay plus a checked-in ActionPlan and immutable
+  workflow call; missing authority fails closed and has no cache-only or local
+  compatibility path.
+
 ## [5.0.0] — 2026-09-02
 
 ### Changed

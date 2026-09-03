@@ -511,6 +511,7 @@ def self_test
   opts = { self_hosted_array_mixed: :fail, scale_set_names: [] }
   oracle = [
     # value (YAML node), expected verdict, label
+    ["gf-v4-dispatch", :pass, "portable org-local v4 dispatch edge"],
     ["tinyland-nix", :pass, "shared base label"],
     ["tinyland-dind", :pass, "shared base label"],
     ["tinyland-docker", :pass, "shared base label"],

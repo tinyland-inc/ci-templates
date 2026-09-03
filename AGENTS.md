@@ -62,130 +62,34 @@ runner label survives on a schedulable surface, including canonical consumer
 lanes data (`no-hosted-runners-check`, TIN-3914), and runs the gitleaks
 working-tree scan.
 
-## V4 action-fabric release (TIN-2130, TIN-4249)
+## V4 action-fabric release (TIN-2130, TIN-4246, TIN-4249)
 
-The product interface remains `ActionPlan/v4`; ci-templates `v5.0.0` is the
-first carrier of its incompatible schema 3. The historical `v4.0.0` release
-carries schema 2 and must not be used as a compatibility fallback. A schema-3
-`.github/lanes.json` declares named Bazel `build` or `test` actions, finite
-workspace labels, one abstract REAPI capability demand
-(`rbe-linux-x86_64` or `rbe-darwin-aarch64`), and one closed result disposition
-per action. `status-only` exports no files; `export-regular-files` names 1--8
-Bazel output groups and requires exact target labels. The plan never names a
-runner, execution pool, resolved platform, endpoint, credential, upload
-posture, provider concurrency, or consumer registration.
+The only adoption target is ActionPlan/v4 schema 3 through
+`spoke-ci-v4.yml@v5.1.0` or newer. An organization installs its own all-repos GF
+GitHub App and operates its own owner controller, resolver, and thin
+`gf-v4-dispatch` edge. Each application repository contributes only a finite
+`.github/lanes.json` and an immutable workflow call. GF and ci-templates never
+hold consumer rows, repository enrollment, provider endpoints, or overlay
+instances.
 
-Both capability values are provider-blind demand, not claims of live supply.
-Resolution fails closed when the current signed provider catalog cannot
-satisfy a declared capability; consumer schema must not hide absent supply.
-
-`spoke-ci-v4.yml` accepts one checked-in action name per invocation, then
-requires the compiled client at its provider-custodied image path and invokes
-it against the source identity admitted by the owner overlay. For a
-same-repository `pull_request`, that is exactly
-`github.event.pull_request.head.sha`; for `push`, it is `github.sha`. The
-workflow admits no other event shape and never substitutes GitHub's synthetic
-pull-request merge commit for the overlay-bound head:
+The workflow checks out the exact admitted source SHA and invokes one compiled
+client command:
 
 ```text
 /usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>
 ```
 
-The Go client owns OIDC, owner-installation binding, cache/executor resolution,
-REAPI dispatch, and exact `ActionOutputSet/v1` result carriage. Workflow source
-must not reimplement that lifecycle in Bash, Python, composite actions, proxy
-setup, or fallback branches. Consumer overlay declarations own demand;
-provider internals resolve supply. The immutable tag publishes workflow source
-only. Adoption and runtime proof do not exist merely because the carrier is
-present: the consumer-owned signed overlay, verified provider supply, current
-binding catalog, a provider image carrying the schema-3 client, an attributed
-REAPI action, and (when requested) an exact output set must all succeed
-independently.
+The Go client owns OIDC, invocation-time binding, REAPI dispatch, cache reuse,
+and `ActionOutputSet/v1` carriage. Bazel actions—not GitHub jobs or ARC pods—are
+the compute and scheduling unit. The `gf-v4-dispatch` runner is an org-local
+teletype into that fabric, not provider supply.
 
-## Bazel cache enrollment (cache-first, TIN-1997 Option D / TIN-2110)
-
-The `js-bazel-package.yml` workflow has an **opt-in, default-off** cache-backed
-Bazel validation lane. It is the canonical template for fanning shared-cache
-enrollment out to spokes.
-
-- **Doctrine: cache-first only.** This lane reads/writes the shared Bazel cache.
-  It does NOT wire a remote executor / REAPI. Remote execution is out of scope;
-  the `flywheel-bazel` composite + `flywheel-reapi-proof` cover executor lanes
-  separately.
-- **Enroll** by setting `cache_backed: true` on the `js-bazel-package.yml`
-  consumer call. When unset, the existing plain
-  `bazelisk build … --verbose_failures` path runs byte-identically.
-- **Endpoints are never baked.** `bazelrc/ci-cached.bazelrc` defines endpoint-free
-  `:ci-cached` behavior; the workflow injects `--remote_cache=$BAZEL_REMOTE_CACHE`
-  after the fail-closed `scripts/cache-attachment-contract.sh --strict` gate.
-  On self-hosted Tinyland cluster runners, `nix-setup` exports
-  `BAZEL_REMOTE_CACHE` from cluster DNS — no new secret or infra required.
-- **Do NOT** create per-repo runners, bespoke cache instances, localhost/
-  port-forward endpoints baked into config, or static long-lived cache secrets.
-  Route everything through this shared surface + the GloriousFlywheel substrate.
-- **Real attach, not nominal.** Enrollment counts only when the build log shows
-  remote cache hit/transfer lines. A green build on a `tinyland-nix` runner with
-  only `--disk_cache` is NOT enrollment and must be reported as such.
-- **Self-verify** locally with `scripts/cache-attachment-contract.sh --strict`
-  (classifies `compatibility-local-only` / `shared-cache-backed` /
-  `executor-backed`; rejects unexpanded `${…}` placeholders, non-`grpc`/`http`
-  endpoints, and localhost without `GF_BAZEL_ALLOW_LOCALHOST_PROOF=true`).
-
-See `docs/js-bazel-package.md` (`cache_backed`) for the consumer-facing details.
-
-## Lace-up: the one copyable enrollment pattern (TIN-2109)
-
-A consumer enrolls in deterministic, fail-closed shared-cache validation by
-copying ONE pattern. Two edits, then a green build only happens when the
-substrate actually attaches on a shared cluster runner.
-
-**1. Declare the enrollment dimensions as first-class manifest fields** in
-`tinyland.repo.json`. `enrollment.substrateMode` is the AUTHORITATIVE expected
-mode the gate enforces (additive + optional; existing manifests still validate):
-
-```json
-"enrollment": {
-  "forgeScope": "Jesssullivan",
-  "operatorOverlay": "jesssullivan-infra",
-  "substrateMode": "shared-cache-backed"
-}
-```
-
-**2. Opt into the cache-backed lane** on the `js-bazel-package.yml` consumer
-call (runner_mode must resolve to an org capability-class runner — never
-`ubuntu-latest`, never a known repo-label fossil such as `dollhouse-farm-nix`):
-
-```yaml
-jobs:
-  package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@v2.5.1
-    with:
-      runner_mode: repo_owned
-      runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
-      cache_backed: true            # opt-in; default off (non-opted consumers unchanged)
-      bazel_targets: "//:typecheck //:pkg //:test"
-```
-
-What you get, deterministically:
-
-- the gate validates `tinyland.repo.json` against the schema and **fails closed**
-  on an invalid manifest;
-- the gate reads `enrollment.substrateMode` and feeds it to
-  `cache-attachment-contract.sh --strict` as the expected mode. Declared
-  `shared-cache-backed` + no cache attached ⇒ **declared-vs-actual mismatch,
-  fail closed** (no silent local-only build);
-- a hosted (`ubuntu-*`), bare `self-hosted`, or known repo-label fossil is
-  **rejected** — a missing substrate is a deterministic failure, never a degrade
-  to a GitHub-hosted build;
-- the fetch fallback for the contract script is pinned to the immutable releasing
-  tag (`v2.5.1`), so a pure-consumer spoke gets a reproducible fetch.
-
-**Executor-backed is defined but not selected.** If a repo ever declares
-`enrollment.substrateMode: executor-backed`, the SAME gate requires the full
-executor contract (remote executor endpoint + `BAZEL_REMOTE_CACHE` + cluster
-runner class + `GF_BAZEL_REAPI_PROOF_IMAGE_DIGEST`) and fails closed if any piece
-is missing. No current repo selects it (cache-first / TIN-1997 Option D); the
-contract exists so the gate is enforceable the moment a repo declares it.
+Missing App, overlay revision, owner-supply catalog, dynamic binding, OIDC,
+client, REAPI authority, or result is a hard product failure. There is no v4
+fallback to a v3 profile or registry, cache-only attachment, local build,
+hosted runner, direct endpoint, environment profile, or warning-success path.
+Historical cache/profile workflows remain retirement inventory; they are not
+an adoption guide and must disappear from a consumer's v4 cutover.
 
 ## Releasing
 

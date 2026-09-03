@@ -152,8 +152,6 @@ CURRENT_RELEASE_LINE = "v3"
 # description-only (`nix-setup`), which is why they are sequenced separately
 # from spoke-ci, where the delta is the gitleaks fix above.
 STALE_INTERNAL_REF_FILES = {
-    ".github/workflows/js-bazel-package.yml": "TIN-3914",
-    ".github/workflows/spoke-deploy-cloudflare-pages.yml": "TIN-3914",
 }
 
 
@@ -570,7 +568,7 @@ def check_cache_backed_optin_contract() -> int:
         '"npx --yes @bazel/bazelisk build ${targets_quoted}--verbose_failures"',
         # TIN-2109: manifest validation in the cache-backed lane (fail-closed)
         "Validate repo manifest (cache-backed lane)",
-        "repo-manifest-validate@v2",
+        "repo-manifest-validate@v3",
         # TIN-2109: expected mode is manifest-driven (enrollment.substrateMode)
         ".enrollment.substrateMode",
         "GF_BAZEL_SUBSTRATE_MODE=",
