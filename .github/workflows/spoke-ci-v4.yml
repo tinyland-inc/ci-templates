@@ -43,4 +43,5 @@ jobs:
           /usr/local/bin/gf-action-client run \
             --plan .github/lanes.json \
             --action "$ACTION_NAME" \
-            --source-sha "$SOURCE_SHA"
+            --source-sha "$SOURCE_SHA" \
+            --result-dir "$RUNNER_TEMP/gf-action-result-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ACTION_NAME}"

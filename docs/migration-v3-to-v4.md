@@ -1,8 +1,8 @@
 # Migrate from v3 CI profiles to the v4 action fabric
 
 > Historical first step: `v4.0.0` carried ActionPlan/v4 schema 2. The current
-> target is schema 3 through `spoke-ci-v4.yml@v5.1.0` or newer; schema 2 is not
-> a fallback.
+> target is schema 3 through `spoke-ci-v4.yml@v5.1.1` or newer after that
+> attended immutable release exists; schema 2 is not a fallback.
 
 `v4.0.0` is a breaking interface. V4 schedules Bazel actions through the
 GloriousFlywheel REAPI fabric; it does not expose runners, endpoints, cache
@@ -14,7 +14,7 @@ The immutable workflow pin is:
 ```yaml
 jobs:
   unit-tests:
-    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.1.0
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.1.1
     with:
       action_name: unit-tests
 ```
@@ -40,7 +40,11 @@ One workflow invocation selects exactly one declared action. The workflow
 checks out the exact admitted source SHA and requires
 `/usr/local/bin/gf-action-client` at the provider-custodied image path. It
 invokes that client once; the compiled client owns OIDC, resolution, and
-fail-closed REAPI dispatch.
+fail-closed REAPI dispatch. The workflow always passes one new result directory
+beneath `RUNNER_TEMP`, keyed by run, attempt, and action name. The ActionPlan is
+the sole result-disposition authority: the workflow neither interprets nor
+uploads that directory, and its files do not convey GF-I09 publication
+authority.
 
 ## Consumer and provider ownership
 
@@ -60,16 +64,20 @@ names a runner label, node, cluster, storage class, provider endpoint, or image.
 
 1. Install the organization's all-repositories GF GitHub App and provision its
    own thin `gf-v4-dispatch` edge.
-2. Pin `spoke-ci-v4.yml@v5.1.0` and check in the finite schema-3 action plan.
+2. Check in the finite schema-3 action plan.
 3. Publish the consumer-owned signed overlay at an immutable digest through the
    canonical overlay publisher.
 4. Require the independent controller/verifier to join organization policy with
    signed provider supply and publish a current immutable owner-supply catalog.
-5. Converge the provider-owned client image and action-resolution route.
-6. Prove one remote cache miss with nonzero remote execution, then repeat the
+5. Converge the provider-owned client image and action-resolution route. The
+   image must accept the workflow's `--result-dir` contract before the caller
+   pin moves.
+6. After the attended immutable release exists, pin
+   `spoke-ci-v4.yml@v5.1.1`; do not move or reuse `v5.1.0`.
+7. Prove one remote cache miss with nonzero remote execution, then repeat the
    same action and prove a same-authority ActionCache hit. Attribute both to the
    consumer in the measurement plane.
-7. Delete the superseded v3 workflow, profile, wrapper, cache-proof, ARC, Docker,
+8. Delete the superseded v3 workflow, profile, wrapper, cache-proof, ARC, Docker,
    and DinD surfaces only after the canary succeeds.
 
 An absent App installation, overlay, catalog, dynamic binding, client, route,

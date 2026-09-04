@@ -64,18 +64,27 @@ identity rather than GitHub's synthetic merge commit. For `push`, it is
 `github.sha`. Other event shapes do not enter the action-fabric job:
 
 ```text
-/usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>
+/usr/local/bin/gf-action-client run \
+  --plan .github/lanes.json \
+  --action "$ACTION_NAME" \
+  --source-sha "$SOURCE_SHA" \
+  --result-dir "$RUNNER_TEMP/gf-action-result-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ACTION_NAME}"
 ```
 
 The Go client owns OIDC, owner-installation binding, cache/executor resolution,
-REAPI action dispatch, and exact `ActionOutputSet/v1` result carriage. The
-reusable workflow does not reproduce those lifecycles in Bash, Python, proxy
-composites, OCI helpers, or fallback paths. Schema-3 consumers pin the immutable
-`@v5.0.0` release after that tag exists. The tag publishes this workflow
-contract; it does not by itself prove consumer adoption, provider convergence,
-runtime execution, or an output set. Those remain fail-closed until the signed
-consumer overlay, verified provider supply, current binding catalog, and
-provider image carrying the schema-3 client are all present.
+REAPI action dispatch, and result interpretation. The reusable workflow always
+supplies one new job-unique directory beneath `RUNNER_TEMP`; the checked-in
+ActionPlan remains the sole result-disposition authority, and the workflow does
+not parse or upload the directory. It does not reproduce client lifecycles in
+Bash, Python, proxy composites, OCI helpers, or fallback paths. The fixed files
+are a structural handoff and do not convey GF-I09 publication authority.
+Consumers needing this caller contract pin the immutable `@v5.1.1` release only
+after that attended release exists and the provider image accepts
+`--result-dir`; `v5.1.0` is never moved or reused. The tag publishes this
+workflow contract; it does not by itself prove consumer adoption, provider
+convergence, runtime execution, qualification, or publication. Those remain
+fail-closed until the signed consumer overlay, verified provider supply,
+current binding catalog, and matching provider image are all present.
 
 Existing schema-2 callers must follow
 [`docs/migration-v4-to-v5.md`](./docs/migration-v4-to-v5.md). V3 callers start

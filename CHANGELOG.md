@@ -5,6 +5,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **TIN-4257 qualified-result caller contract.** Pass every `spoke-ci-v4.yml`
+  invocation one new job-unique result directory beneath `RUNNER_TEMP`. The
+  checked-in ActionPlan remains the sole result-disposition authority; the
+  workflow does not parse, upload, publish, or fall back from the
+  image-custodied client's result.
+
 ## [5.1.0] — 2026-09-03
 
 ### Changed
