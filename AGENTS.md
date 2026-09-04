@@ -26,9 +26,14 @@ a fleet-wide change.
 2. **Default-off, opt-in changes only.** A new behavior added to a shared
    workflow MUST be gated behind a new input that defaults to the pre-existing
    behavior. Non-opted consumers must be byte-identical. Prove it by diffing the
-   default execution path. The single standing exception is rule 3: a
-   prohibition cannot ship with an opt-out, so TIN-3914 changed default routing
-   for every consumer and took a MAJOR bump instead of a gate.
+   default execution path. There are two standing exceptions. Rule 3 is a
+   prohibition and cannot ship with an opt-out, so TIN-3914 changed default
+   routing for every consumer and took a MAJOR bump instead of a gate. TIN-4257
+   repairs the already-declared schema-3 export contract by always passing the
+   image-custodied client a fresh result directory: a workflow input would
+   become a second result-disposition authority beside the ActionPlan. That
+   caller repair ships only in a new immutable patch after the provider image
+   accepts the flag; it never moves an existing exact tag.
 3. **No GitHub-hosted runners, ever.** Operator ruling, 2026-08-19: the estate
    runs ONLY on GF cache-fronted self-hosted runners. Every `runs-on` names an
    org capability class. Three gates, deliberately reading different things:
@@ -76,7 +81,11 @@ The workflow checks out the exact admitted source SHA and invokes one compiled
 client command:
 
 ```text
-/usr/local/bin/gf-action-client run --plan .github/lanes.json --action <name> --source-sha <sha>
+/usr/local/bin/gf-action-client run \
+  --plan .github/lanes.json \
+  --action "$ACTION_NAME" \
+  --source-sha "$SOURCE_SHA" \
+  --result-dir "$RUNNER_TEMP/gf-action-result-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ACTION_NAME}"
 ```
 
 The Go client owns OIDC, invocation-time binding, REAPI dispatch, cache reuse,

@@ -1,7 +1,9 @@
 # Migrate ActionPlan/v4 schema 2 to schema 3
 
-ci-templates `v5.1.0` is the portable carrier of schema 3, first introduced in
-`v5.0.0`. Schema 3 is an incompatible revision of the GloriousFlywheel
+ci-templates `v5.1.0` is the current portable carrier of schema 3, first
+introduced in `v5.0.0`. The later attended `v5.1.1` release will carry the
+qualified-result caller repair described below; it must exist before consumers
+pin it. Schema 3 is an incompatible revision of the GloriousFlywheel
 `ActionPlan/v4` interface.
 The reusable workflow remains the thin `spoke-ci-v4.yml` dispatcher; the
 product interface did not become ActionPlan/v5.
@@ -43,6 +45,12 @@ labels whose selected output groups contain regular files; wildcard and
 recursive target patterns are rejected. Directories, trees, symlinks, and
 special files are not silently flattened or omitted.
 
+Beginning with `v5.1.1`, the workflow passes every invocation one new result
+directory beneath `RUNNER_TEMP`, keyed by run, attempt, and action name. The
+ActionPlan remains the sole result-disposition authority. The workflow does not
+parse or upload the directory, and its fixed files do not convey GF-I09
+publication authority.
+
 `rbe-linux-x86_64` and `rbe-darwin-aarch64` express demand only. The signed
 provider catalog must supply the chosen capability or resolution fails closed.
 Do not add a runner label, local execution, hosted CI, another architecture,
@@ -55,14 +63,15 @@ or cache-only path as compensation.
    policy changed. `OwnerInstallation/v1` and `TenantOverlay/v1` authorize the
    organization, workflow/ref/event classes, and capability policy; they never
    enumerate repositories or ActionPlan digests.
-3. Pin the caller to
-   `tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.1.0` only
-   after the immutable release exists, and provision the `gf-v4-dispatch`
-   runner edge in that organization's runner group.
-4. Require a current `ResolvedOwnerSupplyCatalog/v1`, admitted provider supply,
-   and a provider image carrying the schema-3 `gf-action-client`. The client
-   binds the exact repository, source SHA, workflow, event, ref, and ActionPlan
-   at invocation time.
+3. Provision the `gf-v4-dispatch` runner edge in that organization's runner
+   group and require a current `ResolvedOwnerSupplyCatalog/v1`, admitted
+   provider supply, and a provider image carrying the schema-3
+   `gf-action-client`. The image must accept `--result-dir` before the caller
+   pin moves. The client binds the exact repository, source SHA, workflow,
+   event, ref, and ActionPlan at invocation time.
+4. After the attended immutable release exists, pin the caller to
+   `tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.1.1`; do not
+   move or reuse `v5.1.0`.
 5. Prove a remote miss with nonzero WorkerLeaf execution and an exact
    `ActionOutputSet/v1` when export was requested. Repeat the identical action
    and prove an ActionCache hit with no execution lease.

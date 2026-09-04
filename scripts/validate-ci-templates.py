@@ -183,6 +183,10 @@ def check_v4_action_client_surface() -> bool:
         "--plan .github/lanes.json": "canonical action plan",
         '--action "$ACTION_NAME"': "one named action per invocation",
         '--source-sha "$SOURCE_SHA"': "source identity passed to the client",
+        (
+            '--result-dir "$RUNNER_TEMP/gf-action-result-'
+            '${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ACTION_NAME}"'
+        ): "job-unique qualified result directory",
     }
     for snippet, claim in required.items():
         if snippet not in document:
