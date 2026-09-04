@@ -78,9 +78,9 @@ ActionPlan remains the sole result-disposition authority, and the workflow does
 not parse or upload the directory. It does not reproduce client lifecycles in
 Bash, Python, proxy composites, OCI helpers, or fallback paths. The fixed files
 are a structural handoff and do not convey GF-I09 publication authority.
-Consumers needing this caller contract pin the immutable `@v5.1.1` release only
-after that attended release exists and the provider image accepts
-`--result-dir`; `v5.1.0` is never moved or reused. The tag publishes this
+Consumers needing this caller contract pin the immutable `@v5.1.1` release
+after the provider image accepts `--result-dir`; `v5.1.0` is never moved or
+reused. The tag publishes this
 workflow contract; it does not by itself prove consumer adoption, provider
 convergence, runtime execution, qualification, or publication. Those remain
 fail-closed until the signed consumer overlay, verified provider supply,

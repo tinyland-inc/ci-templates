@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [5.1.1] — 2026-09-04
+
 ### Changed
 
 - **TIN-4257 qualified-result caller contract.** Pass every `spoke-ci-v4.yml`

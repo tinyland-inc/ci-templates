@@ -1,8 +1,8 @@
 # Migrate from v3 CI profiles to the v4 action fabric
 
 > Historical first step: `v4.0.0` carried ActionPlan/v4 schema 2. The current
-> target is schema 3 through `spoke-ci-v4.yml@v5.1.1` or newer after that
-> attended immutable release exists; schema 2 is not a fallback.
+> target is schema 3 through `spoke-ci-v4.yml@v5.1.1` or newer; schema 2 is not
+> a fallback.
 
 `v4.0.0` is a breaking interface. V4 schedules Bazel actions through the
 GloriousFlywheel REAPI fabric; it does not expose runners, endpoints, cache

@@ -1,9 +1,8 @@
 # Migrate ActionPlan/v4 schema 2 to schema 3
 
-ci-templates `v5.1.0` is the current portable carrier of schema 3, first
-introduced in `v5.0.0`. The later attended `v5.1.1` release will carry the
-qualified-result caller repair described below; it must exist before consumers
-pin it. Schema 3 is an incompatible revision of the GloriousFlywheel
+ci-templates `v5.1.1` is the current portable carrier of schema 3, first
+introduced in `v5.0.0`. It carries the qualified-result caller repair described
+below. Schema 3 is an incompatible revision of the GloriousFlywheel
 `ActionPlan/v4` interface.
 The reusable workflow remains the thin `spoke-ci-v4.yml` dispatcher; the
 product interface did not become ActionPlan/v5.
