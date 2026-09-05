@@ -1,9 +1,9 @@
 # Migrate ActionPlan/v4 schema 2 to schema 3
 
-ci-templates `v5.1.0` is the current portable carrier of schema 3, first
-introduced in `v5.0.0`. The later attended `v5.1.1` release will carry the
-qualified-result caller repair described below; it must exist before consumers
-pin it. Schema 3 is an incompatible revision of the GloriousFlywheel
+ci-templates `v5.2.0` is the current portable carrier of schema 3, first
+introduced in `v5.0.0`. It carries the qualified-result caller repair described
+below and the default-off protected application publisher. Schema 3 is an
+incompatible revision of the GloriousFlywheel
 `ActionPlan/v4` interface.
 The reusable workflow remains the thin `spoke-ci-v4.yml` dispatcher; the
 product interface did not become ActionPlan/v5.
@@ -45,11 +45,47 @@ labels whose selected output groups contain regular files; wildcard and
 recursive target patterns are rejected. Directories, trees, symlinks, and
 special files are not silently flattened or omitted.
 
-Beginning with `v5.1.1`, the workflow passes every invocation one new result
+Beginning with `v5.2.0`, the workflow passes every invocation one new result
 directory beneath `RUNNER_TEMP`, keyed by run, attempt, and action name. The
 ActionPlan remains the sole result-disposition authority. The workflow does not
 parse or upload the directory, and its fixed files do not convey GF-I09
 publication authority.
+
+The same release adds `publish_application`, default `false`. When enabled, a
+protected canonical-`main` push invokes the image-custodied
+`gf-action-client publish-application` command instead of `run`; pull requests
+still execute the ordinary non-publishing action. Only the publisher job has
+`packages: write`, and its concurrency is repository-keyed with cancellation
+disabled. Publication also requires an exact `runtime_base_image_digest` and
+reviewed `materialized_root_max_files` / `materialized_root_max_bytes` values.
+The defaults intentionally refuse publication. This workflow neither produces
+nor chooses the runtime base; activation waits for its separate upstream
+authority and signed digest.
+
+The protected caller must grant the same closed permission set and keep every
+operand in reviewed source:
+
+```yaml
+jobs:
+  deployment-bundle:
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@REPLACE_WITH_V5_2_0_RELEASE_COMMIT_SHA
+    with:
+      action_name: deployment-bundle
+      publish_application: true
+      runtime_base_image_digest: <reviewed-signed-sha256-digest>
+      materialized_root_max_files: <reviewed-integer>
+      materialized_root_max_bytes: <reviewed-integer>
+```
+
+Do not replace those placeholders until the upstream runtime-base authority and
+the application's actual materialized-root bounds have durable carriers. The
+publisher call must use the exact 40-character commit behind the immutable
+release: GF-I09 binds `job_workflow_ref` into its signing identity and refuses
+a tag-shaped workflow ref.
 
 `rbe-linux-x86_64` and `rbe-darwin-aarch64` express demand only. The signed
 provider catalog must supply the chosen capability or resolution fails closed.
@@ -70,7 +106,7 @@ or cache-only path as compensation.
    pin moves. The client binds the exact repository, source SHA, workflow,
    event, ref, and ActionPlan at invocation time.
 4. After the attended immutable release exists, pin the caller to
-   `tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.1.1`; do not
+   `tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.2.0`; do not
    move or reuse `v5.1.0`.
 5. Prove a remote miss with nonzero WorkerLeaf execution and an exact
    `ActionOutputSet/v1` when export was requested. Repeat the identical action
