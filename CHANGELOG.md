@@ -5,6 +5,30 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — BREAKING (next MAJOR)
+
+- **TIN-4299 ruling 4 pooled Nix cache read edge: default-on, fail-closed.**
+  `nix-setup`, `nix-build`, and `greedy-cache` flip `attic-public-read` from
+  `"false"` to `"true"`. On the default path `nix-setup` configures the pooled
+  cache as an anonymous, tokenless, read-only substituter and hard-fails
+  (`::error` + exit 1) when no endpoint resolves, no trusted public key is
+  available (a key is never invented for a non-default server), the key does
+  not name the substituted cache or decode to a 32-byte ed25519 key, or
+  `<server>/<cache>/nix-cache-info` does not answer as a Nix binary cache
+  (DNS resolution alone is no longer reachability). With `ATTIC_TOKEN` in
+  scope the authenticated caller still owns `nix.conf` trust, but the probe
+  still runs (with the token) and still fails closed. `attic_reachable` now
+  reports the probe result on the default path; `attic_public_key` is always
+  emitted there. The baked tinyland-inc `nix-cache.tinyland.dev` server + key
+  stay only as the last-resort default when neither the `attic-server` input
+  nor `ATTIC_SERVER` resolves; that consumer-surface literal is retired by
+  the typed `NixCacheSupply` (endpoint class + trust-root digest) in the
+  TIN-4299 packet. `ATTIC_SERVER` is never exported from the last-resort
+  default and no push path is enabled. `attic-public-read: "false"` is the
+  explicit opt-out for lanes that never touch Nix and restores the previous
+  path byte-for-byte. Third standing exception to AGENTS.md rule 2; callers
+  pinned to `@v3` / `@v2.12.1` / `v5.x` are unaffected until they move pins.
+
 ### Changed
 
 - **TIN-4257 qualified-result caller contract.** Pass every `spoke-ci-v4.yml`

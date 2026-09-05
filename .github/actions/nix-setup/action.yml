@@ -1,18 +1,18 @@
 name: "Nix Setup"
-description: "Configure Nix and cache hints. Attic may be auto-detected on self-hosted ARC runners; Bazel endpoints are runtime authority supplied by environment or inputs. Outputs cluster-reachability flags consumed by `flywheel-bazel`. Opt-in `attic-public-read: true` additionally configures a tokenless, read-only anonymous Nix substituter (falling back to the tinyland-inc public-read \"main\" cache when no attic-server resolves) without ever exporting ATTIC_SERVER or enabling any push path; default (`attic-public-read: false`) execution is byte-identical to the pre-existing behavior."
+description: "Configure Nix and cache hints. Attic may be auto-detected on self-hosted ARC runners; Bazel endpoints are runtime authority supplied by environment or inputs. Outputs cluster-reachability flags consumed by `flywheel-bazel`. The pooled Nix cache read edge is ON by default and FAILS CLOSED (TIN-4299 ruling 4): `attic-public-read: true` (default) configures a tokenless, read-only anonymous Nix substituter and hard-fails when no endpoint resolves, no trusted key is available, the key does not name the substituted cache, or the substituter does not answer nix-cache-info. It never exports ATTIC_SERVER from the last-resort default and never enables any push path. `attic-public-read: false` is an explicit opt-out for lanes that never touch Nix; it restores the pre-TIN-4299 path byte-for-byte."
 
 inputs:
   attic-server:
-    description: "Attic server URL. Required on self-hosted runners unless ATTIC_SERVER is exported in the runner environment (org overlay / fleet env) — there is no baked default endpoint (TIN-2353)."
+    description: "Attic server URL. Required on self-hosted runners unless ATTIC_SERVER is exported in the runner environment (org overlay / fleet env) — there is no baked default endpoint for the authenticated path (TIN-2353). The default-on read edge falls back to the last-resort tinyland-inc public-read \"main\" cache only when neither resolves; see attic-public-read."
     default: ""
   attic-cache:
     description: "Attic cache name"
     default: "main"
   attic-public-read:
-    description: "Opt-in, default \"false\" (byte-identical to pre-existing behavior when unset). When \"true\": if no attic-server input and no auto-detected ATTIC_SERVER resolves, fall back to the tinyland-inc public-read \"main\" cache (https://nix-cache.tinyland.dev) and configure it as an anonymous, tokenless, READ-ONLY Nix substituter; if an attic-server DID resolve and the caller also supplied attic-public-key, configure a read-only substituter for that server too. Never exports ATTIC_SERVER as a side effect and never enables any push path — ATTIC_TOKEN-gated pushes remain the sole responsibility of callers (`nix-build`, `greedy-cache`)."
-    default: "false"
+    description: "Default \"true\" (TIN-4299 ruling 4; BREAKING, lands in the next MAJOR): configure the pooled Nix cache as an anonymous, tokenless, READ-ONLY Nix substituter and FAIL CLOSED when the edge cannot be trusted or reached — no endpoint resolved, no trusted public key (a key is never invented for a non-default server), key/cache-name mismatch, or `<server>/<cache>/nix-cache-info` not answering. Endpoint precedence: attic-server input, then ATTIC_SERVER from the runner environment (org overlay / fleet env), then the last-resort tinyland-inc public-read \"main\" cache (https://nix-cache.tinyland.dev) — a consumer-surface literal retired by the typed NixCacheSupply (TIN-4299 packet). When ATTIC_TOKEN is in scope the authenticated caller owns nix.conf trust, but the reachability probe still runs and still fails closed. Never exports ATTIC_SERVER from the last-resort default and never enables any push path — ATTIC_TOKEN-gated pushes remain the sole responsibility of callers (`nix-build`, `greedy-cache`). \"false\" is an explicit opt-OUT for lanes that never touch Nix: no fallback endpoint, no probe, no nix.conf write, no new env exports (the pre-TIN-4299 path, byte-identical)."
+    default: "true"
   attic-public-key:
-    description: "Attic cache trusted public key for the opt-in `attic-public-read` read-only substituter. Precedence: this input, then an ATTIC_PUBLIC_KEY already exported in the runner environment (org overlay / fleet env), then — only when the substituter actually being configured is the tinyland-inc public-read \"main\" default — the baked tinyland-inc key. Never baked in for an arbitrary/tenant attic-server; empty by default."
+    description: "Attic cache trusted public key for the default-on `attic-public-read` read-only substituter. Precedence: this input, then an ATTIC_PUBLIC_KEY already exported in the runner environment (org overlay / fleet env), then — only when the substituter actually being configured is the tinyland-inc public-read \"main\" default — the baked tinyland-inc key. Never baked in for an arbitrary/tenant attic-server: with attic-public-read=true, a non-default server with no key is a hard failure. Empty by default."
     default: ""
   bazel-cache:
     description: "Bazel remote cache endpoint. Optional override for BAZEL_REMOTE_CACHE; no endpoint is invented by this action."
@@ -30,10 +30,10 @@ outputs:
       tinyland-inc/site.scaffold/docs/CI-SCHEMA.md §6.
     value: ${{ steps.detect.outputs.runner_class }}
   attic_reachable:
-    description: "`true` if the Attic cache DNS resolved, else `false`."
+    description: "`true` when the Attic substituter answered `nix-cache-info` (default-on read edge) or, on the explicit `attic-public-read: false` opt-out path, when the Attic cache DNS resolved; else `false`."
     value: ${{ steps.detect.outputs.attic_reachable }}
   attic_public_key:
-    description: "Trusted public key written for the opt-in `attic-public-read` anonymous read-only substituter, or empty when that fallback did not engage (input unset/false, or nothing resolved that qualified — see attic-public-key precedence)."
+    description: "Trusted public key written for the default-on `attic-public-read` anonymous read-only substituter. Always emitted on the default path; empty when ATTIC_TOKEN is in scope (the authenticated caller owns nix.conf trust). Not emitted on the explicit `attic-public-read: false` opt-out path."
     value: ${{ steps.detect.outputs.attic_public_key }}
   bazel_cache_reachable:
     description: "`true` if the Bazel remote cache DNS resolved, else `false`."
@@ -54,20 +54,31 @@ runs:
         ATTIC_URL=""
         attic_public_key_out=""
 
-        # --- attic-public-read opt-in (default "false") ------------------
-        # tinyland-inc's "main" Attic cache is intentionally PUBLIC-READ
-        # (anonymous GET, no ATTIC_TOKEN required to substitute from it).
-        # It is used only as a last-resort fallback, and ONLY when
-        # attic-public-read is "true" — an explicit attic-server input, or
-        # ATTIC_SERVER auto-detected from the self-hosted runner environment
-        # (org overlay / fleet env, TIN-2353), always overrides it. With
-        # attic-public-read left at its default "false", none of the code
-        # below this block behaves any differently than before this input
-        # existed: no fallback URL, no nix.conf write, no new env exports.
+        # --- pooled Nix cache read edge (TIN-4299 ruling 4): default ON, fail closed
+        # attic-public-read="true" (the default) configures the pooled cache as
+        # a tokenless, read-only Nix substituter and FAILS CLOSED when the edge
+        # cannot be trusted or reached: no endpoint, no trusted key, a key that
+        # does not name the substituted cache, or a substituter that does not
+        # answer nix-cache-info. attic-public-read="false" is an explicit
+        # opt-OUT for lanes that never touch Nix; it restores the pre-TIN-4299
+        # path byte-for-byte (no fallback URL, no probe, no nix.conf write, no
+        # new env exports).
+        #
+        # The baked tinyland-inc public-read "main" server + key below is the
+        # LAST-RESORT default only (docker/dind runner types never receive the
+        # fleet env). It is a consumer surface naming provider placement; the
+        # typed NixCacheSupply (endpoint CLASS + trust-root digest, TIN-4299
+        # packet ADD-TYPE) retires it. An explicit attic-server input or
+        # ATTIC_SERVER from the org overlay / fleet env always overrides it.
         ATTIC_PUBLIC_READ="${{ inputs.attic-public-read }}"
         ATTIC_PUBLIC_DEFAULT_SERVER="https://nix-cache.tinyland.dev"
         ATTIC_PUBLIC_DEFAULT_KEY="main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
         ATTIC_PUBLIC_KEY_INPUT="${{ inputs.attic-public-key }}"
+
+        fail_closed() {
+          echo "::error::nix-setup: $1 — the pooled Nix cache read edge is default-on and fails closed (TIN-4299 ruling 4); pass attic-public-read: \"false\" only for a lane that never touches Nix"
+          exit 1
+        }
 
         # Resolve runner_class from runner.labels (passed via env). Capability
         # classes are org-namespaced — `<org-pool>` + `-nix|-nix-heavy|-nix-kvm|
@@ -83,18 +94,19 @@ runs:
         if [ "${{ runner.environment }}" != "github-hosted" ]; then
           # Self-hosted ARC runners have cluster DNS access
           # Endpoint authority lives with the org overlay / fleet runner env —
-          # no baked default endpoint (TIN-2353 acceptance #2). tinyland nix
-          # pools receive ATTIC_SERVER via fleet env (tofu arc-runner module,
-          # runner_type=="nix" only); other orgs export their own or pass the
-          # attic-server input. Unset degrades exactly like unreachable DNS
-          # (warning + attic_reachable=false) because docker/dind runner types
-          # never receive the fleet env and Attic is cache-optional for them —
-          # a hard failure here would break supported js-bazel-package lanes.
+          # no baked default endpoint for the authenticated path (TIN-2353
+          # acceptance #2). tinyland nix pools receive ATTIC_SERVER via fleet
+          # env (tofu arc-runner module, runner_type=="nix" only); other orgs
+          # export their own or pass the attic-server input. docker/dind runner
+          # types never receive the fleet env, so the default-on read edge
+          # uses the last-resort public-read cache for them and still fails
+          # closed below if it cannot be reached; the explicit opt-out keeps
+          # the old "warning + attic_reachable=false" degrade.
           ATTIC="${{ inputs.attic-server }}"
           ATTIC_URL="${ATTIC:-${ATTIC_SERVER:-}}"
           if [ -z "$ATTIC_URL" ]; then
             if [ "$ATTIC_PUBLIC_READ" = "true" ]; then
-              echo "::warning::nix-setup: no Attic endpoint configured — falling back to the tinyland-inc public-read \"main\" cache for anonymous, tokenless reads (attic-public-read=true). Pass the attic-server input or export ATTIC_SERVER for a private cache; pushes remain disabled either way (ATTIC_TOKEN-gated, handled by callers)."
+              echo "::notice::nix-setup: no attic-server input and no ATTIC_SERVER in the runner environment — using the last-resort tinyland-inc public-read \"main\" cache for anonymous, tokenless reads (fails closed below if it cannot be reached). Pass attic-server or export ATTIC_SERVER for a private cache; pushes stay ATTIC_TOKEN-gated in callers."
               ATTIC_URL="$ATTIC_PUBLIC_DEFAULT_SERVER"
             else
               echo "::warning::nix-setup: no Attic endpoint configured — pass the attic-server input or export ATTIC_SERVER in the runner environment (org overlay / fleet env). There is no baked default endpoint; running without Attic cache."
@@ -105,6 +117,8 @@ runs:
               echo "ATTIC_SERVER=$ATTIC_URL" >> "$GITHUB_ENV"
               attic_reachable=true
               echo "::notice::Attic cache reachable at $ATTIC_URL"
+            elif [ "$ATTIC_PUBLIC_READ" = "true" ]; then
+              fail_closed "Attic cache DNS unresolvable ($ATTIC_HOST) for $ATTIC_URL"
             else
               echo "::warning::Attic cache DNS unreachable ($ATTIC_HOST) — running without cache"
               ATTIC_URL=""
@@ -131,58 +145,88 @@ runs:
           echo "ATTIC_SERVER=${{ inputs.attic-server }}" >> "$GITHUB_ENV"
           ATTIC_URL="${{ inputs.attic-server }}"
         elif [ "$ATTIC_PUBLIC_READ" = "true" ]; then
-          # github-hosted: no cluster DNS, no fleet env auto-detection, and no
-          # attic-server input. Fall back to the tinyland-inc public-read
-          # "main" cache for anonymous reads — but do NOT export ATTIC_SERVER:
-          # nix-build gates its push step on `env.ATTIC_SERVER != '' &&
-          # env.ATTIC_TOKEN != ''`, so exporting it here would silently turn
-          # on pushes for any spoke that happens to have ATTIC_TOKEN set but
-          # never asked for a push destination. The substituter below is
-          # configured directly via nix.conf instead.
-          echo "::warning::nix-setup: no attic-server input on github-hosted runner — falling back to the tinyland-inc public-read \"main\" cache for anonymous, tokenless reads (attic-public-read=true). Pushes remain disabled (ATTIC_TOKEN-gated, handled by callers)."
+          # github-hosted (retired estate-wide by TIN-3914; kept for the
+          # structural contract): no cluster DNS, no fleet env auto-detection,
+          # and no attic-server input. Use the last-resort tinyland-inc
+          # public-read "main" cache for anonymous reads — but do NOT export
+          # ATTIC_SERVER: nix-build gates its push step on `env.ATTIC_SERVER
+          # != '' && env.ATTIC_TOKEN != ''`, so exporting it here would
+          # silently turn on pushes for any spoke that happens to have
+          # ATTIC_TOKEN set but never asked for a push destination. The
+          # substituter below is configured directly via nix.conf instead.
+          echo "::notice::nix-setup: no attic-server input on github-hosted runner — using the last-resort tinyland-inc public-read \"main\" cache for anonymous, tokenless reads (fails closed below if it cannot be reached). Pushes remain disabled (ATTIC_TOKEN-gated, handled by callers)."
           ATTIC_URL="$ATTIC_PUBLIC_DEFAULT_SERVER"
         fi
         echo "ATTIC_CACHE=${{ inputs.attic-cache }}" >> "$GITHUB_ENV"
 
-        # --- attic-public-read: configure the read-only substituter -------
-        # Only reachable when attic-public-read="true" and some Attic URL
-        # resolved above (public-read default, or a real attic-server).
-        # ATTIC_TOKEN is consulted ONLY to defer to the authenticated
+        # --- default-on read edge: trusted key, reachability, substituter ----
+        # Reached only with attic-public-read="true" (the default). ATTIC_TOKEN
+        # is consulted ONLY to defer nix.conf trust to the authenticated
         # writers (nix-build's attic-action login, greedy-cache's tiered
         # substituter step) so the two writers never touch nix.conf for the
-        # same server — it never enables a push here. The trusted key
-        # follows input > env(ATTIC_PUBLIC_KEY) > baked-default precedence,
-        # and the baked tinyland-inc key is only ever used when the
-        # substituter being configured IS the tinyland-inc public default —
-        # never for an arbitrary/tenant attic-server.
-        if [ "$ATTIC_PUBLIC_READ" = "true" ] && [ -n "$ATTIC_URL" ]; then
+        # same server — it never enables a push here, and the reachability
+        # probe still runs (with the token, so a private cache answers). The
+        # trusted key follows input > env(ATTIC_PUBLIC_KEY) > baked-default
+        # precedence, and the baked tinyland-inc key is only ever used when
+        # the substituter being configured IS the tinyland-inc public default —
+        # never for an arbitrary/tenant attic-server, which fails closed
+        # without a caller-supplied key.
+        if [ "$ATTIC_PUBLIC_READ" = "true" ]; then
+          [ -n "$ATTIC_URL" ] || fail_closed "no Attic endpoint resolved for the pooled Nix cache read edge"
+          SUBST_CACHE="${{ inputs.attic-cache }}"
+          PROBE_AUTH=()
           if [ -n "${ATTIC_TOKEN:-}" ]; then
-            # A token is in scope for this server (default or tenant): the
-            # authenticated caller establishes trust for it once it logs
-            # in — skip here to avoid duplicate extra-substituters /
-            # extra-trusted-public-keys lines.
             EFFECTIVE_KEY=""
+            PROBE_AUTH=(-H "Authorization: Bearer ${ATTIC_TOKEN}")
+            echo "::notice::nix-setup: ATTIC_TOKEN is in scope, so the authenticated caller (nix-build attic-action login / greedy-cache) owns nix.conf trust for ${ATTIC_URL}; the read-edge reachability probe still runs and fails closed"
             if [ -n "${ATTIC_PUBLIC_KEY_INPUT:-}" ]; then
               echo "::notice::attic-public-key input not applied: ATTIC_TOKEN is in scope, so the authenticated cache setup owns nix.conf for this server"
             fi
           elif [ "$ATTIC_URL" = "$ATTIC_PUBLIC_DEFAULT_SERVER" ]; then
             EFFECTIVE_KEY="${ATTIC_PUBLIC_KEY_INPUT:-${ATTIC_PUBLIC_KEY:-$ATTIC_PUBLIC_DEFAULT_KEY}}"
           else
-            # Explicit/auto-detected (tenant) server, no token in scope here:
-            # only add a read-only substituter if the caller explicitly
-            # trusted us with a key for it — never invent one.
             EFFECTIVE_KEY="${ATTIC_PUBLIC_KEY_INPUT:-${ATTIC_PUBLIC_KEY:-}}"
+            [ -n "$EFFECTIVE_KEY" ] || fail_closed "no trusted public key for ${ATTIC_URL} — pass attic-public-key or export ATTIC_PUBLIC_KEY (org overlay / fleet env); a key is never invented for a non-default server"
           fi
 
           if [ -n "$EFFECTIVE_KEY" ]; then
             # The baked key is scoped to the public-read "main" cache, so the
-            # fallback substituter path is pinned to main whenever that key
+            # last-resort substituter path is pinned to main whenever that key
             # is the one being trusted; a caller-supplied key follows the
             # caller's attic-cache input.
-            SUBST_CACHE="${{ inputs.attic-cache }}"
             if [ "$EFFECTIVE_KEY" = "$ATTIC_PUBLIC_DEFAULT_KEY" ]; then
               SUBST_CACHE="main"
             fi
+            # Trusted-key check: an Attic signing key is "<cache>:<base64
+            # ed25519 public key>". It must name the cache being substituted
+            # and decode to a 32-byte key; anything else is a hard failure,
+            # never a silently untrusted substituter.
+            KEY_NAME="${EFFECTIVE_KEY%%:*}"
+            KEY_BODY="${EFFECTIVE_KEY#*:}"
+            if [ -z "$KEY_NAME" ] || [ "$KEY_NAME" = "$EFFECTIVE_KEY" ] || [ -z "$KEY_BODY" ]; then
+              fail_closed "trusted public key is not <cache>:<base64> shaped"
+            fi
+            KEY_BYTES="$( (printf '%s' "$KEY_BODY" | base64 -d 2>/dev/null || true) | wc -c | tr -d ' ')"
+            if [ "$KEY_BYTES" != "32" ]; then
+              fail_closed "trusted public key for cache '${KEY_NAME}' does not decode to a 32-byte ed25519 key"
+            fi
+            if [ "$KEY_NAME" != "$SUBST_CACHE" ]; then
+              fail_closed "trusted public key names cache '${KEY_NAME}' but the substituter is ${ATTIC_URL%/}/${SUBST_CACHE}"
+            fi
+          fi
+
+          # Reachability: DNS resolution is not reachability. The substituter
+          # itself must answer nix-cache-info as a Nix binary cache.
+          CACHE_INFO_URL="${ATTIC_URL%/}/${SUBST_CACHE}/nix-cache-info"
+          CACHE_INFO="$(curl -fsS --max-time 10 "${PROBE_AUTH[@]}" "$CACHE_INFO_URL" 2>&1)" \
+            || fail_closed "pooled Nix cache unreachable: GET ${CACHE_INFO_URL} failed (${CACHE_INFO})"
+          case "$CACHE_INFO" in
+            *"StoreDir: /nix/store"*) ;;
+            *) fail_closed "GET ${CACHE_INFO_URL} did not answer as a Nix binary cache (no 'StoreDir: /nix/store')" ;;
+          esac
+          attic_reachable=true
+
+          if [ -n "$EFFECTIVE_KEY" ]; then
             mkdir -p ~/.config/nix
             {
               echo "extra-substituters = ${ATTIC_URL%/}/${SUBST_CACHE}"
@@ -190,7 +234,7 @@ runs:
             } >> ~/.config/nix/nix.conf
             echo "ATTIC_PUBLIC_KEY=$EFFECTIVE_KEY" >> "$GITHUB_ENV"
             attic_public_key_out="$EFFECTIVE_KEY"
-            echo "::notice::Attic anonymous read-only substituter configured at ${ATTIC_URL%/}/${SUBST_CACHE} (attic-public-read=true; ATTIC_TOKEN still required for pushes, handled by callers)"
+            echo "::notice::Attic anonymous read-only substituter configured at ${ATTIC_URL%/}/${SUBST_CACHE} (trusted-key and reachability checks passed; ATTIC_TOKEN still required for pushes, handled by callers)"
           fi
         fi
 
@@ -199,9 +243,10 @@ runs:
           echo "attic_reachable=$attic_reachable"
           echo "bazel_cache_reachable=$bazel_cache_reachable"
         } >> "$GITHUB_OUTPUT"
-        # attic_public_key is emitted only under attic-public-read so the
-        # default execution path stays byte-identical to the pre-existing
-        # behavior (AGENTS.md rule 2).
+        # attic_public_key is emitted on the default read-edge path; the
+        # explicit attic-public-read="false" opt-out keeps the pre-TIN-4299
+        # output set byte-identical (AGENTS.md rule 2, third standing
+        # exception).
         if [ "$ATTIC_PUBLIC_READ" = "true" ]; then
           echo "attic_public_key=$attic_public_key_out" >> "$GITHUB_OUTPUT"
         fi
