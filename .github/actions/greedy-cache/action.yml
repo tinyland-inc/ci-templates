@@ -1,5 +1,5 @@
 name: "Greedy Cache"
-description: "Start Attic watch-store daemon for concurrent binary cache push as derivations build. Opt-in `attic-public-read: true` degrades a missing/absent ATTIC_TOKEN to a loud warning (instead of the generic \"not configured\") when nix-setup has configured an anonymous read-only substituter; the watch-store push daemon still requires a valid token either way. Default (`attic-public-read: false`) execution is byte-identical to the pre-existing behavior."
+description: "Start Attic watch-store daemon for concurrent binary cache push as derivations build. The pooled Nix cache read edge is ON by default and fails closed (TIN-4299 ruling 4, via nix-setup): a missing ATTIC_TOKEN degrades to a loud warning (instead of the generic \"not configured\") over the anonymous read-only substituter, and an unreachable or untrusted substituter hard-fails; the watch-store push daemon still requires a valid token either way. `attic-public-read: false` is an explicit opt-out for lanes that never touch Nix (pre-TIN-4299 behavior, byte-identical)."
 
 inputs:
   attic-server:
@@ -9,10 +9,10 @@ inputs:
     description: "Attic cache name to push to"
     default: "main"
   attic-public-read:
-    description: "Opt-in, default \"false\" (byte-identical to pre-existing behavior when unset). Passed through to nix-setup; see its attic-public-read description. Never enables the watch-store push daemon by itself — that stays gated on a successful token-authenticated `attic login` exactly as before."
-    default: "false"
+    description: "Default \"true\" (TIN-4299 ruling 4; BREAKING, lands in the next MAJOR). Passed through to nix-setup, which configures the pooled Nix cache read edge and fails closed when it cannot be trusted or reached; see its attic-public-read description. Never enables the watch-store push daemon by itself — that stays gated on a successful token-authenticated `attic login` exactly as before. \"false\" is an explicit opt-out for lanes that never touch Nix (pre-TIN-4299 behavior, byte-identical)."
+    default: "true"
   attic-public-key:
-    description: "Attic cache trusted public key passed through to nix-setup for the opt-in attic-public-read read-only substituter. Empty by default; see nix-setup's attic-public-key precedence."
+    description: "Attic cache trusted public key passed through to nix-setup for the default-on attic-public-read read-only substituter. Empty by default; see nix-setup's attic-public-key precedence (a non-default server with no key fails closed)."
     default: ""
   watch-jobs:
     description: "Number of parallel upload jobs"
@@ -35,7 +35,14 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v3
+    # Exact self-pin (RELEASING.md "Composite-action internal refs";
+    # scripts/validate-ci-templates.py check_internal_refs). `uses:` resolves
+    # nix-setup at ITS OWN ref: the floating `@v3` here passed the flipped
+    # default to the v3-line opt-in nix-setup -- default-on but fail-OPEN
+    # (TIN-4246 steamroll audit c2093793). v6.0.0 is the MAJOR the CHANGELOG
+    # entry lands in; the release commit retargets this pin if it names another
+    # version (RELEASING.md step 3).
+    - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v6.0.0
       with:
         attic-server: ${{ inputs.attic-server }}
         attic-cache: ${{ inputs.attic-cache }}
@@ -47,15 +54,15 @@ runs:
       shell: bash
       run: |
         if [ -z "${ATTIC_SERVER:-}" ] || [ -z "${ATTIC_TOKEN:-}" ]; then
-          # attic-public-read (opt-in, default "false") only changes the
+          # attic-public-read (default "true", TIN-4299) only changes the
           # WARNING TEXT here, never the outcome: the watch-store push daemon
           # below stays gated on healthy=true either way, so it never starts
           # without a valid authenticated login regardless of this input.
-          # ATTIC_PUBLIC_KEY is only ever non-empty when nix-setup's gated
+          # ATTIC_PUBLIC_KEY is only ever non-empty when nix-setup's
           # attic-public-read block actually configured an anonymous
-          # read-only substituter (never in the default-off path), so the
-          # double guard keeps the default-off message byte-identical to the
-          # pre-existing "Attic not configured" text.
+          # read-only substituter (never on the explicit opt-out path), so
+          # the double guard keeps the opt-out message byte-identical to the
+          # pre-TIN-4299 "Attic not configured" text.
           if [ "${{ inputs.attic-public-read }}" = "true" ] && [ -n "${ATTIC_PUBLIC_KEY:-}" ] && [ -z "${ATTIC_TOKEN:-}" ]; then
             echo "::warning::Attic token absent — anonymous public read only, pushes disabled"
           else

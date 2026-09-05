@@ -26,14 +26,28 @@ a fleet-wide change.
 2. **Default-off, opt-in changes only.** A new behavior added to a shared
    workflow MUST be gated behind a new input that defaults to the pre-existing
    behavior. Non-opted consumers must be byte-identical. Prove it by diffing the
-   default execution path. There are two standing exceptions. Rule 3 is a
+   default execution path. There are three standing exceptions. Rule 3 is a
    prohibition and cannot ship with an opt-out, so TIN-3914 changed default
    routing for every consumer and took a MAJOR bump instead of a gate. TIN-4257
    repairs the already-declared schema-3 export contract by always passing the
    image-custodied client a fresh result directory: a workflow input would
    become a second result-disposition authority beside the ActionPlan. That
    caller repair ships only in a new immutable patch after the provider image
-   accepts the flag; it never moves an existing exact tag.
+   accepts the flag; it never moves an existing exact tag. TIN-4299 ruling 4
+   makes the pooled Nix cache read edge (`nix-setup`, `nix-build`,
+   `greedy-cache` `attic-public-read`) default-on and fail-closed: a
+   consumer that never declared trust must not silently build cache-less or
+   substitute from an unverified cache, so the default flipped and the edge
+   hard-fails on an absent key or unreachable substituter; it takes a MAJOR
+   bump, and `attic-public-read: "false"` remains the explicit, byte-identical
+   opt-out for lanes that never touch Nix. It restores TIN-3836 ruling 3
+   (operator, 2026-08-17: "ci-templates reader: GF-parity degrade — public
+   substituter + ATTIC_PUBLIC_KEY unconditional; token gates netrc/push only;
+   loud warning on degrade"), which #134 shipped under this rule as the
+   opt-in `"false"` default instead. The `nix-build` / `greedy-cache`
+   pass-throughs self-pin `nix-setup` at the exact MAJOR that carries the
+   flip; floating `@v3` there was default-on but fail-open (TIN-4246 audit
+   c2093793).
 3. **No GitHub-hosted runners, ever.** Operator ruling, 2026-08-19: the estate
    runs ONLY on GF cache-fronted self-hosted runners. Every `runs-on` names an
    org capability class. Three gates, deliberately reading different things:
