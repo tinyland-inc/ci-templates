@@ -1,0 +1,86 @@
+{
+  "_comment": [
+    "Provenance for schemas vendored from tinyland-inc/site.scaffold, which the",
+    "$id of every schema in this directory already names as the authority.",
+    "Recording the source revision and per-file digests is what makes the",
+    "vendoring auditable: before this file, ci-templates carried a COPY of the",
+    "v1 manifest schema with no lock and no drift gate, and it had silently",
+    "diverged from its source in BOTH directions (ci-templates gained",
+    "authorities.artifact_registry; site.scaffold gained a gitops_receiver",
+    "prohibition). Nothing compared them.",
+    "",
+    "The v2 copy arrived the same way and is currently byte-identical to its",
+    "source. This file exists so that stays a checkable fact rather than a",
+    "coincidence -- it is the cheapest moment a drift gate will ever be added.",
+    "",
+    "SCOPE IS THE WHOLE DIRECTORY, deliberately. The first draft of this record",
+    "covered the two manifest schemas only, and `just",
+    "vendored-schema-provenance-check` reported 'all 2 vendored schemas match'",
+    "over a directory holding four -- one of which, lanes.schema.json, was",
+    "already drifted and is load-bearing (it backs the lanes-load action that",
+    "tinyland.dev's CI runs). Coverage-shaped output enforcing less than it",
+    "reads as is the defect this whole change exists to end, so the gate now",
+    "globs schemas/*.schema.json and an unrecorded schema is an error.",
+    "",
+    "STATES. `identical`: vendored bytes equal upstream bytes. `drifted`: a",
+    "known divergence, REPORTED not failed. `unsourced`: the $id names a",
+    "site.scaffold path that does not exist at source_revision, so there is",
+    "nothing to compare. Each state is asserted against the digests recorded",
+    "beside it -- an `identical` entry whose upstream_sha256 differs, or a",
+    "`drifted` entry with none, is now an error rather than unread metadata.",
+    "",
+    "v1 is recorded as DRIFTED on purpose. This change does not silently adopt",
+    "upstream's v1 bytes -- that would change what every consumer is validated",
+    "against, which is a separate decision with its own review. It records the",
+    "divergence so the drift gate can report it instead of nobody noticing.",
+    "",
+    "Re-vendoring recipe: copy the source file, recompute sha256 for both the",
+    "vendored copy and (for a drifted entry) the upstream one, and update",
+    "source_revision in the same change. `just vendored-schema-provenance-check`",
+    "verifies the vendored digests offline; it deliberately does NOT reach",
+    "site.scaffold, so upstream freshness -- and source_revision itself --",
+    "stay separate, advisory, non-blocking questions."
+  ],
+  "source_repository": "tinyland-inc/site.scaffold",
+  "source_revision": "cf05836bf98526ac6f05af31200176d9141f9584",
+  "source_revision_note": "site.scaffold main @ 2026-08-29. Advisory: a hermetic check cannot verify that this names a real commit, only that the digests beside it are internally consistent. Both manifest schema files are byte-identical at 6c58bb630de1 and at this revision, so recording the newer tip is a provenance refresh, not a content change.",
+  "files": [
+    {
+      "vendored": "schemas/tinyland-repo-manifest.v2.schema.json",
+      "source": "docs/schemas/tinyland-repo-manifest.v2.schema.json",
+      "sha256": "c7049f33e6098822c79736d9232a97609d3a052dda4d56e213f9fba4f12ad64b",
+      "upstream_sha256": "c7049f33e6098822c79736d9232a97609d3a052dda4d56e213f9fba4f12ad64b",
+      "state": "identical"
+    },
+    {
+      "vendored": "schemas/tinyland-repo-manifest.schema.json",
+      "source": "docs/schemas/tinyland-repo-manifest.schema.json",
+      "sha256": "4b8155126349ef226ead7e079e0917b3b8e91c2ecb3bc4f8de4ca1baad3887ec",
+      "upstream_sha256": "15965f1864c8d853805cf0596d5d1d76da536e09be46d05fd1cf8137f7122a4a",
+      "state": "drifted",
+      "state_note": "Known divergence, reported not reconciled. ci-templates alone defines authorities.artifact_registry; site.scaffold alone forbids authorities.gitops_receiver on a static spoke. De-forking v1 changes what live consumers are validated against and is its own change."
+    },
+    {
+      "vendored": "schemas/lanes.schema.json",
+      "source": "docs/schemas/lanes.schema.json",
+      "sha256": "eaba0b2c791c8df85c86f4e9abd99865d5ab367a85733e5025822bdade77b468",
+      "upstream_sha256": "fff8058b1ec87029e3877da67eacbb79badab8c8272dda9452ba5cdaacec08cb",
+      "state": "drifted",
+      "state_note": "Drifted in BOTH directions, and this one must not be reflexively re-vendored. Upstream is ahead on authority language: it says the schema 'grants no receiver, apply, DNS, or lifecycle authority', where the vendored copy still describes blahaj PR-env provisioning, PR-env DNS templating and a reaper TTL, and still names --config=flywheel-executor where upstream says GF_BAZEL_SUBSTRATE_MODE=executor-backed. ci-templates is ahead on runnerClass: the vendored copy carries the TIN-3914 org-namespaced capability-class PATTERN, upstream still carries a hardcoded tinyland-* ENUM. Adopting upstream's bytes wholesale turns this repo's own `just lanes-schema-runner-class-check` red -- measured 2026-08-29: 'runnerClass no longer admits capability class great-falls-tool-bus-nix'. Reconciling it is a real change with a real decision in it, which is exactly why it is recorded rather than quietly copied."
+    },
+    {
+      "vendored": "schemas/blahaj-dispatch.schema.json",
+      "source": "docs/schemas/blahaj-dispatch.schema.json",
+      "sha256": "ad1d0de2af7b8fbee722831f9fced95fa04982ef00ed506fe81c28e6c3f07bec",
+      "state": "unsourced",
+      "state_note": "The $id names tinyland-inc/site.scaffold docs/schemas/blahaj-dispatch.schema.json, which returns 404 at source_revision (probed 2026-08-29). There is no upstream file to digest, so no drift claim is possible in either direction. Recorded rather than excluded because '$id names the authority' is the heuristic the rest of this file rests on, and here it is demonstrably unreliable -- that is a finding to keep visible, not a file to leave unpinned."
+    },
+    {
+      "vendored": "schemas/public-preview-dispatch.schema.json",
+      "source": "docs/schemas/public-preview-dispatch.schema.json",
+      "sha256": "f84b2020153477d39ee22b5bbbded3a31d1dfe296a564a98abea18291de9c8bf",
+      "state": "unsourced",
+      "state_note": "Same class as blahaj-dispatch: the $id names a site.scaffold path that 404s at source_revision (probed 2026-08-29). Its digest is pinned so a hand-edit is still caught; its provenance is an open question for the operator, not a silent omission."
+    }
+  ]
+}

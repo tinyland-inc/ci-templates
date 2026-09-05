@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
+from collections import Counter
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -68,6 +72,26 @@ def structural_uses(document: str) -> list[str]:
     return references
 
 
+def _load_manifest_router():
+    """Import the routing half of scripts/manifest-schema-validate.py.
+
+    The version -> schema-filename mapping lives in exactly one file. This
+    check used to carry a SECOND copy of it, spelled as a hardcoded v1 path —
+    the same defect the composite action shipped, one directory over. It made
+    `validate-ci-templates.py manifest` print "valid" for a v1 manifest checked
+    against a schema, and it would answer a v2 manifest with the `const 1` wall
+    the action was fixed to stop emitting. Importing the router instead of
+    re-deriving it is what keeps the two from drifting apart again.
+    """
+    path = ROOT / "scripts" / "manifest-schema-validate.py"
+    spec = importlib.util.spec_from_file_location("manifest_schema_validate", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - packaging error
+        raise RuntimeError(f"cannot load the manifest router from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def validate_manifest() -> int:
     try:
         from jsonschema import Draft202012Validator
@@ -75,10 +99,25 @@ def validate_manifest() -> int:
         print("python jsonschema is unavailable", file=sys.stderr)
         return 2
 
-    schema_path = ROOT / "schemas/tinyland-repo-manifest.schema.json"
+    router = _load_manifest_router()
     manifest_path = ROOT / "tinyland.repo.json"
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    try:
+        schema_name = router.resolve_schema_name(json.loads(manifest_text))
+    except router.UnsupportedSchemaVersion as exc:
+        print(f"{manifest_path.relative_to(ROOT)}: {exc}", file=sys.stderr)
+        return 1
+    schema_path = ROOT / "schemas" / schema_name
+    if not schema_path.is_file():
+        print(
+            f"{manifest_path.relative_to(ROOT)} routes to schemas/{schema_name}, which is "
+            "not present in this checkout — the manifest was not validated against anything",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"tinyland.repo.json -> schemas/{schema_name}")
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_text)
     Draft202012Validator.check_schema(schema)
     errors = sorted(
         Draft202012Validator(schema).iter_errors(manifest),
@@ -295,6 +334,113 @@ def check_flywheel_reapi_proof_contract() -> int:
     return 0
 
 
+#: The step of `.github/actions/repo-manifest-validate/action.yml` that runs the
+#: bundled manifest validator. Guards below read THIS step's shell, not the file.
+MANIFEST_VALIDATE_STEP = "Validate repo manifest schema"
+MANIFEST_VALIDATOR_BASENAME = "manifest-schema-validate.py"
+
+_SHELL_ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
+_SHELL_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _expand_shell_vars(text: str, env: dict[str, str]) -> str:
+    """Substitute `$name`/`${name}` from `env` until it stops changing.
+
+    Enough to follow `validator="$action_dir/../../scripts/foo.py"` to a path
+    the guard can recognise. Unknown names are left verbatim (`${{ github.* }}`
+    is deliberately not an identifier, so it survives untouched).
+    """
+    for _ in range(8):
+        expanded = _SHELL_VAR.sub(
+            lambda m: env.get(m.group(1) or m.group(2), m.group(0)), text
+        )
+        if expanded == text:
+            return text
+        text = expanded
+    return text
+
+
+def _composite_step_run_body(action_text: str, step_name: str) -> str | None:
+    """Return the `run:` shell of the named composite step, or None if absent."""
+    lines = action_text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if re.match(rf"^(\s*)- name:\s*{re.escape(step_name)}\s*$", line):
+            start = index
+            indent = len(line) - len(line.lstrip())
+            break
+    if start is None:
+        return None
+
+    body: list[str] = []
+    run_indent = None
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped.startswith("- name:") and (len(line) - len(line.lstrip())) <= indent:
+            break  # next step at the same list level
+        if run_indent is None:
+            if re.match(r"^\s*run:\s*[|>]", line):
+                run_indent = len(line) - len(line.lstrip())
+            continue
+        if stripped and (len(line) - len(line.lstrip())) <= run_indent:
+            break  # dedented back out of the block scalar
+        body.append(line)
+    return None if run_indent is None else "\n".join(body)
+
+
+def manifest_validator_invocations(
+    action_text: str,
+) -> tuple[list[list[str]] | None, list[str]]:
+    """Every argv in the manifest-validation step that RUNS the bundled validator.
+
+    Why parse instead of `"--schemas-dir" in action_text`: a whole-file
+    substring test is satisfied by any occurrence anywhere, including the
+    comment in this very step that explains why `--schemas-dir` is passed. A
+    guard its own documentation satisfies proves nothing about the code — delete
+    the flag from the command, keep the paragraph above it, and the substring
+    test still passes while every consumer is silently re-pinned to v1. So:
+    take the step's `run:` block, drop comments (`shlex(comments=True)` knows a
+    `#` inside quotes is not one), resolve shell variables, and look at the
+    argument vectors that actually execute.
+
+    Returns `(invocations, unlexable_lines)`; `invocations` is None when the
+    step itself is missing. A line the lexer cannot read is reported rather than
+    skipped: a guard that quietly ignores what it cannot parse is the same
+    failure in a new place.
+    """
+    body = _composite_step_run_body(action_text, MANIFEST_VALIDATE_STEP)
+    if body is None:
+        return None, []
+
+    env: dict[str, str] = {}
+    invocations: list[list[str]] = []
+    unlexable: list[str] = []
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            tokens = shlex.split(line, comments=True)
+        except ValueError:
+            unlexable.append(line)
+            continue
+        if not tokens:
+            continue
+        assignment = _SHELL_ASSIGN.match(tokens[0]) if len(tokens) == 1 else None
+        if assignment:
+            env[assignment.group(1)] = _expand_shell_vars(assignment.group(2), env)
+            continue
+        argv = [_expand_shell_vars(token, env) for token in tokens]
+        interpreter = pathlib.PurePosixPath(argv[0]).name
+        runs_validator = argv[0].endswith(MANIFEST_VALIDATOR_BASENAME) or (
+            interpreter in {"python", "python3"}
+            and any(a.endswith(MANIFEST_VALIDATOR_BASENAME) for a in argv[1:])
+        )
+        if runs_validator:
+            invocations.append(argv)
+    return invocations, unlexable
+
+
 def check_cache_backed_optin_contract() -> int:
     """Guard the TIN-2110 opt-in cache-backed lane: default-off and cache-first.
 
@@ -391,13 +537,6 @@ def check_cache_backed_optin_contract() -> int:
         ok = False
     if action_path.exists():
         action_text = action_path.read_text(encoding="utf-8")
-        if "manifest-schema-validate.py" not in action_text:
-            print(
-                f"{action_path.relative_to(ROOT)}: repo-manifest-validate must use the "
-                "bundled stdlib validator (manifest-schema-validate.py)",
-                file=sys.stderr,
-            )
-            ok = False
         if "nix develop --command python3" in action_text:
             print(
                 f"{action_path.relative_to(ROOT)}: repo-manifest-validate must not depend on "
@@ -405,6 +544,84 @@ def check_cache_backed_optin_contract() -> int:
                 file=sys.stderr,
             )
             ok = False
+
+        # Everything below reads the ARGUMENT VECTORS of the validation step,
+        # never the file text. The action must hand the validator the schema
+        # DIRECTORY and let it route by schema_version: naming one schema file
+        # pins every consumer to that version, which is the shipped defect —
+        # `schemas/tinyland-repo-manifest.schema.json` hardcoded, so a repo on
+        # the published schema_version 2 failed with `at /schema_version: 1 was
+        # expected`, the gate blaming the manifest for a branch it lacked.
+        invocations, unlexable = manifest_validator_invocations(action_text)
+        rel_action = action_path.relative_to(ROOT)
+        if invocations is None:
+            print(
+                f"{rel_action}: no `{MANIFEST_VALIDATE_STEP}` step with a run: block; the "
+                "manifest gate's guards have nothing to read",
+                file=sys.stderr,
+            )
+            ok = False
+        elif unlexable:
+            print(
+                f"{rel_action}: cannot lex {len(unlexable)} line(s) of the "
+                f"`{MANIFEST_VALIDATE_STEP}` step ({unlexable[0]!r}); refusing to report a "
+                "verdict on shell this guard cannot read",
+                file=sys.stderr,
+            )
+            ok = False
+        elif not invocations:
+            print(
+                f"{rel_action}: the `{MANIFEST_VALIDATE_STEP}` step never executes "
+                f"scripts/{MANIFEST_VALIDATOR_BASENAME}; a comment naming it is not a gate",
+                file=sys.stderr,
+            )
+            ok = False
+        else:
+            for argv in invocations:
+                if "--schemas-dir" not in argv:
+                    print(
+                        f"{rel_action}: `{MANIFEST_VALIDATE_STEP}` runs the validator as "
+                        f"{shlex.join(argv)} — it must pass --schemas-dir and let "
+                        f"scripts/{MANIFEST_VALIDATOR_BASENAME} route by schema_version; "
+                        "naming a single schema file hardcodes one manifest version",
+                        file=sys.stderr,
+                    )
+                    ok = False
+                named = [
+                    a
+                    for a in argv
+                    if re.search(r"tinyland-repo-manifest[^/\s]*\.schema\.json", a)
+                ]
+                if named:
+                    print(
+                        f"{rel_action}: `{MANIFEST_VALIDATE_STEP}` passes {named[0]} to the "
+                        "validator, resolving a specific manifest schema itself; the "
+                        "version -> schema mapping belongs in SCHEMA_BY_VERSION "
+                        f"(scripts/{MANIFEST_VALIDATOR_BASENAME}) only",
+                        file=sys.stderr,
+                    )
+                    ok = False
+
+        # Every version the validator claims to support must actually be
+        # vendored here. A mapping entry with no file on disk is a version that
+        # is nominally supported and factually ungated.
+        validator_text = validator_path.read_text(encoding="utf-8")
+        mapped = re.findall(r"^\s*(\d+):\s*\"([^\"]+\.schema\.json)\",", validator_text, re.M)
+        if not mapped:
+            print(
+                f"{validator_path.relative_to(ROOT)}: SCHEMA_BY_VERSION parsed as empty; the "
+                "routing table is the whole gate and must not be silently unreadable",
+                file=sys.stderr,
+            )
+            ok = False
+        for version, schema_name in mapped:
+            if not (ROOT / "schemas" / schema_name).is_file():
+                print(
+                    f"{validator_path.relative_to(ROOT)}: schema_version {version} maps to "
+                    f"schemas/{schema_name}, which is not vendored in this repo",
+                    file=sys.stderr,
+                )
+                ok = False
 
     # TIN-2109: the contract script must DEFINE+ENFORCE the hardened gate behaviors.
     contract = contract_path.read_text(encoding="utf-8") if contract_path.exists() else ""
@@ -1030,12 +1247,226 @@ def check_lanes_schema_runner_class() -> int:
     return 0
 
 
+def check_vendored_schema_provenance() -> int:
+    """Assert every vendored schema still matches its recorded digest.
+
+    ci-templates carries COPIES of schemas whose own `$id` names
+    tinyland-inc/site.scaffold as the authority. Before schemas/VENDORED.json
+    existed there was no lock and no gate, and the v1 copy had silently
+    diverged from its source in BOTH directions -- ci-templates gained
+    `authorities.artifact_registry`, site.scaffold gained a `gitops_receiver`
+    prohibition -- with nothing comparing them. The v2 copy then arrived the
+    same way; it is byte-identical to its source today, which is precisely why
+    this is the cheapest moment to record it.
+
+    This gate is deliberately HERMETIC: it compares the vendored bytes to the
+    digests recorded in VENDORED.json, and does NOT reach out to site.scaffold.
+    A network call would make every consumer's CI depend on another repository
+    being reachable. What it catches is the thing a lock can catch offline: a
+    hand-edit to a vendored copy that never went through a re-vendor.
+
+    Upstream freshness is a different question and needs a different, non-
+    blocking mechanism -- the same split lab uses for its repo-contract source
+    locks.
+
+    A `drifted` entry is REPORTED, not failed. The divergence is known and
+    de-forking it changes what live consumers are validated against; what must
+    not happen is it going unnoticed again.
+
+    SCOPE. This check covers `schemas/*.schema.json` — every schema in the
+    directory. It was written globbing `tinyland-repo-manifest*.json`, and that
+    narrower glob was not a smaller version of the same gate, it was a gate
+    that could not see the file it most needed to: `schemas/lanes.schema.json`
+    carries a site.scaffold `$id`, is drifted from its source TODAY (the
+    vendored copy still describes blahaj PR-env provisioning, reaper TTL and
+    `--config=flywheel-executor`; upstream says the schema "grants no receiver,
+    apply, DNS, or lifecycle authority" and uses
+    `GF_BAZEL_SUBSTRATE_MODE=executor-backed`), and backs the `lanes-load`
+    action that tinyland.dev's CI actually runs. The old glob would have
+    printed "all 2 vendored schemas match" over a directory holding four, one
+    of them drifted and load-bearing — coverage-shaped output enforcing less
+    than it read as, which is the exact defect this file exists to end.
+
+    STATE VOCABULARY, and why each arm is asserted rather than recorded:
+
+      identical  the vendored bytes equal the upstream bytes; `upstream_sha256`
+                 must equal `sha256`, or the record is claiming a match it does
+                 not have
+      drifted    a known divergence; `upstream_sha256` must be present and must
+                 DIFFER, or "drifted" is describing a file that isn't
+      unsourced  the `$id` names a site.scaffold path that does not exist at
+                 the recorded revision, so there is nothing to compare and
+                 `upstream_sha256` must be absent
+
+    Before this, `state` and `upstream_sha256` were recorded and never checked:
+    an entry could say `identical` next to an `upstream_sha256` of 64 zeros and
+    pass silently. `state` is the field an operator reads to sequence the v1
+    de-fork, so unasserted metadata there is a wrong answer waiting to be
+    trusted. The digest equality is free and offline; what stays advisory is
+    `source_revision` itself, which only a network call could verify and which
+    this check deliberately will not make.
+    """
+
+    record_path = ROOT / "schemas" / "VENDORED.json"
+    if not record_path.is_file():
+        print(f"::error::missing vendoring record at {record_path}", file=sys.stderr)
+        return 1
+
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    entries = record.get("files", [])
+    if not entries:
+        # An empty record would pass every loop below while asserting nothing.
+        print(
+            "::error::schemas/VENDORED.json records no files; it cannot vouch for anything",
+            file=sys.stderr,
+        )
+        return 1
+
+    failures = 0
+
+    # Entry shape first, by name. A malformed record used to reach
+    # `entry["sha256"]` and die on an uncaught KeyError traceback -- it failed
+    # closed, but every other failure path in this function emits a `::error::`
+    # an operator can act on, and a stack trace is not one.
+    required_keys = ("vendored", "source", "sha256", "state")
+    well_formed = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            print(
+                f"::error file=schemas/VENDORED.json::files[{index}] is not an object",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+        absent = [key for key in required_keys if key not in entry]
+        if absent:
+            name = entry.get("vendored", f"files[{index}]")
+            print(
+                f"::error file=schemas/VENDORED.json::{name} is missing required "
+                f"key(s): {', '.join(absent)}. Every entry needs {', '.join(required_keys)}.",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+        well_formed.append(entry)
+
+    recorded = {entry["vendored"] for entry in well_formed}
+    on_disk = {
+        f"schemas/{path.name}"
+        for path in sorted((ROOT / "schemas").glob("*.schema.json"))
+    }
+    for missing in sorted(on_disk - recorded):
+        # A new vendored schema that nobody recorded is the exact hole this
+        # gate exists to close, so it must not be silently out of scope.
+        print(
+            f"::error file={missing}::schema in schemas/ is not recorded in "
+            "schemas/VENDORED.json, so nothing pins it to a source revision. Add an "
+            "entry with its source path, sha256 and state (use state=unsourced if "
+            "its $id names a path that does not exist upstream).",
+            file=sys.stderr,
+        )
+        failures += 1
+
+    for entry in well_formed:
+        vendored = ROOT / entry["vendored"]
+        if not vendored.is_file():
+            print(f"::error::vendored schema missing: {entry['vendored']}", file=sys.stderr)
+            failures += 1
+            continue
+        actual = hashlib.sha256(vendored.read_bytes()).hexdigest()
+        expected = entry["sha256"]
+        if actual != expected:
+            print(
+                f"::error file={entry['vendored']}::vendored schema does not match "
+                f"schemas/VENDORED.json (recorded {expected[:16]}, found {actual[:16]}). "
+                "Re-vendor from the recorded source revision instead of hand-editing "
+                "the copy, and update the digest in the same change.",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+
+        # The state claim itself, asserted against the digests beside it. These
+        # are pure record-internal consistency checks -- offline, no network --
+        # and they are what turns `state` from a comment into a fact.
+        state = entry["state"]
+        upstream = entry.get("upstream_sha256")
+        if state == "identical":
+            if upstream != actual:
+                print(
+                    f"::error file={entry['vendored']}::recorded state=identical but "
+                    f"upstream_sha256 ({(upstream or '(absent)')[:16]}) does not equal the "
+                    f"vendored digest ({actual[:16]}). Either the copy is drifted and the "
+                    "state is wrong, or the recorded upstream digest is.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+        elif state == "drifted":
+            if not upstream:
+                print(
+                    f"::error file={entry['vendored']}::recorded state=drifted without an "
+                    "upstream_sha256, so the divergence it claims is unmeasurable.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+            if upstream == actual:
+                print(
+                    f"::error file={entry['vendored']}::recorded state=drifted but "
+                    "upstream_sha256 equals the vendored digest -- the copy matches its "
+                    "source, so record it as identical rather than carrying a divergence "
+                    "that no longer exists.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+        elif state == "unsourced":
+            if upstream:
+                print(
+                    f"::error file={entry['vendored']}::recorded state=unsourced but an "
+                    "upstream_sha256 is present. Unsourced means no upstream file exists "
+                    "to digest; if one does, record identical or drifted.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+        else:
+            print(
+                f"::error file={entry['vendored']}::unknown state {state!r}. Accepted: "
+                "identical, drifted, unsourced.",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+
+        print(f"vendored ok: {entry['vendored']} ({state})")
+        if state in ("drifted", "unsourced"):
+            print(
+                f"::notice file={entry['vendored']}::{state} against "
+                f"{record['source_repository']}: {entry.get('state_note', '')}"
+            )
+
+    if failures:
+        return 1
+    counts = Counter(entry["state"] for entry in well_formed)
+    summary = ", ".join(f"{counts[state]} {state}" for state in sorted(counts))
+    print(
+        f"all {len(well_formed)} schemas in schemas/ are recorded in "
+        f"schemas/VENDORED.json and match their digests ({summary}; source "
+        f"{record['source_repository']} @ {record['source_revision'][:12]}, "
+        "revision itself advisory -- this check never leaves the checkout)"
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "check",
         choices=[
             "manifest",
+            "vendored-schema-provenance",
             "internal-refs",
             "js-bazel-runner-contract",
             "flywheel-reapi-proof-contract",
@@ -1048,6 +1479,8 @@ def main() -> int:
 
     if args.check == "manifest":
         return validate_manifest()
+    if args.check == "vendored-schema-provenance":
+        return check_vendored_schema_provenance()
     if args.check == "js-bazel-runner-contract":
         return check_js_bazel_package_runner_contract()
     if args.check == "flywheel-reapi-proof-contract":
