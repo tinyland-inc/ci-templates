@@ -156,7 +156,7 @@ STALE_INTERNAL_REF_FILES = {
 
 
 def check_v4_action_client_surface() -> bool:
-    """Assert the thin v4 workflow delegates execution to the compiled client.
+    """Assert v4 execution and opt-in publication stay compiled-client calls.
 
     This replaces the larger inline OCI/proxy assertion family. Retire it when
     the typed workflow-effect contract directly enforces this boundary.
@@ -180,6 +180,7 @@ def check_v4_action_client_surface() -> bool:
         "ref: ${{ env.SOURCE_SHA }}": "exact admitted source checkout",
         "ACTION_NAME: ${{ inputs.action_name }}": "caller-selected action identity",
         "/usr/local/bin/gf-action-client run": "compiled action client",
+        "/usr/local/bin/gf-action-client publish-application": "compiled application publisher",
         "--plan .github/lanes.json": "canonical action plan",
         '--action "$ACTION_NAME"': "one named action per invocation",
         '--source-sha "$SOURCE_SHA"': "source identity passed to the client",
@@ -187,23 +188,35 @@ def check_v4_action_client_surface() -> bool:
             '--result-dir "$RUNNER_TEMP/gf-action-result-'
             '${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ACTION_NAME}"'
         ): "job-unique qualified result directory",
+        "default: false": "default-off application publication",
+        "github.ref == 'refs/heads/main'": "canonical-main publication gate",
+        "github.ref_protected": "protected-ref publication gate",
+        "github.workflow_sha == github.sha": "exact caller-workflow source gate",
+        "group: gf-i09-application-publisher-${{ github.repository }}": "repository-keyed publisher concurrency",
+        "cancel-in-progress: false": "non-cancelling publisher concurrency",
+        '--base-image-digest "$RUNTIME_BASE_IMAGE_DIGEST"': "authority-bound runtime-base input",
+        '--publication-output "$RUNNER_TEMP/gf-application-publication-': "private publisher receipt path",
     }
     for snippet, claim in required.items():
         if snippet not in document:
             failures.append(f"missing {claim}")
 
     if re.findall(r"^      ([a-z_][a-z0-9_]*):$", call_surface, re.MULTILINE) != [
-        "action_name"
+        "action_name",
+        "publish_application",
+        "runtime_base_image_digest",
+        "materialized_root_max_files",
+        "materialized_root_max_bytes",
     ]:
-        failures.append("workflow_call must expose only the checked-in action name")
-    if document.count("id-token: write") != 1:
-        failures.append("the thin dispatcher must carry exactly one OIDC permission")
+        failures.append("workflow_call must expose only the action and conditional GF-I09 publication inputs")
+    if document.count("id-token: write") != 2 or document.count("packages: write") != 1:
+        failures.append("only the opt-in publisher may add package-write authority to the two OIDC jobs")
     if re.findall(
         r"^  ([a-z_][a-z0-9_-]*):$",
         document.partition("\njobs:\n")[2],
         re.MULTILINE,
-    ) != ["action-fabric"]:
-        failures.append("v4 action fabric must remain one thin job identity")
+    ) != ["action-fabric", "application-publisher"]:
+        failures.append("v4 must contain only the action and protected application-publisher jobs")
 
     for forbidden in (
         "executionPool",
@@ -212,7 +225,6 @@ def check_v4_action_client_surface() -> bool:
         "BAZEL_REMOTE_",
         "gloriousflywheel-rbe-",
         "@v4.0.0",
-        "packages: write",
         "contents: write",
         "git push",
         "curl ",

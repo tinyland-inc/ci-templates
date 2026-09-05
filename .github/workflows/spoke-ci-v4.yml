@@ -10,19 +10,44 @@ on:
         description: Named action from the caller's checked-in .github/lanes.json.
         required: true
         type: string
-
-permissions:
-  contents: read
-  id-token: write
+      publish_application:
+        description: Publish the qualified export on a protected canonical-main push.
+        required: false
+        default: false
+        type: boolean
+      runtime_base_image_digest:
+        description: >-
+          Exact authority-bound signed runtime-base digest; required when
+          publish_application is true.
+        required: false
+        default: ''
+        type: string
+      materialized_root_max_files:
+        description: >-
+          Reviewed application-root file bound; required when
+          publish_application is true.
+        required: false
+        default: 0
+        type: number
+      materialized_root_max_bytes:
+        description: >-
+          Reviewed application-root byte bound; required when
+          publish_application is true.
+        required: false
+        default: 0
+        type: number
 
 jobs:
   action-fabric:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ (github.event_name == 'push' && !inputs.publish_application) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     # Every adopting organization provisions this thin dispatch edge in its
     # own runner group. The edge submits one named action; it is not the
     # execution pool or a Tinyland-owned provider route.
     runs-on: gf-v4-dispatch
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
     env:
       SOURCE_SHA: '${{ fromJSON(format(''{{"pull_request":"{0}","push":"{1}"}}'', github.event.pull_request.head.sha, github.sha))[github.event_name] }}'
     steps:
@@ -45,3 +70,43 @@ jobs:
             --action "$ACTION_NAME" \
             --source-sha "$SOURCE_SHA" \
             --result-dir "$RUNNER_TEMP/gf-action-result-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ACTION_NAME}"
+
+  application-publisher:
+    if: ${{ inputs.publish_application && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.ref_protected && github.workflow_sha == github.sha }}
+    runs-on: gf-v4-dispatch
+    timeout-minutes: 45
+    concurrency:
+      group: gf-i09-application-publisher-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Check out exact protected-main source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Publish qualified application release
+        shell: bash
+        env:
+          ACTION_NAME: ${{ inputs.action_name }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RUNTIME_BASE_IMAGE_DIGEST: ${{ inputs.runtime_base_image_digest }}
+          MATERIALIZED_ROOT_MAX_FILES: ${{ inputs.materialized_root_max_files }}
+          MATERIALIZED_ROOT_MAX_BYTES: ${{ inputs.materialized_root_max_bytes }}
+        run: |
+          set -euo pipefail
+          /usr/local/bin/gf-action-client publish-application \
+            --plan .github/lanes.json \
+            --action "$ACTION_NAME" \
+            --source-sha "$SOURCE_SHA" \
+            --result-dir "$RUNNER_TEMP/gf-action-result-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ACTION_NAME}" \
+            --publication-output "$RUNNER_TEMP/gf-application-publication-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ACTION_NAME}.json" \
+            --base-image-digest "$RUNTIME_BASE_IMAGE_DIGEST" \
+            --materialized-root-max-files "$MATERIALIZED_ROOT_MAX_FILES" \
+            --materialized-root-max-bytes "$MATERIALIZED_ROOT_MAX_BYTES"

@@ -5,7 +5,18 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
-## [5.1.1] — 2026-09-04
+## [5.2.0] — 2026-09-04
+
+### Added
+
+- **TIN-4257 protected GF-I09 application publisher.** Add a default-off
+  `spoke-ci-v4.yml` mode that replaces the ordinary push action with the
+  image-custodied `gf-action-client publish-application` transaction only for
+  a protected canonical-`main` push. Its job alone receives `packages: write`,
+  is serialized per source repository without cancellation, and requires an
+  exact signed runtime-base digest plus reviewed materialization bounds. The
+  workflow does not produce or select a runtime base, parse qualified output,
+  construct OCI state, or carry a fallback.
 
 ### Changed
 

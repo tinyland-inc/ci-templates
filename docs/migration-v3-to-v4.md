@@ -1,7 +1,7 @@
 # Migrate from v3 CI profiles to the v4 action fabric
 
 > Historical first step: `v4.0.0` carried ActionPlan/v4 schema 2. The current
-> target is schema 3 through `spoke-ci-v4.yml@v5.1.1` or newer; schema 2 is not
+> target is schema 3 through `spoke-ci-v4.yml@v5.2.0` or newer; schema 2 is not
 > a fallback.
 
 `v4.0.0` is a breaking interface. V4 schedules Bazel actions through the
@@ -14,7 +14,7 @@ The immutable workflow pin is:
 ```yaml
 jobs:
   unit-tests:
-    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.1.1
+    uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@v5.2.0
     with:
       action_name: unit-tests
 ```
@@ -73,7 +73,7 @@ names a runner label, node, cluster, storage class, provider endpoint, or image.
    image must accept the workflow's `--result-dir` contract before the caller
    pin moves.
 6. After the attended immutable release exists, pin
-   `spoke-ci-v4.yml@v5.1.1`; do not move or reuse `v5.1.0`.
+   `spoke-ci-v4.yml@v5.2.0`; do not move or reuse `v5.1.0`.
 7. Prove one remote cache miss with nonzero remote execution, then repeat the
    same action and prove a same-authority ActionCache hit. Attribute both to the
    consumer in the measurement plane.

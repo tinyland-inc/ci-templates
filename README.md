@@ -15,8 +15,9 @@ Spokes spawned from `tinyland-inc/site.scaffold` consume this repo for:
 
 - **Spoke CI** (lint, type-check, build, test, Bazel graph, optional
   Playwright) via `spoke-ci.yml` reusable workflow.
-- **Breaking v4 action-fabric CI** via `spoke-ci-v4.yml`: one action-only plan
-  and one compiled-client dispatch boundary.
+- **Breaking v4 action-fabric CI** via `spoke-ci-v4.yml`: one action-only plan,
+  one compiled-client dispatch boundary, and an optional protected-main GF-I09
+  application publication mode.
 - **Static projection snapshot refresh** via `spoke-pulse-ingest.yml`.
 - **GloriousFlywheel REAPI binding** via the `flywheel-bazel` composite
   action.
@@ -76,15 +77,30 @@ REAPI action dispatch, and result interpretation. The reusable workflow always
 supplies one new job-unique directory beneath `RUNNER_TEMP`; the checked-in
 ActionPlan remains the sole result-disposition authority, and the workflow does
 not parse or upload the directory. It does not reproduce client lifecycles in
-Bash, Python, proxy composites, OCI helpers, or fallback paths. The fixed files
-are a structural handoff and do not convey GF-I09 publication authority.
-Consumers needing this caller contract pin the immutable `@v5.1.1` release
-after the provider image accepts `--result-dir`; `v5.1.0` is never moved or
-reused. The tag publishes this
-workflow contract; it does not by itself prove consumer adoption, provider
-convergence, runtime execution, qualification, or publication. Those remain
-fail-closed until the signed consumer overlay, verified provider supply,
-current binding catalog, and matching provider image are all present.
+Bash, Python, proxy composites, OCI helpers, or fallback paths.
+
+Beginning with `v5.2.0`, `publish_application: true` replaces the ordinary
+push action with the same image-custodied client's `publish-application`
+transaction only when the caller is on a protected canonical `main`. Pull
+requests keep the ordinary non-publishing action. The publisher alone receives
+`packages: write`; repository-keyed concurrency never cancels an in-flight
+publisher. It also requires `runtime_base_image_digest`,
+`materialized_root_max_files`, and `materialized_root_max_bytes`. Their
+fail-closed defaults are empty or zero: ci-templates does not build, select, or
+infer a runtime base, and a caller must not enable publication until the
+separate upstream base authority has produced its reviewed signed digest.
+
+Consumers needing only the qualified-result repair may pin the immutable
+`@v5.2.0` release after the provider image accepts `run`. A publisher caller
+must instead pin the exact 40-character commit behind that release because its
+OIDC `job_workflow_ref` is part of the GF-I09 identity; a tag-shaped workflow
+ref is an intentional client refusal. `v5.1.0` is never moved or reused. The
+release publishes workflow source only. It does not by itself prove consumer
+adoption, provider convergence, runtime execution, qualification, base
+publication, application publication, or serving. Those remain fail-closed
+until the signed consumer overlay, verified provider supply, current binding
+catalog, matching provider image, and (for publication) authority-bound
+runtime-base digest are present.
 
 Existing schema-2 callers must follow
 [`docs/migration-v4-to-v5.md`](./docs/migration-v4-to-v5.md). V3 callers start
