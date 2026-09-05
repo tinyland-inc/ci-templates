@@ -5,6 +5,30 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-09-05
+
+> **This section releases as `v3.2.0` (MINOR)** per `RELEASING.md`. It is the
+> v3-line release of the TIN-4192 manifest-gate fix (ci-templates #152, merged
+> to `main` 2026-08-29 as `d4a6e839`) together with the `schema_version`
+> dispatch it is built on (#146) and the manifest hygiene PATCH (#144).
+> No composite-action input, reusable-workflow input, or secrets interface
+> changes, and no schema major bump; MINOR is carried by #146's new v2 schema
+> branch.
+>
+> **Why this release exists: `v3.1.0` shipped no fix.** `v3` and `v3.1.0` both
+> resolve to `d8d178c0` (cut 2026-08-19), which predates `d4a6e839`. The fix is
+> an ancestor of `v4.0.0`, `v5.0.0` and `v5.1.0` only, and `spoke-ci-v4.yml`
+> carries no manifest gate at all — so as of this commit **no released version
+> delivers the fix to a manifest-gating consumer.** `spoke-ci.yml` calls the
+> inner action through the floating `@v3` ref, so advancing `v3` to this
+> release is what actually delivers it; consumers pinned to the immutable
+> `spoke-ci.yml@v3.1.0` pick it up with nothing changing on their side.
+>
+> **Blast radius (see the release PR for the measured consumer table):** every
+> consumer whose gate resolves through `@v3` stops accepting manifests that the
+> deleted subset engine passed vacuously. Consumers reaching the gate through
+> `@v2` or an exact `@v2.12.x` pin are unaffected by moving `v3`.
+
 ### Removed
 
 - **The dependency-free fallback validator is deleted** (TIN-4132, operator
