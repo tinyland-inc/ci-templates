@@ -28,6 +28,15 @@ Versioning: [SemVer 2.0](https://semver.org/).
   explicit opt-out for lanes that never touch Nix and restores the previous
   path byte-for-byte. Third standing exception to AGENTS.md rule 2; callers
   pinned to `@v3` / `@v2.12.1` / `v5.x` are unaffected until they move pins.
+  Restores TIN-3836 ruling 3 (operator, 2026-08-17: "ci-templates reader:
+  GF-parity degrade — public substituter + ATTIC_PUBLIC_KEY unconditional;
+  token gates netrc/push only; loud warning on degrade"), which #134 shipped
+  as the opt-in `"false"` default. `nix-build` and `greedy-cache` now
+  self-pin `nix-setup@v6.0.0` — the MAJOR this entry lands in — instead of
+  floating `@v3`, which resolved the v3-line opt-in `nix-setup` and made the
+  flipped default fail-open (TIN-4246 steamroll audit c2093793). The release
+  commit MUST retarget both pins if it names a different version
+  (RELEASING.md step 3).
 
 ### Changed
 

@@ -40,7 +40,14 @@ a fleet-wide change.
    substitute from an unverified cache, so the default flipped and the edge
    hard-fails on an absent key or unreachable substituter; it takes a MAJOR
    bump, and `attic-public-read: "false"` remains the explicit, byte-identical
-   opt-out for lanes that never touch Nix.
+   opt-out for lanes that never touch Nix. It restores TIN-3836 ruling 3
+   (operator, 2026-08-17: "ci-templates reader: GF-parity degrade — public
+   substituter + ATTIC_PUBLIC_KEY unconditional; token gates netrc/push only;
+   loud warning on degrade"), which #134 shipped under this rule as the
+   opt-in `"false"` default instead. The `nix-build` / `greedy-cache`
+   pass-throughs self-pin `nix-setup` at the exact MAJOR that carries the
+   flip; floating `@v3` there was default-on but fail-open (TIN-4246 audit
+   c2093793).
 3. **No GitHub-hosted runners, ever.** Operator ruling, 2026-08-19: the estate
    runs ONLY on GF cache-fronted self-hosted runners. Every `runs-on` names an
    org capability class. Three gates, deliberately reading different things:

@@ -35,7 +35,14 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v3
+    # Exact self-pin (RELEASING.md "Composite-action internal refs";
+    # scripts/validate-ci-templates.py check_internal_refs). `uses:` resolves
+    # nix-setup at ITS OWN ref: the floating `@v3` here passed the flipped
+    # default to the v3-line opt-in nix-setup -- default-on but fail-OPEN
+    # (TIN-4246 steamroll audit c2093793). v6.0.0 is the MAJOR the CHANGELOG
+    # entry lands in; the release commit retargets this pin if it names another
+    # version (RELEASING.md step 3).
+    - uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v6.0.0
       with:
         attic-server: ${{ inputs.attic-server }}
         attic-cache: ${{ inputs.attic-cache }}
