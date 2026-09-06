@@ -411,6 +411,14 @@ def check_flywheel_reapi_proof_contract() -> int:
 MANIFEST_VALIDATE_STEP = "Validate repo manifest schema"
 MANIFEST_VALIDATOR_BASENAME = "manifest-schema-validate.py"
 
+#: The interpreter-selection helper (2026-09-06 follow-up to TIN-4132): the
+#: step no longer invokes a literal `python3`/`python` -- it captures the
+#: output of this script into a variable and invokes THAT. A variable whose
+#: assignment's RHS names this basename is trusted as "a real interpreter
+#: path was resolved here", the same way `interpreter in {"python","python3"}`
+#: is trusted for a literal invocation below.
+MANIFEST_PYTHON_SELECTOR_BASENAME = "manifest-python-select.sh"
+
 _SHELL_ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _SHELL_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -485,6 +493,7 @@ def manifest_validator_invocations(
         return None, []
 
     env: dict[str, str] = {}
+    interpreter_selector_vars: set[str] = set()
     invocations: list[list[str]] = []
     unlexable: list[str] = []
     for raw in body.splitlines():
@@ -500,12 +509,28 @@ def manifest_validator_invocations(
             continue
         assignment = _SHELL_ASSIGN.match(tokens[0]) if len(tokens) == 1 else None
         if assignment:
-            env[assignment.group(1)] = _expand_shell_vars(assignment.group(2), env)
+            name, value = assignment.group(1), assignment.group(2)
+            env[name] = _expand_shell_vars(value, env)
+            if MANIFEST_PYTHON_SELECTOR_BASENAME in env[name]:
+                interpreter_selector_vars.add(name)
             continue
+        raw_interpreter_token = tokens[0]
         argv = [_expand_shell_vars(token, env) for token in tokens]
         interpreter = pathlib.PurePosixPath(argv[0]).name
+        # A bare `$chosen`/`${chosen}` in argv[0] cannot be resolved to a real
+        # path by textual substitution alone (its value came from a captured
+        # command's OUTPUT, not another shell variable) -- so it is trusted
+        # here only when it names a variable this same step assigned from
+        # MANIFEST_PYTHON_SELECTOR_BASENAME's output. Anything else in argv[0]
+        # position is held to the existing literal-python-or-basename rule.
+        selector_var_match = _SHELL_VAR.fullmatch(raw_interpreter_token)
+        argv0_is_selected_interpreter = bool(
+            selector_var_match
+            and (selector_var_match.group(1) or selector_var_match.group(2))
+            in interpreter_selector_vars
+        )
         runs_validator = argv[0].endswith(MANIFEST_VALIDATOR_BASENAME) or (
-            interpreter in {"python", "python3"}
+            (interpreter in {"python", "python3"} or argv0_is_selected_interpreter)
             and any(a.endswith(MANIFEST_VALIDATOR_BASENAME) for a in argv[1:])
         )
         if runs_validator:

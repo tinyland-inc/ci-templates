@@ -37,6 +37,7 @@ runs:
         action_dir="${{ github.action_path }}"
         schemas_dir="$action_dir/../../../schemas"
         validator="$action_dir/../../../scripts/manifest-schema-validate.py"
+        selector="$action_dir/../../../scripts/manifest-python-select.sh"
         manifest="${{ inputs.path }}"
         if [[ ! -d "$schemas_dir" ]]; then
           echo "::error::ci-templates schema directory missing at $schemas_dir"
@@ -44,6 +45,10 @@ runs:
         fi
         if [[ ! -f "$validator" ]]; then
           echo "::error::ci-templates manifest validator missing at $validator"
+          exit 1
+        fi
+        if [[ ! -f "$selector" ]]; then
+          echo "::error::ci-templates interpreter selector missing at $selector"
           exit 1
         fi
         if [[ ! -f "$manifest" ]]; then
@@ -94,10 +99,26 @@ runs:
         # package, so that sentence sent a blocked caller to a composite with
         # nothing to give them. A refusal with an inert remedy is a hard stop
         # with no exit.
-        if ! python3 -c 'import jsonschema' >/dev/null 2>&1; then
-          echo "::error::python3 cannot import 'jsonschema', so this gate has no validator. It REFUSES to substitute a weaker one (TIN-4132). Remedy: make the python3 this job runs one that CAN import it — add a step BEFORE this one that puts it on PATH (\`nix profile install nixpkgs#python3Packages.jsonschema\`), or run the calling job inside a devshell that carries it. The ci-templates nix-setup and setup-nix composites do NOT provide it: nix-setup configures Attic/Bazel cache endpoints, setup-nix installs Nix itself, and neither installs a python package."
-          exit 5
+        # Consult the interpreter that ACTUALLY has jsonschema, not bare
+        # `python3` off PATH (TIN-4132 follow-up, 2026-09-06). Every consumer
+        # of this action runs setup-nix first, which puts a Nix profile
+        # interpreter ahead of everything else on PATH; that interpreter does
+        # not carry jsonschema, while GF's runner image asserts jsonschema
+        # under /usr/bin/python3 (build receipt, GF run 33616870780 stage
+        # 11/11; live gap confirmed by site.scaffold run 33795601349, job
+        # 'ci / repo-manifest', 2026-09-03T19:19:44Z). manifest-python-select.sh
+        # is the ONE place the candidate list and probe live; it logs every
+        # candidate's verdict and, on total failure, names every candidate it
+        # tried in the same exit-5 refusal this gate already used -- never a
+        # weaker verdict.
+        set +e
+        chosen="$(bash "$selector")"
+        select_rc=$?
+        set -e
+        if [[ $select_rc -ne 0 ]]; then
+          exit "$select_rc"
         fi
+        echo "::notice::repo-manifest-validate: chosen=$chosen"
 
         # Route by the manifest's own schema_version rather than hardcoding the
         # v1 schema. This step used to pass schemas/tinyland-repo-manifest.schema.json
@@ -128,7 +149,7 @@ runs:
         # drift apart" failure this change exists to close, reproduced one
         # directory away from the file it was closing it in.
         set +e
-        python3 "$validator" --schemas-dir "$schemas_dir" "$manifest"
+        "$chosen" "$validator" --schemas-dir "$schemas_dir" "$manifest"
         rc=$?
         set -e
         case "$rc" in
