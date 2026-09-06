@@ -1,0 +1,26 @@
+# Default owner for all paths
+* @Jesssullivan
+
+# Reusable workflows and composite actions (widest blast radius: every
+# spoke repo in the org inherits from here).
+# NOTE: /.github/workflows/* is flat (files directly under the dir) so the
+# single-star glob is correct there. /.github/actions/* is NOT flat -- all
+# composite actions live at /.github/actions/<name>/action.yml, and
+# CODEOWNERS globs don't cross path separators, so `/.github/actions/*`
+# matches zero files and silently falls through to the default `*` owner
+# above. Use the trailing-slash directory form, which matches recursively.
+/.github/workflows/* @Jesssullivan
+/.github/actions/ @Jesssullivan
+
+# Contract / guard scripts that back the `just check` chain. Flat today
+# (no subdirectories) but using the recursive directory form defends
+# against the same latent trap if that ever changes.
+/scripts/ @Jesssullivan
+
+# Vendored dispatch/manifest schemas consumed by spoke repos. Flat today;
+# recursive directory form for the same reason as /scripts/ above.
+/schemas/ @Jesssullivan
+
+# Shared bazelrc fragments (cache/endpoint policy surface). Flat today;
+# recursive directory form for the same reason as /scripts/ above.
+/bazelrc/ @Jesssullivan
