@@ -1,0 +1,82 @@
+{
+	"$schema": "../../docs/schemas/tinyland-repo-manifest.v2.schema.json",
+	"schema_version": 2,
+	"repo": {
+		"name": "example-spoke",
+		"github": "tinyland-inc/example-spoke",
+		"defaultBranch": "main",
+		"domain": "example.invalid",
+		"description": "Synthetic v2 manifest fixture. Exists only to prove the gate routes schema_version 2 to the v2 schema; it is not a real repository."
+	},
+	"taxonomy": {
+		"primary_role": "app-stateful-spoke",
+		"layers": [
+			"org-wide-repo-contract",
+			"bazel-package-cache-rbe",
+			"app-stateful-spoke"
+		]
+	},
+	"enrollment": {
+		"forgeScope": "tinyland-inc",
+		"organizationOverlay": "tinyland-inc/example-infra",
+		"organizationOverlayRole": "organization-execution-overlay",
+		"organizationOverlayComposition": "distinct",
+		"executionPool": "tinyland-nix",
+		"substrateMode": "shared-cache-backed",
+		"bindingStatus": "declared"
+	},
+	"runtime_network": {
+		"declarations": []
+	},
+	"contracts": {
+		"agent_contract": "AGENTS.md",
+		"just": "Justfile",
+		"nix": "flake.nix",
+		"github_actions": ".github/workflows",
+		"secrets_scan": "gitleaks",
+		"conformance": "nix develop --command just cache-contract-strict"
+	},
+	"boundaries": {
+		"owns_runtime_backend": true,
+		"owns_auth": true,
+		"owns_payments": false,
+		"owns_activitypub_delivery": false,
+		"owns_live_broker_fetch": false,
+		"owns_static_projection_ingest": false,
+		"owns_gitops_apply": false,
+		"owns_cloudflare_mutation": false,
+		"owns_bazel_module_authority": false,
+		"owns_application_pins": false,
+		"owns_application_state": false,
+		"owns_secret_declarations": false,
+		"owns_application_workloads": false,
+		"owns_application_zone_dns": false,
+		"owns_application_mail_policy": false,
+		"owns_application_database": false,
+		"owns_forge_app_installations": false,
+		"owns_runner_enrollment": false,
+		"owns_org_grants": false
+	},
+	"authorities": {
+		"ci_templates": "tinyland-inc/ci-templates",
+		"flywheel_product_authority": "tinyland-inc/GloriousFlywheel",
+		"cache_rbe_authority": "tinyland-inc/GloriousFlywheel",
+		"package_registry": "tinyland-inc/bazel-registry",
+		"apply_plane": {
+			"target": {
+				"authority_class": "dedicated-owner-overlay",
+				"repository": "tinyland-inc/example-infra",
+				"binding_status": "source-present"
+			}
+		}
+	},
+	"supply_chain": {
+		"sbom": {
+			"status": "not-required",
+			"formats": [
+				"CycloneDX JSON"
+			],
+			"notes": "Synthetic fixture: no SBOM is produced for a manifest that describes no real repository."
+		}
+	}
+}

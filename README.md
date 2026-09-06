@@ -84,8 +84,9 @@ jobs:
 
 Your spoke needs `.github/lanes.json` validating against
 [`schemas/lanes.schema.json`](./schemas/lanes.schema.json). New spokes should
-also include `tinyland.repo.json` validating against
-[`schemas/tinyland-repo-manifest.schema.json`](./schemas/tinyland-repo-manifest.schema.json).
+also include `tinyland.repo.json`, which is validated against the schema its own
+`schema_version` names — `1` or `2`; see
+[Manifest `schema_version` routing](#manifest-schema_version-routing).
 
 To inherit the canonical scaffold agent skills into a spoke:
 
@@ -491,10 +492,173 @@ above assumes the first release that ships this lane.
 
 ## Schemas
 
-`schemas/tinyland-repo-manifest.schema.json` and `schemas/lanes.schema.json`
+`schemas/tinyland-repo-manifest.schema.json`,
+`schemas/tinyland-repo-manifest.v2.schema.json`, and `schemas/lanes.schema.json`
 are vendored from `tinyland-inc/site.scaffold/docs/schemas/`. The
 schema-doc repo is the source of truth; this repo vendors at known
 stable paths so composite actions can `jsonschema` against them.
+
+### Manifest `schema_version` routing
+
+`tinyland.repo.json` carries an integer `schema_version`, and each published
+value has its own vendored schema: `1` →
+[`schemas/tinyland-repo-manifest.schema.json`](./schemas/tinyland-repo-manifest.schema.json),
+`2` →
+[`schemas/tinyland-repo-manifest.v2.schema.json`](./schemas/tinyland-repo-manifest.v2.schema.json).
+
+`SCHEMA_BY_VERSION` in
+[`scripts/manifest-schema-validate.py`](./scripts/manifest-schema-validate.py) is
+the only place that mapping lives. The `repo-manifest-validate` composite passes
+`--schemas-dir schemas` and lets the validator route; it does not name a schema
+file. `validate-ci-templates.py cache-backed-optin-contract` fails if the action
+starts resolving one itself, or if a mapped version has no vendored schema.
+
+The mapping is **total**. A `schema_version` that is absent, denotes no integer,
+or is an integer with no vendored schema exits `3` and names the value it saw;
+it is never routed to v1 as a fallback. "Denotes an integer" is JSON's
+definition, not Python's: `2.0` routes to v2, because JSON Schema 2020-12 counts
+a number with zero fractional part as an `integer` and the v2 schema's
+`{"const": 2}` accepts it — a router that exited `3` there would be refusing to
+route a document the schema it would have routed to accepts. `true` does *not*
+route to v1, even though `bool` subclasses `int` in Python. Both rules live in
+`_as_schema_version()`. Before this routing existed, the composite
+hardcoded the v1 path, so a consumer on the published `schema_version` 2 failed
+the gate with a wall of `Additional properties are not allowed` ending in `at
+/schema_version: 1 was expected` — the gate blaming the manifest for a branch
+the gate did not have. Exit `4` is separate again, for a version that routes to
+a schema absent from the ci-templates checkout: that means nothing validated the
+manifest, which is a broken release rather than a consumer problem.
+
+### One engine, or no verdict
+
+The validator imports `jsonschema` or exits `5` naming the dependency. There is
+no fallback, deliberately (TIN-4132/TIN-4192).
+
+`5` is its own code and not shared with `2`. The refusal and every usage/IO
+error answered `2` together in the first draft, and the composite's `2)` arm —
+written for the refusal — therefore greeted an unparseable `tinyland.repo.json`
+with "this is a RUNNER problem, not a manifest problem". The caller went
+looking at their runner image for a defect that was a comma in their own file.
+`2` now means only what it says: the CLI was called wrongly, or the manifest or
+a schema could not be read.
+
+A dependency-free stdlib validator used to stand in whenever the package was
+unimportable. It implemented a *subset* of JSON Schema and, for months, never
+evaluated `not` — so every prohibition passed unconditionally. The v2 schema
+expresses its role discipline negatively (`not` ×17, `contains` ×13, `anyOf`
+×4), so under the subset the overlay branches were unsatisfiable, which was
+misread as schema over-reach for weeks. Widening it and adding a coverage guard
+made it *honest about its gaps*; it was still a second engine kept in step with
+the first by a hand-written harness. A gate that reads as coverage while
+enforcing less than the schema says is worse than no gate.
+
+Its reason for existing is gone as well. It guarded a cold `nix develop`
+failing on a nix-store lock (TIN-2109) — a failure class of the shared-store
+host-runner generation. Current ARC pods mount per-pod ephemeral nix stores, so
+that contention is structurally gone.
+
+**Supplying the dependency is the calling workflow's job, and no ci-templates
+composite does it for you.** An earlier draft of this section said `jsonschema`
+was "supplied by the `nix-setup` composite, cache-hot from the in-cluster
+Attic". It is not, and never was: grep `nix-setup/action.yml` for
+`python|pip|jsonschema|nix develop` and the only line that matches is `set -euo
+pipefail` — it detects Attic and Bazel cache endpoints. `setup-nix` installs Nix
+and starts its daemon; it installs no python package either. Put a step before
+`repo-manifest-validate` that makes `python3` able to import it (`nix profile
+install nixpkgs#python3Packages.jsonschema`, or a devshell the job runs inside).
+`repo-manifest-validate` deliberately does *not* shell out to `nix develop`
+itself — `just cache-backed-optin-contract-check` still asserts it must not, and
+making the gate's own bootstrap a second failure surface is not the fix.
+
+`scripts/manifest-schema-validate-selftest.sh` (via `just
+manifest-validate-selftest`) covers routing and validation against that one
+engine, plus a **refusal contract**: with `jsonschema` hidden behind an
+`ImportError` shim, the validator must exit `5` and name the dependency, and
+must not return a verdict of any kind — including on an *invalid* manifest,
+where answering `1` would mean something still validated it. Every one of those
+cases returned `0` or `1` off the subset before it was deleted, so they are live
+guards against a fallback being reintroduced rather than tautologies. A second
+lane pins the other half of the split — with the engine *present*, a malformed
+or absent manifest must be `2`, so the two meanings cannot silently recombine —
+and two cases assert the refusal names a remedy that exists and says which
+composites cannot help. It also
+carries an **engine-identity control**: a `dependentRequired` violation must be
+*reported*, which is a verdict only the real engine can produce. On a host that
+cannot import `jsonschema` the harness refuses (exit `2`) rather than printing
+"0 failed" over an engine it never ran.
+
+### Vendored schema provenance
+
+`schemas/VENDORED.json` records the source revision and per-file sha256 of
+**every schema in `schemas/`**, and `just vendored-schema-provenance-check`
+asserts the copies still match. Before it, there was no lock and no gate, and
+the v1 copy had silently diverged from its source in **both** directions with
+nothing comparing them.
+
+Scope is the whole directory on purpose. The first draft globbed
+`tinyland-repo-manifest*.json` and reported "all 2 vendored schemas match" over
+a directory holding four — including `lanes.schema.json`, which this README's
+own vendoring note already listed, which is drifted today, and which backs the
+`lanes-load` action that consumer CI runs. A gate that reads as coverage while
+enforcing less than it appears to is the defect this whole section is about.
+
+Each entry carries a `state`, and the state is **asserted**, not just recorded:
+`identical` requires `upstream_sha256` to equal the vendored digest, `drifted`
+requires one that differs, and `unsourced` requires none at all. Before that,
+an entry could claim `identical` beside an `upstream_sha256` of 64 zeros and
+pass — unread metadata in the exact field an operator reads to sequence a
+de-fork.
+
+`unsourced` is a real class here, not a placeholder:
+`blahaj-dispatch.schema.json` and `public-preview-dispatch.schema.json` carry
+`$id`s naming site.scaffold paths that **404** at the recorded revision. Their
+digests are still pinned, so a hand-edit is caught; what cannot be claimed is
+provenance. That also means the "`$id` names the authority" heuristic this file
+rests on is not by itself reliable, which is worth knowing before trusting it
+elsewhere.
+
+The gate is deliberately **hermetic**: recorded digests only, no network. A
+network call would make every consumer's CI depend on another repository being
+reachable. It catches what a lock can catch offline — a hand-edit that never
+went through a re-vendor — plus a schema that no entry records, a malformed
+entry (named, not a traceback), and a record with no entries at all. Upstream
+*freshness*, and `source_revision` itself, stay separate non-blocking
+questions: no offline check can prove that string names a real commit. An entry
+marked `drifted` is reported, never failed.
+
+**Do not reflexively re-vendor a `drifted` entry.** `lanes.schema.json` has
+drifted in both directions and this repo is *ahead* on one of them: the
+vendored copy carries the TIN-3914 org-namespaced capability-class `pattern`
+where upstream still carries a hardcoded `tinyland-*` `enum`. Adopting
+upstream's bytes turns this repo's own `just lanes-schema-runner-class-check`
+red (`runnerClass no longer admits capability class great-falls-tool-bus-nix`).
+Upstream is ahead on authority language. Reconciling it is a real change with a
+real decision in it.
+
+**Known drift, not closed here:** the vendored
+`tinyland-repo-manifest.schema.json` (v1) and site.scaffold's copy have diverged
+in both directions. Measured by normalising both documents before diffing, so
+indentation and key order cannot inflate the count (a raw `diff -u` of the two
+files reports 136 changed lines, almost all of it formatting):
+
+```console
+$ norm() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])),indent=2,sort_keys=True))' "$1"; }
+$ diff <(norm ../site.scaffold/docs/schemas/tinyland-repo-manifest.schema.json) \
+       <(norm schemas/tinyland-repo-manifest.schema.json) | grep -c '^[<>]'
+22
+```
+
+22 differing lines (13 only upstream, 9 only here), which resolve to **two
+constraint-bearing differences, one in each direction** — this repo carries an
+`authorities.artifact_registry` property site.scaffold lacks; site.scaffold
+carries an `authorities` `not`/`required: [gitops_receiver]` constraint this copy
+lacks — plus **five annotation-only differences** (four reworded `description`s
+and one `description` dropped from a `$ref`). Pinned to blobs so the figure stays
+checkable: this copy is `c724d1bf`, site.scaffold's is `981427d8` at
+`site.scaffold` `6c58bb6`. Nothing compares them automatically. The v2 schema
+vendored alongside is byte-identical to site.scaffold's (both blob
+`74c13a7a`, last changed there by `8659dcd`), and reconciling the v1 copies is a
+separate change to the vendored file, not to this router.
 
 `schemas/blahaj-dispatch.schema.json` and
 `schemas/public-preview-dispatch.schema.json` are retired-era historical

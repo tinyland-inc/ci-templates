@@ -15,8 +15,7 @@
     "layers": [
       "org-wide-repo-contract",
       "ci-template-library",
-      "bazel-package-cache-rbe",
-      "gitops-receiver"
+      "bazel-package-cache-rbe"
     ]
   },
   "contracts": {
@@ -40,7 +39,6 @@
   },
   "authorities": {
     "content_authority": "tinyland.dev",
-    "gitops_receiver": "tinyland-inc/blahaj",
     "ci_templates": "tinyland-inc/ci-templates",
     "cache_rbe_authority": "tinyland-inc/GloriousFlywheel",
     "tofu_module_authority": "tinyland-inc/GloriousFlywheel",
