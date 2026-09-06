@@ -439,7 +439,12 @@ def manifest_validator_invocations(
         if assignment:
             name, value = assignment.group(1), assignment.group(2)
             env[name] = _expand_shell_vars(value, env)
-            if MANIFEST_PYTHON_SELECTOR_BASENAME in env[name]:
+            # Trust this variable as a selected-interpreter position only when
+            # its value comes from CAPTURING the selector script's output
+            # ($(...)); a variable that merely names the selector's path (e.g.
+            # `selector=".../manifest-python-select.sh"`) is not an
+            # interpreter and must not be trusted in argv[0] position.
+            if MANIFEST_PYTHON_SELECTOR_BASENAME in env[name] and "$(" in env[name]:
                 interpreter_selector_vars.add(name)
             continue
         raw_interpreter_token = tokens[0]
@@ -466,6 +471,52 @@ def manifest_validator_invocations(
     return invocations, unlexable
 
 
+def _selftest_manifest_validator_invocations() -> None:
+    """Oracle for `manifest_validator_invocations`'s interpreter-selector trust.
+
+    A variable is trusted in argv[0] position only when its assignment
+    CAPTURES the selector script's output ($(...)); a variable that merely
+    names the selector's own path is not an interpreter. This pins that rule
+    so a future loosening (e.g. reverting to a plain substring check) fails
+    `just check` instead of silently reopening the never-executes-the-
+    validator gap this guard exists to catch.
+    """
+    step_header = f"      - name: {MANIFEST_VALIDATE_STEP}\n        run: |\n"
+
+    # A path-only variable (no command substitution) naming the selector
+    # script must NOT be trusted as an interpreter -- invoking it in argv[0]
+    # position must be reported as "never executes the validator".
+    untrusted = (
+        step_header
+        + f'          selector="$dir/{MANIFEST_PYTHON_SELECTOR_BASENAME}"\n'
+        + f'          "$selector" {MANIFEST_VALIDATOR_BASENAME} --schemas-dir schemas manifest.json\n'
+    )
+    invocations, unlexable = manifest_validator_invocations(untrusted)
+    assert not unlexable, f"selftest fixture should lex cleanly, got: {unlexable}"
+    assert invocations == [], (
+        "regression: a variable merely NAMING "
+        f"{MANIFEST_PYTHON_SELECTOR_BASENAME} (no $(...) capture) is now "
+        "trusted as a selected interpreter -- this reopens the "
+        "never-executes-the-validator gap; require a captured command "
+        "substitution before trusting the variable"
+    )
+
+    # A variable whose assignment CAPTURES the selector's stdout ($(...))
+    # must still be trusted -- this is the real action.yml shape.
+    trusted = (
+        step_header
+        + f'          chosen="$(bash "$dir/{MANIFEST_PYTHON_SELECTOR_BASENAME}")"\n'
+        + f'          "$chosen" {MANIFEST_VALIDATOR_BASENAME} --schemas-dir schemas manifest.json\n'
+    )
+    invocations, unlexable = manifest_validator_invocations(trusted)
+    assert not unlexable, f"selftest fixture should lex cleanly, got: {unlexable}"
+    assert len(invocations) == 1, (
+        "regression: a variable that captures "
+        f"{MANIFEST_PYTHON_SELECTOR_BASENAME}'s output via $(...) is no "
+        "longer trusted as a selected interpreter"
+    )
+
+
 def check_cache_backed_optin_contract() -> int:
     """Guard the TIN-2110 opt-in cache-backed lane: default-off and cache-first.
 
@@ -475,6 +526,8 @@ def check_cache_backed_optin_contract() -> int:
     `--remote_cache`, gates on the cache-attachment contract, and NEVER wires a
     remote executor (cache-first only, TIN-1997 Option D).
     """
+    _selftest_manifest_validator_invocations()
+
     workflow_path = ROOT / ".github/workflows/js-bazel-package.yml"
     docs_path = ROOT / "docs/js-bazel-package.md"
     bazelrc_path = ROOT / "bazelrc/ci-cached.bazelrc"
