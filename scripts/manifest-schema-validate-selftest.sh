@@ -50,10 +50,11 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "${here}/.." && pwd)"
 validator="${here}/manifest-schema-validate.py"
+selector="${here}/manifest-python-select.sh"
 schemas="${root}/schemas"
 fixtures="${root}/tests/fixtures"
 
-for required in "${validator}" "${schemas}/tinyland-repo-manifest.schema.json" \
+for required in "${validator}" "${selector}" "${schemas}/tinyland-repo-manifest.schema.json" \
   "${schemas}/tinyland-repo-manifest.v2.schema.json" \
   "${fixtures}/repo-manifest-v2.json" "${root}/tinyland.repo.json"; do
   if [[ ! -e ${required} ]]; then
@@ -307,6 +308,138 @@ run_case_saying 2 engine "cannot read manifest" \
   "an absent manifest is exit 2 with the engine present, not 5" -- \
   --schemas-dir "${schemas}" "${work}/does-not-exist.json"
 run_case 2 engine "no arguments is a usage error, still 2" --
+
+# --- interpreter selection (scripts/manifest-python-select.sh) -------------
+#
+# The composite used to probe and invoke bare `python3`. Every consumer runs
+# setup-nix first, which puts a Nix profile interpreter ahead of everything
+# else on PATH -- one that does not carry jsonschema -- while GF's runner
+# image asserts jsonschema under /usr/bin/python3 only. These cases pin the
+# selector's priority (\$REPO_MANIFEST_PYTHON, then /usr/bin/python3, then
+# PATH's python3), using stub interpreters under mktemp so nothing here
+# depends on this HOST's real /usr/bin/python3 or PATH python3.
+#
+# Each stub is a tiny script that answers the ONE probe the selector makes
+# (`<stub> -I -c 'import jsonschema'`) by exiting 0 (has it) or 1 (does not).
+stubdir="${work}/stubs"
+mkdir -p "${stubdir}/path" "${stubdir}/sys" "${stubdir}/override"
+
+make_stub() {
+  local path="$1" verdict="$2" # verdict: ok | missing
+  if [[ ${verdict} == ok ]]; then
+    printf '#!/usr/bin/env bash\n[[ "$1" == "-I" && "$2" == "-c" && "$3" == "import jsonschema" ]] && exit 0\nexit 1\n' >"${path}"
+  else
+    printf '#!/usr/bin/env bash\nexit 1\n' >"${path}"
+  fi
+  chmod +x "${path}"
+}
+
+# run_select_case <expected_exit> <desc> -- <env assignments...>
+# The env assignments run the selector under a subshell with PATH and the
+# selector's env vars scoped to that one invocation, so cases cannot leak
+# state into each other.
+run_select_case() {
+  local expected="$1" desc="$2"
+  shift 3 # drop the literal `--`
+  local out actual
+  set +e
+  out="$(env "$@" bash "${selector}" 2>&1 1>"${work}/select-stdout")"
+  actual=$?
+  set -e
+  local stdout_val
+  stdout_val="$(cat "${work}/select-stdout")"
+  if [[ ${actual} -eq ${expected} ]]; then
+    pass=$((pass + 1))
+    printf 'ok   [select   exit %d] %s\n' "${actual}" "${desc}" >&2
+  else
+    fail=$((fail + 1))
+    printf 'FAIL [select   exit %d, want %d] %s\n' "${actual}" "${expected}" "${desc}" >&2
+    printf '       stdout: %s\n' "${stdout_val}" >&2
+    printf '       stderr: %s\n' "$(printf '%s\n' "${out}" | tail -3)" >&2
+  fi
+  printf '%s' "${stdout_val}"
+}
+
+# Case 1: /usr/bin/python3 has jsonschema, PATH's python3 does not ->
+# chosen is the /usr/bin/python3 stand-in, exit 0.
+make_stub "${stubdir}/sys/python3-has-it" ok
+make_stub "${stubdir}/path/python3" missing
+chosen_out="$(run_select_case 0 \
+  "sys candidate has jsonschema, PATH python3 does not -> chosen=sys candidate, exit 0" -- \
+  "PATH=${stubdir}/path:${PATH}" \
+  "_MANIFEST_PYTHON_SYS_CANDIDATE=${stubdir}/sys/python3-has-it" \
+  "REPO_MANIFEST_PYTHON=")"
+if [[ "${chosen_out}" != "${stubdir}/sys/python3-has-it" ]]; then
+  fail=$((fail + 1))
+  printf 'FAIL [select   stdout] chosen=%q, want %q\n' "${chosen_out}" "${stubdir}/sys/python3-has-it"
+else
+  pass=$((pass + 1))
+  printf 'ok   [select   stdout] chosen=%s\n' "${chosen_out}"
+fi
+
+# Case 1b: ORDER, not just presence. Both the sys candidate AND PATH's
+# python3 can import jsonschema -- the sys candidate must still win, because
+# it is tried first. (Swapping the two candidates' order in
+# manifest-python-select.sh, leaving both stubs "ok", would choose the PATH
+# stub instead and turn this case red -- see the mutation proof this selftest
+# change was verified against.)
+make_stub "${stubdir}/sys/python3-both-ok" ok
+make_stub "${stubdir}/path/python3" ok
+chosen_out="$(run_select_case 0 \
+  "sys candidate is tried before PATH's python3 (both qualify)" -- \
+  "PATH=${stubdir}/path:${PATH}" \
+  "_MANIFEST_PYTHON_SYS_CANDIDATE=${stubdir}/sys/python3-both-ok" \
+  "REPO_MANIFEST_PYTHON=")"
+if [[ "${chosen_out}" != "${stubdir}/sys/python3-both-ok" ]]; then
+  fail=$((fail + 1))
+  printf 'FAIL [select   stdout] chosen=%q, want sys candidate %q (order broken)\n' \
+    "${chosen_out}" "${stubdir}/sys/python3-both-ok"
+else
+  pass=$((pass + 1))
+  printf 'ok   [select   stdout] chosen=%s (sys candidate wins over PATH, as ordered)\n' "${chosen_out}"
+fi
+
+# Case 2: none of the three candidates can import jsonschema -> exit 5,
+# naming every candidate tried.
+make_stub "${stubdir}/sys/python3-missing" missing
+make_stub "${stubdir}/path/python3" missing
+run_select_case 5 \
+  "no candidate has jsonschema -> refusal (exit 5), no verdict of any kind" -- \
+  "PATH=${stubdir}/path:${PATH}" \
+  "_MANIFEST_PYTHON_SYS_CANDIDATE=${stubdir}/sys/python3-missing" \
+  "REPO_MANIFEST_PYTHON=" >/dev/null
+refusal_msg="$(env "PATH=${stubdir}/path:${PATH}" \
+  "_MANIFEST_PYTHON_SYS_CANDIDATE=${stubdir}/sys/python3-missing" \
+  "REPO_MANIFEST_PYTHON=" bash "${selector}" 2>&1 1>/dev/null || true)"
+for needle in "${stubdir}/sys/python3-missing" "python3 (PATH)"; do
+  if printf '%s' "${refusal_msg}" | grep -qF -- "${needle}"; then
+    pass=$((pass + 1))
+    printf 'ok   [select   names] refusal message names %s\n' "${needle}"
+  else
+    fail=$((fail + 1))
+    printf 'FAIL [select   names] refusal message does NOT name %s\n' "${needle}"
+    printf '       message: %s\n' "${refusal_msg}"
+  fi
+done
+
+# Case 3: $REPO_MANIFEST_PYTHON, when set, wins even when the sys candidate
+# ALSO has jsonschema -- proving priority order, not just presence.
+make_stub "${stubdir}/override/python3" ok
+make_stub "${stubdir}/sys/python3-has-it2" ok
+make_stub "${stubdir}/path/python3" missing
+chosen_out="$(run_select_case 0 \
+  "REPO_MANIFEST_PYTHON is honoured ahead of a sys candidate that also qualifies" -- \
+  "PATH=${stubdir}/path:${PATH}" \
+  "_MANIFEST_PYTHON_SYS_CANDIDATE=${stubdir}/sys/python3-has-it2" \
+  "REPO_MANIFEST_PYTHON=${stubdir}/override/python3")"
+if [[ "${chosen_out}" != "${stubdir}/override/python3" ]]; then
+  fail=$((fail + 1))
+  printf 'FAIL [select   stdout] chosen=%q, want REPO_MANIFEST_PYTHON=%q\n' \
+    "${chosen_out}" "${stubdir}/override/python3"
+else
+  pass=$((pass + 1))
+  printf 'ok   [select   stdout] chosen=%s (override honoured)\n' "${chosen_out}"
+fi
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ ${fail} -eq 0 ]]

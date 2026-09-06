@@ -411,6 +411,14 @@ def check_flywheel_reapi_proof_contract() -> int:
 MANIFEST_VALIDATE_STEP = "Validate repo manifest schema"
 MANIFEST_VALIDATOR_BASENAME = "manifest-schema-validate.py"
 
+#: The interpreter-selection helper (2026-09-06 follow-up to TIN-4132): the
+#: step no longer invokes a literal `python3`/`python` -- it captures the
+#: output of this script into a variable and invokes THAT. A variable whose
+#: assignment's RHS names this basename is trusted as "a real interpreter
+#: path was resolved here", the same way `interpreter in {"python","python3"}`
+#: is trusted for a literal invocation below.
+MANIFEST_PYTHON_SELECTOR_BASENAME = "manifest-python-select.sh"
+
 _SHELL_ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _SHELL_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -485,6 +493,7 @@ def manifest_validator_invocations(
         return None, []
 
     env: dict[str, str] = {}
+    interpreter_selector_vars: set[str] = set()
     invocations: list[list[str]] = []
     unlexable: list[str] = []
     for raw in body.splitlines():
@@ -500,17 +509,84 @@ def manifest_validator_invocations(
             continue
         assignment = _SHELL_ASSIGN.match(tokens[0]) if len(tokens) == 1 else None
         if assignment:
-            env[assignment.group(1)] = _expand_shell_vars(assignment.group(2), env)
+            name, value = assignment.group(1), assignment.group(2)
+            env[name] = _expand_shell_vars(value, env)
+            # Trust this variable as a selected-interpreter position only when
+            # its value comes from CAPTURING the selector script's output
+            # ($(...)); a variable that merely names the selector's path (e.g.
+            # `selector=".../manifest-python-select.sh"`) is not an
+            # interpreter and must not be trusted in argv[0] position.
+            if MANIFEST_PYTHON_SELECTOR_BASENAME in env[name] and "$(" in env[name]:
+                interpreter_selector_vars.add(name)
             continue
+        raw_interpreter_token = tokens[0]
         argv = [_expand_shell_vars(token, env) for token in tokens]
         interpreter = pathlib.PurePosixPath(argv[0]).name
+        # A bare `$chosen`/`${chosen}` in argv[0] cannot be resolved to a real
+        # path by textual substitution alone (its value came from a captured
+        # command's OUTPUT, not another shell variable) -- so it is trusted
+        # here only when it names a variable this same step assigned from
+        # MANIFEST_PYTHON_SELECTOR_BASENAME's output. Anything else in argv[0]
+        # position is held to the existing literal-python-or-basename rule.
+        selector_var_match = _SHELL_VAR.fullmatch(raw_interpreter_token)
+        argv0_is_selected_interpreter = bool(
+            selector_var_match
+            and (selector_var_match.group(1) or selector_var_match.group(2))
+            in interpreter_selector_vars
+        )
         runs_validator = argv[0].endswith(MANIFEST_VALIDATOR_BASENAME) or (
-            interpreter in {"python", "python3"}
+            (interpreter in {"python", "python3"} or argv0_is_selected_interpreter)
             and any(a.endswith(MANIFEST_VALIDATOR_BASENAME) for a in argv[1:])
         )
         if runs_validator:
             invocations.append(argv)
     return invocations, unlexable
+
+
+def _selftest_manifest_validator_invocations() -> None:
+    """Oracle for `manifest_validator_invocations`'s interpreter-selector trust.
+
+    A variable is trusted in argv[0] position only when its assignment
+    CAPTURES the selector script's output ($(...)); a variable that merely
+    names the selector's own path is not an interpreter. This pins that rule
+    so a future loosening (e.g. reverting to a plain substring check) fails
+    `just check` instead of silently reopening the never-executes-the-
+    validator gap this guard exists to catch.
+    """
+    step_header = f"      - name: {MANIFEST_VALIDATE_STEP}\n        run: |\n"
+
+    # A path-only variable (no command substitution) naming the selector
+    # script must NOT be trusted as an interpreter -- invoking it in argv[0]
+    # position must be reported as "never executes the validator".
+    untrusted = (
+        step_header
+        + f'          selector="$dir/{MANIFEST_PYTHON_SELECTOR_BASENAME}"\n'
+        + f'          "$selector" {MANIFEST_VALIDATOR_BASENAME} --schemas-dir schemas manifest.json\n'
+    )
+    invocations, unlexable = manifest_validator_invocations(untrusted)
+    assert not unlexable, f"selftest fixture should lex cleanly, got: {unlexable}"
+    assert invocations == [], (
+        "regression: a variable merely NAMING "
+        f"{MANIFEST_PYTHON_SELECTOR_BASENAME} (no $(...) capture) is now "
+        "trusted as a selected interpreter -- this reopens the "
+        "never-executes-the-validator gap; require a captured command "
+        "substitution before trusting the variable"
+    )
+
+    # A variable whose assignment CAPTURES the selector's stdout ($(...))
+    # must still be trusted -- this is the real action.yml shape.
+    trusted = (
+        step_header
+        + f'          chosen="$(bash "$dir/{MANIFEST_PYTHON_SELECTOR_BASENAME}")"\n'
+        + f'          "$chosen" {MANIFEST_VALIDATOR_BASENAME} --schemas-dir schemas manifest.json\n'
+    )
+    invocations, unlexable = manifest_validator_invocations(trusted)
+    assert not unlexable, f"selftest fixture should lex cleanly, got: {unlexable}"
+    assert len(invocations) == 1, (
+        "regression: a variable that captures "
+        f"{MANIFEST_PYTHON_SELECTOR_BASENAME}'s output via $(...) is no "
+        "longer trusted as a selected interpreter"
+    )
 
 
 def check_cache_backed_optin_contract() -> int:
@@ -522,6 +598,8 @@ def check_cache_backed_optin_contract() -> int:
     `--remote_cache`, gates on the cache-attachment contract, and NEVER wires a
     remote executor (cache-first only, TIN-1997 Option D).
     """
+    _selftest_manifest_validator_invocations()
+
     workflow_path = ROOT / ".github/workflows/js-bazel-package.yml"
     docs_path = ROOT / "docs/js-bazel-package.md"
     bazelrc_path = ROOT / "bazelrc/ci-cached.bazelrc"
