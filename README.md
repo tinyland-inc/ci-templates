@@ -79,28 +79,38 @@ ActionPlan remains the sole result-disposition authority, and the workflow does
 not parse or upload the directory. It does not reproduce client lifecycles in
 Bash, Python, proxy composites, OCI helpers, or fallback paths.
 
-Beginning with `v5.2.0`, `publish_application: true` replaces the ordinary
+The proposed `v5.2.0` release's `publish_application: true` replaces the ordinary
 push action with the same image-custodied client's `publish-application`
-transaction only when the caller is on a protected canonical `main`. Pull
-requests keep the ordinary non-publishing action. The publisher alone receives
+transaction only when the caller is on a protected canonical `main`.
+Same-repository pull requests and pushes outside the complete publisher gate
+keep the ordinary non-publishing action. The publisher alone receives
 `packages: write`; repository-keyed concurrency never cancels an in-flight
-publisher. It also requires `runtime_base_image_digest`,
-`materialized_root_max_files`, and `materialized_root_max_bytes`. Their
-fail-closed defaults are empty or zero: ci-templates does not build, select, or
-infer a runtime base, and a caller must not enable publication until the
-separate upstream base authority has produced its reviewed signed digest.
+publisher. It also requires reviewed `materialized_root_max_files` and
+`materialized_root_max_bytes`; their zero defaults refuse publication.
+TIN-4257 and GFTB meta #62 Amendment 6 require the compiled publisher to obtain
+the authenticated remote runtime base from the exact locked source during that
+same invocation, publish and sign it under the same identity, verify registry
+readback, and pass its digest internally. There is no runtime-base workflow
+input, copied digest, caller-provided layout, workflow-side build, or second
+action.
+
+The release remains held: the current GF publisher still requires a
+caller-supplied runtime-base layout and is not compatible with this proposed
+call. Deleting its obsolete workflow input is not implementation of the remote
+producer. A matching compiled producer and exact-source proof must precede
+release or publisher adoption.
 
 Consumers needing only the qualified-result repair may pin the immutable
-`@v5.2.0` release after the provider image accepts `run`. A publisher caller
-must instead pin the exact 40-character commit behind that release because its
-OIDC `job_workflow_ref` is part of the GF-I09 identity; a tag-shaped workflow
+`@v5.2.0` release only after it exists and the provider image accepts `run`.
+A publisher caller must instead pin the exact 40-character commit behind that
+release because its OIDC `job_workflow_ref` is part of the GF-I09 identity; a tag-shaped workflow
 ref is an intentional client refusal. `v5.1.0` is never moved or reused. The
 release publishes workflow source only. It does not by itself prove consumer
 adoption, provider convergence, runtime execution, qualification, base
 publication, application publication, or serving. Those remain fail-closed
 until the signed consumer overlay, verified provider supply, current binding
-catalog, matching provider image, and (for publication) authority-bound
-runtime-base digest are present.
+catalog, matching provider image, and (for publication) the authenticated
+same-invocation remote runtime-base transaction are present.
 
 Existing schema-2 callers must follow
 [`docs/migration-v4-to-v5.md`](./docs/migration-v4-to-v5.md). V3 callers start

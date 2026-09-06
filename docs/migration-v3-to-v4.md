@@ -1,15 +1,16 @@
 # Migrate from v3 CI profiles to the v4 action fabric
 
 > Historical first step: `v4.0.0` carried ActionPlan/v4 schema 2. The current
-> target is schema 3 through `spoke-ci-v4.yml@v5.2.0` or newer; schema 2 is not
-> a fallback.
+> target is schema 3. `spoke-ci-v4.yml@v5.2.0` is a proposed, held release, not
+> an available pin; see the [publisher release gates](migration-v4-to-v5.md).
+> Schema 2 is not a fallback.
 
 `v4.0.0` is a breaking interface. V4 schedules Bazel actions through the
 GloriousFlywheel REAPI fabric; it does not expose runners, endpoints, cache
 profiles, credentials, lifecycle controls, or a local execution path to the
 consumer.
 
-The immutable workflow pin is:
+After that immutable release exists, the workflow pin is:
 
 ```yaml
 jobs:
@@ -19,8 +20,9 @@ jobs:
       action_name: unit-tests
 ```
 
-The application repository owns `.github/lanes.json`. Its raw bytes are bound
-by the consumer overlay, so do not generate or rewrite it during CI:
+The application repository owns `.github/lanes.json`. The resolver binds its
+exact raw bytes at invocation time, not in the durable consumer overlay; do
+not generate or rewrite it during CI:
 
 ```json
 {
@@ -67,18 +69,20 @@ names a runner label, node, cluster, storage class, provider endpoint, or image.
 2. Check in the finite schema-3 action plan.
 3. Publish the consumer-owned signed overlay at an immutable digest through the
    canonical overlay publisher.
-4. Require the independent controller/verifier to join organization policy with
-   signed provider supply and publish a current immutable owner-supply catalog.
+4. Require the adopter verifier to validate its own App and consumer policy and
+   emit verified owner demand. The tenant-blind provider aggregator independently
+   verifies supply and joins that demand into a current owner-supply catalog.
 5. Converge the provider-owned client image and action-resolution route. The
    image must accept the workflow's `--result-dir` contract before the caller
    pin moves.
 6. After the attended immutable release exists, pin
    `spoke-ci-v4.yml@v5.2.0`; do not move or reuse `v5.1.0`.
-7. Prove one remote cache miss with nonzero remote execution, then repeat the
+7. Remove or disable the superseded v3 execution workflow, profile, wrapper,
+   cache-proof, ARC, Docker, and DinD paths before the exact v4 canary. Missing
+   v4 authority must refuse; the old path must not continue as a parallel route.
+8. Prove one remote cache miss with nonzero remote execution, then repeat the
    same action and prove a same-authority ActionCache hit. Attribute both to the
    consumer in the measurement plane.
-8. Delete the superseded v3 workflow, profile, wrapper, cache-proof, ARC, Docker,
-   and DinD surfaces only after the canary succeeds.
 
 An absent App installation, overlay, catalog, dynamic binding, client, route,
 or worker is a hard failure. Do not add a hosted runner, local Bazel, cache-only,

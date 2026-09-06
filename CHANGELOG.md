@@ -7,16 +7,22 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [5.2.0] — 2026-09-04
 
+Proposed release; held pending the matching compiled GF same-invocation remote
+runtime-base producer and exact-source proof. The current caller-layout
+publisher is not compatible with this prospective call.
+
 ### Added
 
 - **TIN-4257 protected GF-I09 application publisher.** Add a default-off
   `spoke-ci-v4.yml` mode that replaces the ordinary push action with the
   image-custodied `gf-action-client publish-application` transaction only for
   a protected canonical-`main` push. Its job alone receives `packages: write`,
-  is serialized per source repository without cancellation, and requires an
-  exact signed runtime-base digest plus reviewed materialization bounds. The
-  workflow does not produce or select a runtime base, parse qualified output,
-  construct OCI state, or carry a fallback.
+  is serialized per source repository without cancellation, and requires
+  reviewed materialization bounds. The compiled publisher must obtain the
+  authenticated runtime base remotely from exact locked source, publish/sign
+  and verify it under the same identity, and retain its digest in-process.
+  The workflow does not produce or select a runtime base, parse qualified
+  output, construct OCI state, or carry a fallback.
 
 ### Changed
 
@@ -25,6 +31,20 @@ Versioning: [SemVer 2.0](https://semver.org/).
   checked-in ActionPlan remains the sole result-disposition authority; the
   workflow does not parse, upload, publish, or fall back from the
   image-custodied client's result.
+
+### Fixed
+
+- **TIN-4257 dispatch routing.** Opting into application publication no longer
+  skips the declared action on non-main pushes or other pushes outside the
+  complete protected-main publisher gate. Same-repository PR execution and
+  fork refusal are unchanged; publication permissions are not widened.
+
+### Removed
+
+- **TIN-4257 runtime-base authority correction.** Remove the caller-supplied
+  runtime-base digest input, environment projection, and CLI argument under
+  GFTB meta #62 Amendment 6. The existing input census and obsolete assertion
+  co-move; no workflow builder, caller layout, or second action replaces them.
 
 ## [5.1.0] — 2026-09-03
 

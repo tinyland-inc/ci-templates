@@ -1,8 +1,10 @@
 # Migrate ActionPlan/v4 schema 2 to schema 3
 
-ci-templates `v5.2.0` is the current portable carrier of schema 3, first
-introduced in `v5.0.0`. It carries the qualified-result caller repair described
-below and the default-off protected application publisher. Schema 3 is an
+ci-templates `v5.2.0` is a proposed, held carrier of schema 3, first
+introduced in `v5.0.0`. Its source carries the qualified-result caller repair
+described below and a prospective default-off protected application publisher.
+Do not adopt the release until its matching compiled publisher contract is
+implemented and the immutable release exists. Schema 3 is an
 incompatible revision of the GloriousFlywheel
 `ActionPlan/v4` interface.
 The reusable workflow remains the thin `spoke-ci-v4.yml` dispatcher; the
@@ -45,25 +47,35 @@ labels whose selected output groups contain regular files; wildcard and
 recursive target patterns are rejected. Directories, trees, symlinks, and
 special files are not silently flattened or omitted.
 
-Beginning with `v5.2.0`, the workflow passes every invocation one new result
+The proposed `v5.2.0` workflow passes every invocation one new result
 directory beneath `RUNNER_TEMP`, keyed by run, attempt, and action name. The
 ActionPlan remains the sole result-disposition authority. The workflow does not
 parse or upload the directory, and its fixed files do not convey GF-I09
 publication authority.
 
-The same release adds `publish_application`, default `false`. When enabled, a
-protected canonical-`main` push invokes the image-custodied
-`gf-action-client publish-application` command instead of `run`; pull requests
-still execute the ordinary non-publishing action. Only the publisher job has
+The same proposed release adds `publish_application`, default `false`. When
+enabled, a protected canonical-`main` push invokes the image-custodied
+`gf-action-client publish-application` command instead of `run`; same-repository
+pull requests and pushes outside the complete publisher gate still execute the
+ordinary non-publishing action. Only the publisher job has
 `packages: write`, and its concurrency is repository-keyed with cancellation
-disabled. Publication also requires an exact `runtime_base_image_digest` and
-reviewed `materialized_root_max_files` / `materialized_root_max_bytes` values.
-The defaults intentionally refuse publication. This workflow neither produces
-nor chooses the runtime base; activation waits for its separate upstream
-authority and signed digest.
+disabled. Publication also requires reviewed `materialized_root_max_files` /
+`materialized_root_max_bytes` values; their zero defaults refuse publication.
+The runtime base must be acquired through the compiled publisher's authenticated
+remote subtransaction from exact locked source in the same invocation, signed
+under the same identity, and independently verified on registry readback. Its
+digest stays in-process, never a caller/workflow input or manually copied
+operand. No workflow-side build, caller-provided layout, or second action is a
+substitute (TIN-4257; GFTB meta #62 Amendment 6).
 
-The protected caller must grant the same closed permission set and keep every
-operand in reviewed source:
+The current GF command still requires caller-supplied runtime-base layout and
+does not implement this prospective call. The release stays held until the
+matching compiled remote producer and exact-source proof exist. Removing the
+old input does not establish compatibility, activation, or runtime evidence.
+
+After those release gates close, the protected caller must grant the same
+closed permission set and keep its action and materialization bounds in
+reviewed source:
 
 ```yaml
 jobs:
@@ -76,13 +88,13 @@ jobs:
     with:
       action_name: deployment-bundle
       publish_application: true
-      runtime_base_image_digest: <reviewed-signed-sha256-digest>
       materialized_root_max_files: <reviewed-integer>
       materialized_root_max_bytes: <reviewed-integer>
 ```
 
-Do not replace those placeholders until the upstream runtime-base authority and
-the application's actual materialized-root bounds have durable carriers. The
+Do not replace those placeholders until the matching same-invocation remote
+producer is available, the immutable release exists, and the application's
+actual materialized-root bounds have durable carriers. The
 publisher call must use the exact 40-character commit behind the immutable
 release: GF-I09 binds `job_workflow_ref` into its signing identity and refuses
 a tag-shaped workflow ref.

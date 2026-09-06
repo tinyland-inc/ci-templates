@@ -172,8 +172,19 @@ def check_v4_action_client_surface() -> bool:
     failures: list[str] = []
 
     required = {
-        "github.event_name == 'push'": "push-only admitted event",
-        "github.event_name == 'pull_request'": "same-repository pull-request event",
+        (
+            "  action-fabric:\n"
+            "    if: ${{ (github.event_name == 'push' && !(inputs.publish_application && "
+            "github.ref == 'refs/heads/main' && github.ref_protected && "
+            "github.workflow_sha == github.sha)) || (github.event_name == 'pull_request' && "
+            "github.event.pull_request.head.repo.full_name == github.repository) }}"
+        ): "ordinary push dispatch outside publication eligibility and same-repository PRs",
+        (
+            "  application-publisher:\n"
+            "    if: ${{ inputs.publish_application && github.event_name == 'push' && "
+            "github.ref == 'refs/heads/main' && github.ref_protected && "
+            "github.workflow_sha == github.sha }}"
+        ): "opt-in protected canonical-main publication with exact caller-workflow source",
         'fromJSON(format(\'\'{{"pull_request":"{0}","push":"{1}"}}\'\'': "event-keyed source identity without a fallback",
         "github.event.pull_request.head.sha": "exact pull-request head identity",
         "github.sha))[github.event_name]": "exact push identity",
@@ -189,12 +200,8 @@ def check_v4_action_client_surface() -> bool:
             '${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ACTION_NAME}"'
         ): "job-unique qualified result directory",
         "default: false": "default-off application publication",
-        "github.ref == 'refs/heads/main'": "canonical-main publication gate",
-        "github.ref_protected": "protected-ref publication gate",
-        "github.workflow_sha == github.sha": "exact caller-workflow source gate",
         "group: gf-i09-application-publisher-${{ github.repository }}": "repository-keyed publisher concurrency",
         "cancel-in-progress: false": "non-cancelling publisher concurrency",
-        '--base-image-digest "$RUNTIME_BASE_IMAGE_DIGEST"': "authority-bound runtime-base input",
         '--publication-output "$RUNNER_TEMP/gf-application-publication-': "private publisher receipt path",
     }
     for snippet, claim in required.items():
@@ -204,7 +211,6 @@ def check_v4_action_client_surface() -> bool:
     if re.findall(r"^      ([a-z_][a-z0-9_]*):$", call_surface, re.MULTILINE) != [
         "action_name",
         "publish_application",
-        "runtime_base_image_digest",
         "materialized_root_max_files",
         "materialized_root_max_bytes",
     ]:
