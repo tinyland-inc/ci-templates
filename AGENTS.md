@@ -69,8 +69,9 @@ working-tree scan.
 
 ## V4 action-fabric release (TIN-2130, TIN-4246, TIN-4249)
 
-The only adoption target is ActionPlan/v4 schema 3 through
-`spoke-ci-v4.yml@v5.1.0` or newer. An organization installs its own all-repos GF
+The only adoption target is ActionPlan/v4 schema 3. The proposed
+`spoke-ci-v4.yml@v5.2.0` release remains held under the publisher contract below;
+it is not an available adoption pin. An organization installs its own all-repos GF
 GitHub App and operates its own owner controller, resolver, and thin
 `gf-v4-dispatch` edge. Each application repository contributes only a finite
 `.github/lanes.json` and an immutable workflow call. GF and ci-templates never
@@ -92,6 +93,29 @@ The Go client owns OIDC, invocation-time binding, REAPI dispatch, cache reuse,
 and `ActionOutputSet/v1` carriage. Bazel actions—not GitHub jobs or ARC pods—are
 the compute and scheduling unit. The `gf-v4-dispatch` runner is an org-local
 teletype into that fabric, not provider supply.
+
+The same workflow's default-off GF-I09 mode replaces `run` with the compiled
+client's `publish-application` command only for a canonical-`main` push with
+exact caller-workflow source. GitHub branch-protection metadata is not an
+admission prerequisite under the September 8 Free-plan ruling and GF #1817.
+The compiled GF publisher retains signed-source and organization admission,
+exact OIDC/workflow identity and independent output qualification.
+Its separate job alone has `packages: write` and repository-keyed,
+non-cancelling concurrency. Publisher callers pin the exact 40-character
+release commit because GF-I09 binds the called workflow ref into its OIDC
+identity; the SemVer tag remains the ordinary non-publishing adoption form.
+Under TIN-4257 and GFTB meta #62 Amendment 6, the compiled publisher must obtain
+the authenticated remote runtime base from the exact locked source in that
+same invocation, sign it with the same publisher identity, verify registry
+readback, and retain its digest in-process. No workflow input, copied digest,
+caller-provided layout, workflow-side build, or second action can replace that
+transaction. Reviewed materialization bounds remain required.
+
+This is a prospective publisher call, not compatibility with the current GF
+command, which still requires caller-supplied runtime-base layout. The release
+stays held until the matching compiled remote producer and exact-source proof
+exist; deleting the obsolete input neither installs that producer nor proves
+publication or serving.
 
 Missing App, overlay revision, owner-supply catalog, dynamic binding, OIDC,
 client, REAPI authority, or result is a hard product failure. There is no v4
