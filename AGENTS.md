@@ -95,7 +95,11 @@ the compute and scheduling unit. The `gf-v4-dispatch` runner is an org-local
 teletype into that fabric, not provider supply.
 
 The same workflow's default-off GF-I09 mode replaces `run` with the compiled
-client's `publish-application` command only for protected canonical-`main`.
+client's `publish-application` command only for a canonical-`main` push with
+exact caller-workflow source. GitHub branch-protection metadata is not an
+admission prerequisite under the September 8 Free-plan ruling and GF #1817.
+The compiled GF publisher retains signed-source and organization admission,
+exact OIDC/workflow identity and independent output qualification.
 Its separate job alone has `packages: write` and repository-keyed,
 non-cancelling concurrency. Publisher callers pin the exact 40-character
 release commit because GF-I09 binds the called workflow ref into its OIDC

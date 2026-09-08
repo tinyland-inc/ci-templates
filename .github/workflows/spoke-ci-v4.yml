@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       publish_application:
-        description: Publish the qualified export on a protected canonical-main push.
+        description: Publish the qualified export on a canonical-main push.
         required: false
         default: false
         type: boolean
@@ -32,7 +32,7 @@ on:
 
 jobs:
   action-fabric:
-    if: ${{ (github.event_name == 'push' && !(inputs.publish_application && github.ref == 'refs/heads/main' && github.ref_protected && github.workflow_sha == github.sha)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ (github.event_name == 'push' && !(inputs.publish_application && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     # Every adopting organization provisions this thin dispatch edge in its
     # own runner group. The edge submits one named action; it is not the
     # execution pool or a Tinyland-owned provider route.
@@ -68,7 +68,7 @@ jobs:
   # authenticated remote runtime-base subtransaction in this same invocation.
   # The current caller-layout publisher does not satisfy that contract.
   application-publisher:
-    if: ${{ inputs.publish_application && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.ref_protected && github.workflow_sha == github.sha }}
+    if: ${{ inputs.publish_application && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha }}
     runs-on: gf-v4-dispatch
     timeout-minutes: 45
     concurrency:
@@ -81,7 +81,7 @@ jobs:
     env:
       SOURCE_SHA: ${{ github.sha }}
     steps:
-      - name: Check out exact protected-main source
+      - name: Check out exact canonical-main source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ env.SOURCE_SHA }}

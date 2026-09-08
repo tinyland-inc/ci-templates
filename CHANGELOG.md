@@ -5,6 +5,15 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **TIN-4257 source admission.** Remove GitHub branch-protection metadata from
+  the two GF-I09 publisher-routing predicates under the September 8 Free-plan
+  ruling and GF #1817. Canonical-main push and exact caller-workflow source
+  remain required, alongside the compiled publisher's signed-source,
+  organization, OIDC and qualification checks. The prospective v5.2.0 release
+  remains held for its same-invocation remote runtime-base producer.
+
 ## [5.2.0] — 2026-09-04
 
 Proposed release; held pending the matching compiled GF same-invocation remote
@@ -13,10 +22,10 @@ publisher is not compatible with this prospective call.
 
 ### Added
 
-- **TIN-4257 protected GF-I09 application publisher.** Add a default-off
+- **TIN-4257 GF-I09 application publisher.** Add a default-off
   `spoke-ci-v4.yml` mode that replaces the ordinary push action with the
   image-custodied `gf-action-client publish-application` transaction only for
-  a protected canonical-`main` push. Its job alone receives `packages: write`,
+  a canonical-`main` push. Its job alone receives `packages: write`,
   is serialized per source repository without cancellation, and requires
   reviewed materialization bounds. The compiled publisher must obtain the
   authenticated runtime base remotely from exact locked source, publish/sign
@@ -36,7 +45,7 @@ publisher is not compatible with this prospective call.
 
 - **TIN-4257 dispatch routing.** Opting into application publication no longer
   skips the declared action on non-main pushes or other pushes outside the
-  complete protected-main publisher gate. Same-repository PR execution and
+  complete canonical-main publisher gate. Same-repository PR execution and
   fork refusal are unchanged; publication permissions are not widened.
 
 ### Removed

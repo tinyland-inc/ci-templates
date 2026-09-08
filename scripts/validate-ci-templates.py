@@ -175,16 +175,16 @@ def check_v4_action_client_surface() -> bool:
         (
             "  action-fabric:\n"
             "    if: ${{ (github.event_name == 'push' && !(inputs.publish_application && "
-            "github.ref == 'refs/heads/main' && github.ref_protected && "
+            "github.ref == 'refs/heads/main' && "
             "github.workflow_sha == github.sha)) || (github.event_name == 'pull_request' && "
             "github.event.pull_request.head.repo.full_name == github.repository) }}"
         ): "ordinary push dispatch outside publication eligibility and same-repository PRs",
         (
             "  application-publisher:\n"
             "    if: ${{ inputs.publish_application && github.event_name == 'push' && "
-            "github.ref == 'refs/heads/main' && github.ref_protected && "
+            "github.ref == 'refs/heads/main' && "
             "github.workflow_sha == github.sha }}"
-        ): "opt-in protected canonical-main publication with exact caller-workflow source",
+        ): "opt-in canonical-main publication with exact caller-workflow source",
         'fromJSON(format(\'\'{{"pull_request":"{0}","push":"{1}"}}\'\'': "event-keyed source identity without a fallback",
         "github.event.pull_request.head.sha": "exact pull-request head identity",
         "github.sha))[github.event_name]": "exact push identity",
