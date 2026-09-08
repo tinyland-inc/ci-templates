@@ -5,6 +5,8 @@ Versioning: [SemVer 2.0](https://semver.org/).
 
 ## [Unreleased]
 
+## [5.1.1] — 2026-09-08
+
 ### Changed
 
 - **TIN-4257 qualified-result caller contract.** Pass every `spoke-ci-v4.yml`
@@ -12,6 +14,14 @@ Versioning: [SemVer 2.0](https://semver.org/).
   checked-in ActionPlan remains the sole result-disposition authority; the
   workflow does not parse, upload, publish, or fall back from the
   image-custodied client's result.
+
+### Fixed
+
+- **TIN-4132 manifest interpreter selection.** The manifest composite selects
+  an interpreter that can import `jsonschema` and retains its refusal when no
+  candidate has the validator. The invocation contract requires the selected
+  interpreter to come from captured selector output. These are the existing
+  fixes merged in #168; older pinned composite closures do not change.
 
 ## [5.1.0] — 2026-09-03
 
